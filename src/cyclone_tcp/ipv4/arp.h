@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _ARP_H
@@ -35,7 +35,7 @@
 //ARP tick interval
 #ifndef ARP_TICK_INTERVAL
    #define ARP_TICK_INTERVAL 200
-#elif (ARP_TICK_INTERVAL < 100)
+#elif (ARP_TICK_INTERVAL < 10)
    #error ARP_TICK_INTERVAL parameter is not valid
 #endif
 
@@ -128,8 +128,8 @@ typedef enum
 } ArpState;
 
 
-//Win32 compiler?
-#if defined(_WIN32)
+//CodeWarrior or Win32 compiler?
+#if defined(__CWCC__) || defined(_WIN32)
    #pragma pack(push, 1)
 #endif
 
@@ -152,8 +152,8 @@ typedef __start_packed struct
 } __end_packed ArpPacket;
 
 
-//Win32 compiler?
-#if defined(_WIN32)
+//CodeWarrior or Win32 compiler?
+#if defined(__CWCC__) || defined(_WIN32)
    #pragma pack(pop)
 #endif
 
@@ -186,6 +186,9 @@ typedef struct
 } ArpCacheEntry;
 
 
+//Tick counter to handle periodic operations
+extern systime_t arpTickCounter;
+
 //ARP related functions
 error_t arpInit(NetInterface *interface);
 void arpFlushCache(NetInterface *interface);
@@ -207,7 +210,9 @@ void arpProcessPacket(NetInterface *interface, ArpPacket *arpPacket, size_t leng
 void arpProcessRequest(NetInterface *interface, ArpPacket *arpRequest);
 void arpProcessReply(NetInterface *interface, ArpPacket *arpResponse);
 
-error_t arpSendRequest(NetInterface *interface, Ipv4Addr senderIpAddr,
+error_t arpSendProbe(NetInterface *interface, Ipv4Addr targetIpAddr);
+
+error_t arpSendRequest(NetInterface *interface,
    Ipv4Addr targetIpAddr, const MacAddr *destMacAddr);
 
 error_t arpSendReply(NetInterface *interface, Ipv4Addr targetIpAddr,

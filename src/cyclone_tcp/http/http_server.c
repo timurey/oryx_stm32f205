@@ -33,7 +33,7 @@
  * - RFC 2818: HTTP Over TLS
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -89,8 +89,9 @@ static const HttpStatusCodeDesc statusCodeList[] =
 
 void httpServerGetDefaultSettings(HttpServerSettings *settings)
 {
-   //Use default interface
+   //The HTTP server is not bound to any interface
    settings->interface = NULL;
+
    //Listen to port 80
    settings->port = HTTP_PORT;
    //Maximum length of the pending connection queue
@@ -142,7 +143,7 @@ error_t httpServerInit(HttpServerContext *context, const HttpServerSettings *set
    TRACE_INFO("Initializing HTTP server...\r\n");
 
    //Ensure the parameters are valid
-   if(!context || !settings)
+   if(context == NULL || settings == NULL)
       return ERROR_INVALID_PARAMETER;
 
    //Check user settings
@@ -219,6 +220,10 @@ error_t httpServerStart(HttpServerContext *context)
    //Debug message
    TRACE_INFO("Starting HTTP server...\r\n");
 
+   //Make sure the HTTP server context is valid
+   if(context == NULL)
+      return ERROR_INVALID_PARAMETER;
+
    //Loop through client connections
    for(i = 0; i < context->settings.maxConnections; i++)
    {
@@ -239,7 +244,7 @@ error_t httpServerStart(HttpServerContext *context)
    if(task == OS_INVALID_HANDLE)
       return ERROR_OUT_OF_RESOURCES;
 
-   //Successful processing
+   //The HTTP server has successfully started
    return NO_ERROR;
 }
 
@@ -670,7 +675,7 @@ error_t httpWriteHeader(HttpConnection *connection)
 
       //Set Keep-Alive field
       p += sprintf(p, "Keep-Alive: timeout=%u, max=%u\r\n",
-         HTTP_SERVER_TIMEOUT / 1000, HTTP_SERVER_MAX_REQUESTS);
+         HTTP_SERVER_IDLE_TIMEOUT / 1000, HTTP_SERVER_MAX_REQUESTS);
    }
    else
    {
@@ -709,8 +714,8 @@ error_t httpWriteHeader(HttpConnection *connection)
       p += sprintf(p, "  qop=\"auth\",\r\n");
       p += sprintf(p, "  nonce=\"");
 
-      //A server-specified data string which should be uniquely generated
-      //each time a 401 response is made
+      //The nonce is a server-specified data string which should be uniquely
+      //generated each time a 401 response is made
       error = httpGenerateNonce(connection->serverContext, p, &n);
       //Any error to report?
       if(error) return error;
@@ -1059,10 +1064,13 @@ error_t httpSendResponse(HttpConnection *connection, const char_t *uri)
    fsCloseFile(file);
 
    //Successful file transfer?
-   if(length == 0 && error == ERROR_END_OF_STREAM)
+   if(error == NO_ERROR || error == ERROR_END_OF_STREAM)
    {
-      //Properly close the output stream
-      error = httpCloseStream(connection);
+      if(length == 0)
+      {
+         //Properly close the output stream
+         error = httpCloseStream(connection);
+      }
    }
 #else
    //Send response body
@@ -1107,6 +1115,7 @@ error_t httpSendErrorResponse(HttpConnection *connection, uint_t statusCode, con
    length = strlen(template) + strlen(message) - 4;
 
    //Format HTTP response header
+   connection->response.version = connection->request.version;
    connection->response.statusCode = statusCode;
    connection->response.contentType = mimeGetType(".htm");
    connection->response.chunkedEncoding = FALSE;

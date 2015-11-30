@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -42,12 +42,15 @@
 #include "drivers/mk60_eth.h"
 #include "debug.h"
 
+//Underlying network interface
+static NetInterface *nicDriverInterface;
+
 //TX buffer
 static uint8_t txBuffer[MK60_ETH_TX_BUFFER_COUNT][MK60_ETH_TX_BUFFER_SIZE]
-   __attribute__((aligned(4)));
+   __attribute__((aligned(16)));
 //RX buffer
 static uint8_t rxBuffer[MK60_ETH_RX_BUFFER_COUNT][MK60_ETH_RX_BUFFER_SIZE]
-   __attribute__((aligned(4)));
+   __attribute__((aligned(16)));
 //TX buffer descriptors
 static uint16_t txBufferDesc[MK60_ETH_TX_BUFFER_COUNT][16]
    __attribute__((aligned(16)));
@@ -74,8 +77,9 @@ const NicDriver mk60EthDriver =
    mk60EthEnableIrq,
    mk60EthDisableIrq,
    mk60EthEventHandler,
-   mk60EthSetMacFilter,
    mk60EthSendPacket,
+   mk60EthSetMulticastFilter,
+   mk60EthUpdateMacConfig,
    mk60EthWritePhyReg,
    mk60EthReadPhyReg,
    TRUE,
@@ -97,6 +101,9 @@ error_t mk60EthInit(NetInterface *interface)
 
    //Debug message
    TRACE_INFO("Initializing Kinetis K60 Ethernet MAC...\r\n");
+
+   //Save underlying network interface
+   nicDriverInterface = interface;
 
    //Disable MPU
    MPU->CESR &= ~MPU_CESR_VLD_MASK;
@@ -183,9 +190,7 @@ error_t mk60EthInit(NetInterface *interface)
    //Instruct the DMA to poll the receive descriptor list
    ENET->RDAR = ENET_RDAR_RDAR_MASK;
 
-   //Force the TCP/IP stack to check the link state
-   osSetEvent(&interface->nicRxEvent);
-   //Kinetis K60 Ethernet MAC is now ready to send
+   //Accept any packets from the upper layer
    osSetEvent(&interface->nicTxEvent);
 
    //Successful initialization
@@ -344,27 +349,24 @@ void mk60EthDisableIrq(NetInterface *interface)
 void ENET_Transmit_IRQHandler(void)
 {
    bool_t flag;
-   NetInterface *interface;
 
    //Enter interrupt service routine
    osEnterIsr();
 
-   //Point to the structure describing the network interface
-   interface = &netInterface[0];
    //This flag will be set if a higher priority task must be woken
    flag = FALSE;
 
    //A packet has been transmitted?
    if(ENET->EIR & ENET_EIR_TXF_MASK)
    {
-      //Clear TXB interrupt flag
+      //Clear TXF interrupt flag
       ENET->EIR = ENET_EIR_TXF_MASK;
 
       //Check whether the TX buffer is available for writing
       if(!(txBufferDesc[txBufferIndex][0] & HTOBE16(ENET_TBD0_R)))
       {
-         //The transmitter can accept another packet
-         flag = osSetEventFromIsr(&interface->nicTxEvent);
+         //Notify the TCP/IP stack that the transmitter is ready to send
+         flag = osSetEventFromIsr(&nicDriverInterface->nicTxEvent);
       }
 
       //Instruct the DMA to poll the transmit descriptor list
@@ -383,13 +385,10 @@ void ENET_Transmit_IRQHandler(void)
 void ENET_Receive_IRQHandler(void)
 {
    bool_t flag;
-   NetInterface *interface;
 
    //Enter interrupt service routine
    osEnterIsr();
 
-   //Point to the structure describing the network interface
-   interface = &netInterface[0];
    //This flag will be set if a higher priority task must be woken
    flag = FALSE;
 
@@ -399,8 +398,10 @@ void ENET_Receive_IRQHandler(void)
       //Disable RXF interrupt
       ENET->EIMR &= ~ENET_EIMR_RXF_MASK;
 
-      //Notify the user that a packet has been received
-      flag = osSetEventFromIsr(&interface->nicRxEvent);
+      //Set event flag
+      nicDriverInterface->nicEvent = TRUE;
+      //Notify the TCP/IP stack of the event
+      flag = osSetEventFromIsr(&netEvent);
    }
 
    //Leave interrupt service routine
@@ -415,13 +416,10 @@ void ENET_Receive_IRQHandler(void)
 void ENET_Error_IRQHandler(void)
 {
    bool_t flag;
-   NetInterface *interface;
 
    //Enter interrupt service routine
    osEnterIsr();
 
-   //Point to the structure describing the network interface
-   interface = &netInterface[0];
    //This flag will be set if a higher priority task must be woken
    flag = FALSE;
 
@@ -431,8 +429,10 @@ void ENET_Error_IRQHandler(void)
       //Disable EBERR interrupt
       ENET->EIMR &= ~ENET_EIMR_EBERR_MASK;
 
-      //Notify the user that an error occurred
-      flag = osSetEventFromIsr(&interface->nicRxEvent);
+      //Set event flag
+      nicDriverInterface->nicEvent = TRUE;
+      //Notify the TCP/IP stack of the event
+      flag |= osSetEventFromIsr(&netEvent);
    }
 
    //Leave interrupt service routine
@@ -449,69 +449,10 @@ void mk60EthEventHandler(NetInterface *interface)
 {
    error_t error;
    size_t length;
-   bool_t linkStateChange;
    uint32_t status;
 
    //Read interrupt event register
    status = ENET->EIR;
-
-   //PHY event is pending?
-   if(interface->phyEvent)
-   {
-      //Acknowledge the event by clearing the flag
-      interface->phyEvent = FALSE;
-      //Handle PHY specific events
-      linkStateChange = interface->phyDriver->eventHandler(interface);
-
-      //Check whether the link state has changed?
-      if(linkStateChange)
-      {
-         //Set speed and duplex mode for proper operation
-         if(interface->linkState)
-         {
-            //Disable Ethernet MAC while modifying configuration registers
-            ENET->ECR &= ~ENET_ECR_ETHEREN_MASK;
-
-            //10BASE-T or 100BASE-TX operation mode?
-            if(interface->speed100)
-            {
-               //100 Mbps operation
-               ENET->RCR &= ~ENET_RCR_RMII_10T_MASK;
-            }
-            else
-            {
-               //10 Mbps operation
-               ENET->RCR |= ENET_RCR_RMII_10T_MASK;
-            }
-
-            //Half-duplex or full-duplex mode?
-            if(interface->fullDuplex)
-            {
-               //Full-duplex mode
-               ENET->TCR |= ENET_TCR_FDEN_MASK;
-               //Receive path operates independently of transmit
-               ENET->RCR &= ~ENET_RCR_DRT_MASK;
-            }
-            else
-            {
-               //Half-duplex mode
-               ENET->TCR &= ~ENET_TCR_FDEN_MASK;
-               //Disable reception of frames while transmitting
-               ENET->RCR |= ENET_RCR_DRT_MASK;
-            }
-
-            //Reset buffer descriptors
-            mk60EthInitBufferDesc(interface);
-            //Re-enable Ethernet MAC
-            ENET->ECR |= ENET_ECR_ETHEREN_MASK;
-            //Instruct the DMA to poll the receive descriptor list
-            ENET->RDAR = ENET_RDAR_RDAR_MASK;
-         }
-
-         //Process link state change event
-         nicNotifyLinkChange(interface);
-      }
-   }
 
    //Packet received?
    if(status & ENET_EIR_RXF_MASK)
@@ -555,51 +496,6 @@ void mk60EthEventHandler(NetInterface *interface)
 
    //Re-enable Ethernet MAC interrupts
    ENET->EIMR = ENET_EIMR_TXF_MASK | ENET_EIMR_RXF_MASK | ENET_EIMR_EBERR_MASK;
-}
-
-
-/**
- * @brief Configure multicast MAC address filtering
- * @param[in] interface Underlying network interface
- * @return Error code
- **/
-
-error_t mk60EthSetMacFilter(NetInterface *interface)
-{
-   uint_t i;
-   uint_t k;
-   uint32_t crc;
-   uint32_t hashTable[2];
-
-   //Debug message
-   TRACE_INFO("Updating Kinetis K60 hash table...\r\n");
-
-   //Clear hash table
-   hashTable[0] = 0;
-   hashTable[1] = 0;
-
-   //The MAC filter table contains the multicast MAC addresses
-   //to accept when receiving an Ethernet frame
-   for(i = 0; i < interface->macFilterSize; i++)
-   {
-      //Compute CRC over the current MAC address
-      crc = mk60EthCalcCrc(&interface->macFilter[i].addr, sizeof(MacAddr));
-      //The upper 6 bits in the CRC register are used to index the contents of the hash table
-      k = (crc >> 26) & 0x3F;
-      //Update hash table contents
-      hashTable[k / 32] |= (1 << (k % 32));
-   }
-
-   //Write the hash table
-   ENET->GALR = hashTable[0];
-   ENET->GAUR = hashTable[1];
-
-   //Debug message
-   TRACE_INFO("  GALR = %08" PRIX32 "\r\n", ENET->GALR);
-   TRACE_INFO("  GAUR = %08" PRIX32 "\r\n", ENET->GAUR);
-
-   //Successful processing
-   return NO_ERROR;
 }
 
 
@@ -753,6 +649,114 @@ error_t mk60EthReceivePacket(NetInterface *interface,
 
    //Return status code
    return error;
+}
+
+
+/**
+ * @brief Configure multicast MAC address filtering
+ * @param[in] interface Underlying network interface
+ * @return Error code
+ **/
+
+error_t mk60EthSetMulticastFilter(NetInterface *interface)
+{
+   uint_t i;
+   uint_t k;
+   uint32_t crc;
+   uint32_t hashTable[2];
+   MacFilterEntry *entry;
+
+   //Debug message
+   TRACE_DEBUG("Updating Kinetis K60 hash table...\r\n");
+
+   //Clear hash table
+   hashTable[0] = 0;
+   hashTable[1] = 0;
+
+   //The MAC filter table contains the multicast MAC addresses
+   //to accept when receiving an Ethernet frame
+   for(i = 0; i < MAC_MULTICAST_FILTER_SIZE; i++)
+   {
+      //Point to the current entry
+      entry = &interface->macMulticastFilter[i];
+
+      //Valid entry?
+      if(entry->refCount > 0)
+      {
+         //Compute CRC over the current MAC address
+         crc = mk60EthCalcCrc(&entry->addr, sizeof(MacAddr));
+
+         //The upper 6 bits in the CRC register are used to index the
+         //contents of the hash table
+         k = (crc >> 26) & 0x3F;
+
+         //Update hash table contents
+         hashTable[k / 32] |= (1 << (k % 32));
+      }
+   }
+
+   //Write the hash table
+   ENET->GALR = hashTable[0];
+   ENET->GAUR = hashTable[1];
+
+   //Debug message
+   TRACE_DEBUG("  GALR = %08" PRIX32 "\r\n", ENET->GALR);
+   TRACE_DEBUG("  GAUR = %08" PRIX32 "\r\n", ENET->GAUR);
+
+   //Successful processing
+   return NO_ERROR;
+}
+
+
+/**
+ * @brief Adjust MAC configuration parameters for proper operation
+ * @param[in] interface Underlying network interface
+ * @return Error code
+ **/
+
+error_t mk60EthUpdateMacConfig(NetInterface *interface)
+{
+   //Disable Ethernet MAC while modifying configuration registers
+   ENET->ECR &= ~ENET_ECR_ETHEREN_MASK;
+
+   //10BASE-T or 100BASE-TX operation mode?
+   if(interface->linkSpeed == NIC_LINK_SPEED_100MBPS)
+   {
+      //100 Mbps operation
+      ENET->RCR &= ~ENET_RCR_RMII_10T_MASK;
+   }
+   else
+   {
+      //10 Mbps operation
+      ENET->RCR |= ENET_RCR_RMII_10T_MASK;
+   }
+
+   //Half-duplex or full-duplex mode?
+   if(interface->duplexMode == NIC_FULL_DUPLEX_MODE)
+   {
+      //Full-duplex mode
+      ENET->TCR |= ENET_TCR_FDEN_MASK;
+      //Receive path operates independently of transmit
+      ENET->RCR &= ~ENET_RCR_DRT_MASK;
+   }
+   else
+   {
+      //Half-duplex mode
+      ENET->TCR &= ~ENET_TCR_FDEN_MASK;
+      //Disable reception of frames while transmitting
+      ENET->RCR |= ENET_RCR_DRT_MASK;
+   }
+
+   //Reset buffer descriptors
+   mk60EthInitBufferDesc(interface);
+
+   //Re-enable Ethernet MAC
+   ENET->ECR |= ENET_ECR_ETHEREN_MASK;
+   //Instruct the DMA to poll the receive descriptor list
+   ENET->RDAR = ENET_RDAR_RDAR_MASK;
+
+   //Successful processing
+   return NO_ERROR;
 }
 
 

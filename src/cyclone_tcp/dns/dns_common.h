@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _DNS_COMMON_H
@@ -46,6 +46,11 @@
 //Maximum size of labels
 #define DNS_LABEL_MAX_SIZE 63
 
+//Maximum length of reverse DNS names (IPv4)
+#define DNS_MAX_IPV4_REVERSE_NAME_LEN 15
+//Maximum length of reverse DNS names (IPv6)
+#define DNS_MAX_IPV6_REVERSE_NAME_LEN 63
+
 //DNS port number
 #define DNS_PORT 53
 
@@ -53,8 +58,11 @@
 #define DNS_COMPRESSION_TAG 0xC0
 
 //Macro definition
-#define DNS_GET_QUESTION(message, offset) (DnsQuestion *) ((uint8_t *) message + offset)
-#define DNS_GET_RESOURCE_RECORD(message, offset) (DnsResourceRecord *) ((uint8_t *) message + offset)
+#define DNS_GET_QUESTION(message, offset) (DnsQuestion *) ((uint8_t *) (message) + (offset))
+#define DNS_GET_RESOURCE_RECORD(message, offset) (DnsResourceRecord *) ((uint8_t *) (message) + (offset))
+
+#define DNS_SET_NSEC_BITMAP(bitmap, type) bitmap[(type) / 8] |= 0x80 >> ((type) % 8)
+#define DNS_CLR_NSEC_BITMAP(bitmap, type) bitmap[(type) / 8] &= ~(0x80 >> ((type) % 8))
 
 
 /**
@@ -87,40 +95,49 @@ typedef enum
 
 
 /**
- * @brief DNS resource record types
- **/
-
-typedef enum
-{
-   DNS_RR_TYPE_A     = 1,  ///<Host address
-   DNS_RR_TYPE_NS    = 2,  ///<Authoritative name server
-   DNS_RR_TYPE_CNAME = 5,  ///<Canonical name for an alias
-   DNS_RR_TYPE_PTR   = 12, ///<Domain name pointer
-   DNS_RR_TYPE_HINFO = 13, ///<Host information
-   DNS_RR_TYPE_MX    = 15, ///<Mail exchange
-   DNS_RR_TYPE_TXT   = 16, ///<Text strings
-   DNS_RR_TYPE_AAAA  = 28, ///<IPv6 address
-   DNS_RR_TYPE_NB    = 32, ///<NetBIOS name service
-   DNS_RR_TYPE_SRV   = 33, ///<Server selection
-   DNS_RR_TYPE_ANY   = 255
-} DnsResourceRecordType;
-
-
-/**
  * @brief DNS resource record classes
  **/
 
 typedef enum
 {
-   DNS_RR_CLASS_IN  = 1, ///<Internet
-   DNS_RR_CLASS_CH  = 3, ///<Chaos
-   DNS_RR_CLASS_HS  = 4, ///<Hesiod
-   DNS_RR_CLASS_ANY = 255
+   DNS_RR_CLASS_IN  = 1,  ///<Internet
+   DNS_RR_CLASS_CH  = 3,  ///<Chaos
+   DNS_RR_CLASS_HS  = 4,  ///<Hesiod
+   DNS_RR_CLASS_ANY = 255 ///<Any class
 } DnsResourceRecordClass;
 
 
-//Win32 compiler?
-#if defined(_WIN32)
+/**
+ * @brief DNS resource record types
+ **/
+
+typedef enum
+{
+   DNS_RR_TYPE_A     = 1,   ///<Host address
+   DNS_RR_TYPE_NS    = 2,   ///<Authoritative name server
+   DNS_RR_TYPE_CNAME = 5,   ///<Canonical name for an alias
+   DNS_RR_TYPE_SOA   = 6,   ///<Start of a zone of authority
+   DNS_RR_TYPE_WKS   = 11,  ///<Well known service description
+   DNS_RR_TYPE_PTR   = 12,  ///<Domain name pointer
+   DNS_RR_TYPE_HINFO = 13,  ///<Host information
+   DNS_RR_TYPE_MINFO = 14,  ///<Mailbox or mail list information
+   DNS_RR_TYPE_MX    = 15,  ///<Mail exchange
+   DNS_RR_TYPE_TXT   = 16,  ///<Text strings
+   DNS_RR_TYPE_AAAA  = 28,  ///<IPv6 address
+   DNS_RR_TYPE_NB    = 32,  ///<NetBIOS name service
+   DNS_RR_TYPE_SRV   = 33,  ///<Server selection
+   DNS_RR_TYPE_NAPTR = 35,  ///<Naming authority pointer
+   DNS_RR_TYPE_NSEC  = 47,  ///<NSEC record
+   DNS_RR_TYPE_EUI48 = 108, ///<EUI-48 address
+   DNS_RR_TYPE_EUI64 = 109, ///<EUI-64 address
+   DNS_RR_TYPE_AXFR  = 252, ///<Transfer of an entire zone
+   DNS_RR_TYPE_ANY   = 255, ///<A request for all records
+   DNS_RR_TYPE_URI   = 256  ///<Uniform resource identifier
+} DnsResourceRecordType;
+
+
+//CodeWarrior or Win32 compiler?
+#if defined(__CWCC__) || defined(_WIN32)
    #pragma pack(push, 1)
 #endif
 
@@ -201,8 +218,8 @@ typedef __start_packed struct
 } __end_packed DnsSrvResourceRecord;
 
 
-//Win32 compiler?
-#if defined(_WIN32)
+//CodeWarrior or Win32 compiler?
+#if defined(__CWCC__) || defined(_WIN32)
    #pragma pack(pop)
 #endif
 
@@ -213,7 +230,10 @@ size_t dnsEncodeName(const char_t *src, uint8_t *dest);
 size_t dnsParseName(const DnsHeader *message,
    size_t length, size_t pos, char_t *dest, uint_t level);
 
-bool_t dnsCompareName(const DnsHeader *message,
-   size_t length, size_t pos, const char_t *name, uint_t level);
+int_t dnsCompareName(const DnsHeader *message, size_t length,
+   size_t pos, const char_t *name, uint_t level);
+
+int_t dnsCompareEncodedName(const DnsHeader *message1, size_t length1, size_t pos1,
+   const DnsHeader *message2, size_t length2, size_t pos2, uint_t level);
 
 #endif

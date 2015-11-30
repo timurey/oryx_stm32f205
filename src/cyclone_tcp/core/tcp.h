@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _TCP_H
@@ -49,7 +49,7 @@
 //TCP tick interval
 #ifndef TCP_TICK_INTERVAL
    #define TCP_TICK_INTERVAL 100
-#elif (TCP_TICK_INTERVAL < 100)
+#elif (TCP_TICK_INTERVAL < 10)
    #error TCP_TICK_INTERVAL parameter is not valid
 #endif
 
@@ -142,6 +142,14 @@
    #define TCP_FAST_RETRANSMIT_THRES 3
 #elif (TCP_FAST_RETRANSMIT_THRES < 1)
    #error TCP_FAST_RETRANSMIT_THRES parameter is not valid
+#endif
+
+
+//TCP congestion control
+#ifndef TCP_CONGESTION_CONTROL_SUPPORT
+   #define TCP_CONGESTION_CONTROL_SUPPORT DISABLED
+#elif (TCP_CONGESTION_CONTROL_SUPPORT != ENABLED && TCP_CONGESTION_CONTROL_SUPPORT != DISABLED)
+   #error TCP_CONGESTION_CONTROL_SUPPORT parameter is not valid
 #endif
 
 //Size of the congestion window after the three-way handshake is completed
@@ -267,8 +275,8 @@ typedef enum
 } TcpOptionKind;
 
 
-//Win32 compiler?
-#if defined(_WIN32)
+//CodeWarrior or Win32 compiler?
+#if defined(__CWCC__) || defined(_WIN32)
    #pragma pack(push, 1)
 #endif
 
@@ -313,8 +321,8 @@ typedef __start_packed struct
 } __end_packed TcpOption;
 
 
-//Win32 compiler?
-#if defined(_WIN32)
+//CodeWarrior or Win32 compiler?
+#if defined(__CWCC__) || defined(_WIN32)
    #pragma pack(pop)
 #endif
 
@@ -340,7 +348,6 @@ typedef struct _TcpQueueItem
    struct _TcpQueueItem *next;
    uint_t length;
    uint_t sacked;
-   uint8_t timeToLive;
    IpPseudoHeader pseudoHeader;
    uint8_t header[TCP_MAX_HEADER_LENGTH];
 } TcpQueueItem;
@@ -396,6 +403,9 @@ typedef struct
    ChunkDesc chunk[N(TCP_MAX_RX_BUFFER_SIZE)];
 } TcpRxBuffer;
 
+
+//Tick counter to handle periodic operations
+extern systime_t tcpTickCounter;
 
 //TCP related functions
 error_t tcpInit(void);

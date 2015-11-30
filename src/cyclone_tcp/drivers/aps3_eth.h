@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _APS3_ETH_H
@@ -149,15 +149,20 @@ void aps3EthTick(NetInterface *interface);
 
 void aps3EthEnableIrq(NetInterface *interface);
 void aps3EthDisableIrq(NetInterface *interface);
-void aps3EthEventHandler(NetInterface *interface);
 
-error_t aps3EthSetMacFilter(NetInterface *interface);
+void aps3EthTxIrqHandler(void) __attribute__((noinline));
+void aps3EthRxIrqHandler(void) __attribute__((noinline));
+
+void aps3EthEventHandler(NetInterface *interface);
 
 error_t aps3EthSendPacket(NetInterface *interface,
    const NetBuffer *buffer, size_t offset);
 
 error_t aps3EthReceivePacket(NetInterface *interface,
    uint8_t *buffer, size_t size, size_t *length);
+
+error_t aps3EthSetMulticastFilter(NetInterface *interface);
+error_t aps3EthUpdateMacConfig(NetInterface *interface);
 
 void aps3EthWritePhyReg(uint8_t phyAddr, uint8_t regAddr, uint16_t data);
 uint16_t aps3EthReadPhyReg(uint8_t phyAddr, uint8_t regAddr);

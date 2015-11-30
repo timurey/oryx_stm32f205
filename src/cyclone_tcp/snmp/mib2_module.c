@@ -35,7 +35,7 @@
  * - RFC 3418: MIB for the Simple Network Management Protocol (SNMP)
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -108,6 +108,62 @@ const MibObject mib2Objects[] =
       sizeof(uint32_t),
       NULL,
       mib2GetSysUpTime,
+      NULL
+   },
+   {
+      "sysContact",
+      {43, 6, 1, 2, 1, 1, 4},
+      7,
+      ASN1_CLASS_UNIVERSAL,
+      ASN1_TYPE_OCTET_STRING,
+      MIB_ACCESS_READ_WRITE,
+      &mib2Base.sysGroup.sysContact,
+      &mib2Base.sysGroup.sysContactLen,
+      MIB2_SYS_CONTACT_SIZE,
+      NULL,
+      NULL,
+      NULL
+   },
+   {
+      "sysName",
+      {43, 6, 1, 2, 1, 1, 5},
+      7,
+      ASN1_CLASS_UNIVERSAL,
+      ASN1_TYPE_OCTET_STRING,
+      MIB_ACCESS_READ_WRITE,
+      &mib2Base.sysGroup.sysName,
+      &mib2Base.sysGroup.sysNameLen,
+      MIB2_SYS_NAME_SIZE,
+      NULL,
+      NULL,
+      NULL
+   },
+   {
+      "sysLocation",
+      {43, 6, 1, 2, 1, 1, 6},
+      7,
+      ASN1_CLASS_UNIVERSAL,
+      ASN1_TYPE_OCTET_STRING,
+      MIB_ACCESS_READ_WRITE,
+      &mib2Base.sysGroup.sysLocation,
+      &mib2Base.sysGroup.sysLocationLen,
+      MIB2_SYS_LOCATION_SIZE,
+      NULL,
+      NULL,
+      NULL
+   },
+   {
+      "sysServices",
+      {43, 6, 1, 2, 1, 1, 7},
+      7,
+      ASN1_CLASS_UNIVERSAL,
+      ASN1_TYPE_INTEGER,
+      MIB_ACCESS_READ_ONLY,
+      &mib2Base.sysGroup.sysServices,
+      NULL,
+      sizeof(int32_t),
+      NULL,
+      NULL,
       NULL
    },
    //Interfaces group

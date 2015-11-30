@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _KSZ9031_H
@@ -268,7 +268,7 @@ void ksz9031Tick(NetInterface *interface);
 void ksz9031EnableIrq(NetInterface *interface);
 void ksz9031DisableIrq(NetInterface *interface);
 
-bool_t ksz9031EventHandler(NetInterface *interface);
+void ksz9031EventHandler(NetInterface *interface);
 
 void ksz9031WritePhyReg(NetInterface *interface, uint8_t address, uint16_t data);
 uint16_t ksz9031ReadPhyReg(NetInterface *interface, uint8_t address);

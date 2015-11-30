@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _DHCPV6_COMMON_H
@@ -34,19 +34,17 @@
 #include "core/ethernet.h"
 #include "ipv6/ipv6.h"
 
+//UDP ports used by DHCPv6 clients and servers
+#define DHCPV6_CLIENT_PORT 546
+#define DHCPV6_SERVER_PORT 547
+
 //Maximum DHCPv6 message size
 #define DHCPV6_MAX_MSG_SIZE 1232
 //Maximum DUID size (128 octets not including the type code)
 #define DHCPV6_MAX_DUID_SIZE 130
 
-//UDP ports used by DHCPv6 clients and servers
-#define DHCPV6_CLIENT_PORT 546
-#define DHCPV6_SERVER_PORT 547
-
 //Maximum hop count in a relay-forward message
 #define DHCPV6_HOP_COUNT_LIMIT 32
-//Hardware type
-#define DHCPV6_HARDWARE_TYPE_ETH 1
 //Highest server preference value
 #define DHCPV6_MAX_SERVER_PREFERENCE 255
 //Infinite lifetime representation
@@ -63,6 +61,17 @@ typedef enum
    DHCPV6_DUID_EN  = 2,
    DHCPV6_DUID_LL  = 3
 } Dhcpv6DuidType;
+
+
+/**
+ * @brief Hardware types
+ **/
+
+typedef enum
+{
+   DHCPV6_HARDWARE_TYPE_ETH   = 1,
+   DHCPV6_HARDWARE_TYPE_EUI64 = 27
+} Dhcpv6HardwareType;
 
 
 /**
@@ -115,7 +124,8 @@ typedef enum
    DHCPV6_OPTION_DNS_SERVERS   = 23,
    DHCPV6_OPTION_DOMAIN_LIST   = 24,
    DHCPV6_OPTION_IA_PD         = 25,
-   DHCPV6_OPTION_IAPREFIX      = 26
+   DHCPV6_OPTION_IAPREFIX      = 26,
+   DHCPV6_OPTION_FQDN          = 39
 } Dhcpv6OptionCode;
 
 
@@ -134,8 +144,8 @@ typedef enum
 } Dhcpv6StatusCode;
 
 
-//Win32 compiler?
-#if defined(_WIN32)
+//CodeWarrior or Win32 compiler?
+#if defined(__CWCC__) || defined(_WIN32)
    #pragma pack(push, 1)
 #endif
 
@@ -173,7 +183,11 @@ typedef __start_packed struct
 {
    uint16_t type;         //0-1
    uint16_t hardwareType; //2-3
+#if (ETH_SUPPORT == ENABLED)
    MacAddr linkLayerAddr; //4-9
+#else
+   Eui64 linkLayerAddr;   //4-11
+#endif
 } __end_packed Dhcpv6DuidLl;
 
 
@@ -374,8 +388,29 @@ typedef __start_packed struct
 } __end_packed Dhcpv6IaPrefixOption;
 
 
-//Win32 compiler?
-#if defined(_WIN32)
+/**
+ * @brief Fully Qualified Domain Name option
+ **/
+
+typedef __start_packed struct
+{
+#ifdef _BIG_ENDIAN
+   uint8_t mbz : 5;      //0
+   uint8_t n : 1;
+   uint8_t o : 1;
+   uint8_t s : 1;
+#else
+   uint8_t s : 1;        //0
+   uint8_t o : 1;
+   uint8_t n : 1;
+   uint8_t mbz : 5;
+#endif
+   uint8_t domainName[]; //1
+} __end_packed Dhcpv6FqdnOption;
+
+
+//CodeWarrior or Win32 compiler?
+#if defined(__CWCC__) || defined(_WIN32)
    #pragma pack(pop)
 #endif
 
@@ -385,7 +420,7 @@ extern const Ipv6Addr DHCPV6_ALL_RELAY_AGENTS_AND_SERVERS_ADDR;
 extern const Ipv6Addr DHCPV6_ALL_SERVERS_ADDR;
 
 //DHCPv6 related functions
-error_t dhcpv6ParseStatusCodeOption(const uint8_t *options, size_t length);
+Dhcpv6StatusCode dhcpv6GetStatusCode(const uint8_t *options, size_t length);
 
 Dhcpv6Option *dhcpv6AddOption(void *message, size_t *messageLength,
    uint16_t optionCode, const void *optionValue, uint16_t optionLength);
@@ -395,5 +430,8 @@ Dhcpv6Option *dhcpv6AddSubOption(Dhcpv6Option *baseOption, size_t *messageLength
 
 Dhcpv6Option *dhcpv6GetOption(const uint8_t *options,
    size_t optionsLength, uint16_t optionCode);
+
+int32_t dhcpv6Rand(int32_t value);
+int32_t dhcpv6RandRange(int32_t min, int32_t max);
 
 #endif

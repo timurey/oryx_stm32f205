@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _UPD60611_H
@@ -276,7 +276,7 @@ void upd60611Tick(NetInterface *interface);
 void upd60611EnableIrq(NetInterface *interface);
 void upd60611DisableIrq(NetInterface *interface);
 
-bool_t upd60611EventHandler(NetInterface *interface);
+void upd60611EventHandler(NetInterface *interface);
 
 void upd60611WritePhyReg(NetInterface *interface, uint8_t address, uint16_t data);
 uint16_t upd60611ReadPhyReg(NetInterface *interface, uint8_t address);

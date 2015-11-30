@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _AUTO_IP_H
@@ -39,10 +39,17 @@
    #error AUTO_IP_SUPPORT parameter is not valid
 #endif
 
+//Bonjour Conformance Test support
+#ifndef AUTO_IP_BCT_SUPPORT
+   #define AUTO_IP_BCT_SUPPORT DISABLED
+#elif (AUTO_IP_BCT_SUPPORT != ENABLED && AUTO_IP_BCT_SUPPORT != DISABLED)
+   #error AUTO_IP_BCT_SUPPORT parameter is not valid
+#endif
+
 //Auto-IP tick interval
 #ifndef AUTO_IP_TICK_INTERVAL
    #define AUTO_IP_TICK_INTERVAL 200
-#elif (AUTO_IP_TICK_INTERVAL < 100)
+#elif (AUTO_IP_TICK_INTERVAL < 10)
    #error AUTO_IP_TICK_INTERVAL parameter is not valid
 #endif
 
@@ -117,13 +124,17 @@
 #endif
 
 //Auto-IP address prefix
-#define AUTO_IP_ADDR_PREFIX IPV4_ADDR(169,254,0,0)
+#define AUTO_IP_PREFIX IPV4_ADDR(169, 254, 0, 0)
 //Auto-IP subnet mask
-#define AUTO_IP_SUBNET_MASK IPV4_ADDR(255,255,0,0)
+#define AUTO_IP_MASK IPV4_ADDR(255, 255, 0, 0)
 
 //Auto-IP address range
-#define AUTO_IP_ADDR_MIN IPV4_ADDR(169,254,1,0)
-#define AUTO_IP_ADDR_MAX IPV4_ADDR(169,254,254,255)
+#define AUTO_IP_ADDR_MIN IPV4_ADDR(169, 254, 1, 0)
+#define AUTO_IP_ADDR_MAX IPV4_ADDR(169, 254, 254, 255)
+
+//Forward declaration of AutoIpContext structure
+struct _AutoIpContext;
+#define AutoIpContext struct _AutoIpContext
 
 
 /**
@@ -136,8 +147,24 @@ typedef enum
    AUTO_IP_STATE_PROBING,
    AUTO_IP_STATE_ANNOUNCING,
    AUTO_IP_STATE_CONFIGURED,
-   AUTO_IP_STATE_ERROR
+   AUTO_IP_STATE_DEFENDING
 } AutoIpState;
+
+
+/**
+ * @brief Link state change callback
+ **/
+
+typedef void (*AutoIpLinkChangeCallback)(AutoIpContext *context,
+   NetInterface *interface, bool_t linkState);
+
+
+/**
+ * @brief FSM state change callback
+ **/
+
+typedef void (*AutoIpStateChangeCallback)(AutoIpContext *context,
+   NetInterface *interface, AutoIpState state);
 
 
 /**
@@ -146,8 +173,10 @@ typedef enum
 
 typedef struct
 {
-   NetInterface *interface; ///<Network interface to configure
-   Ipv4Addr linkLocalAddr;  ///<Default link-local address
+   NetInterface *interface;                    ///<Network interface to configure
+   Ipv4Addr linkLocalAddr;                     ///<Initial link-local address to be used
+   AutoIpLinkChangeCallback linkChangeEvent;   ///<Link state change event
+   AutoIpStateChangeCallback stateChangeEvent; ///<FSM state change event
 } AutoIpSettings;
 
 
@@ -155,19 +184,21 @@ typedef struct
  * @brief Auto-IP context
  **/
 
-typedef struct
+struct _AutoIpContext
 {
-   NetInterface *interface; ///<Underlying network interface
-   Ipv4Addr linkLocalAddr;  ///<Link-local address
-   OsMutex mutex;           ///<Mutex preventing simultaneous access to Auto-IP functions
+   AutoIpSettings settings; ///<Auto-IP settings
    bool_t running;          ///<Auto-IP is currently running
    AutoIpState state;       ///<Current state of the FSM
-   uint_t conflictCount;    ///<Number of conflicts
+   Ipv4Addr linkLocalAddr;  ///<Link-local address
    systime_t timestamp;     ///<Timestamp to manage retransmissions
    systime_t timeout;       ///<Timeout value
    uint_t retransmitCount;  ///<Retransmission counter
-} AutoIpContext;
+   uint_t conflictCount;    ///<Number of conflicts
+};
 
+
+//Tick counter to handle periodic operations
+extern systime_t autoIpTickCounter;
 
 //Auto-IP related functions
 void autoIpGetDefaultSettings(AutoIpSettings *settings);
@@ -178,6 +209,9 @@ AutoIpState autoIpGetState(AutoIpContext *context);
 
 void autoIpTick(AutoIpContext *context);
 void autoIpLinkChangeEvent(AutoIpContext *context);
+
+void autoIpChangeState(AutoIpContext *context,
+   AutoIpState newState, systime_t delay);
 
 void autoIpGenerateAddr(Ipv4Addr *ipAddr);
 

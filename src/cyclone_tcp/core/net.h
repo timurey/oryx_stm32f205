@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _NET_H
@@ -36,6 +36,7 @@ struct _NetInterface;
 //Dependencies
 #include "os_port.h"
 #include "net_config.h"
+#include "core/net_legacy.h"
 #include "core/net_mem.h"
 #include "endian.h"
 #include "error.h"
@@ -45,66 +46,33 @@ struct _NetInterface;
 #include "ipv4/ipv4_frag.h"
 #include "ipv4/auto_ip.h"
 #include "ipv6/ipv6.h"
-#include "ipv6/ipv6_frag.h"
 #include "ipv4/arp.h"
 #include "ipv6/ndp.h"
+#include "ipv6/ndp_router_adv.h"
 #include "ipv6/slaac.h"
 #include "ppp/ppp.h"
+#include "dhcp/dhcp_client.h"
+#include "dhcpv6/dhcpv6_client.h"
 #include "dns/dns_client.h"
 #include "mdns/mdns_responder.h"
 #include "mdns/mdns_common.h"
 #include "dns_sd/dns_sd.h"
 #include "snmp/mib2_module.h"
 
-//Deprecated properties
-#ifdef TCP_IP_CALLBACK_TABLE_SIZE
-   #warning TCP_IP_CALLBACK_TABLE_SIZE property is deprecated. NET_CALLBACK_TABLE_SIZE should be used instead.
-   #define NET_CALLBACK_TABLE_SIZE TCP_IP_CALLBACK_TABLE_SIZE
-#endif
+//Version string
+#define NET_VERSION_STRING "1.6.5"
+//Major version
+#define NET_MAJOR_VERSION 1
+//Minor version
+#define NET_MINOR_VERSION 6
+//Revision number
+#define NET_REV_NUMBER 5
 
-#ifdef TCP_IP_MAX_IF_NAME_LEN
-   #warning TCP_IP_MAX_IF_NAME_LEN property is deprecated. NET_MAX_IF_NAME_LEN should be used instead.
-   #define NET_MAX_IF_NAME_LEN TCP_IP_MAX_IF_NAME_LEN
-#endif
-
-#ifdef TCP_IP_MAX_HOSTNAME_LEN
-   #warning TCP_IP_MAX_HOSTNAME_LEN property is deprecated. NET_MAX_HOSTNAME_LEN should be used instead.
-   #define NET_MAX_HOSTNAME_LEN TCP_IP_MAX_HOSTNAME_LEN
-#endif
-
-#ifdef TCP_IP_MAX_PROXY_NAME_LEN
-   #warning TCP_IP_MAX_PROXY_NAME_LEN property is deprecated. NET_MAX_PROXY_NAME_LEN should be used instead.
-   #define NET_MAX_PROXY_NAME_LEN TCP_IP_MAX_PROXY_NAME_LEN
-#endif
-
-#ifdef TCP_IP_STATIC_OS_RESOURCES
-   #warning TCP_IP_STATIC_OS_RESOURCES property is deprecated. NET_STATIC_OS_RESOURCES should be used instead.
-   #define NET_STATIC_OS_RESOURCES TCP_IP_STATIC_OS_RESOURCES
-#endif
-
-#ifdef TCP_IP_TICK_STACK_SIZE
-   #warning TCP_IP_TICK_STACK_SIZE property is deprecated. NET_TICK_STACK_SIZE should be used instead.
-   #define NET_TICK_STACK_SIZE TCP_IP_TICK_STACK_SIZE
-#endif
-
-#ifdef TCP_IP_TICK_PRIORITY
-   #warning TCP_IP_TICK_PRIORITY property is deprecated. NET_TICK_PRIORITY should be used instead.
-   #define NET_TICK_PRIORITY TCP_IP_TICK_PRIORITY
-#endif
-
-#ifdef TCP_IP_TICK_INTERVAL
-   #warning TCP_IP_TICK_INTERVAL property is deprecated. NET_TICK_INTERVAL should be used instead.
-   #define NET_TICK_INTERVAL TCP_IP_TICK_INTERVAL
-#endif
-
-#ifdef TCP_IP_RX_STACK_SIZE
-   #warning TCP_IP_RX_STACK_SIZE property is deprecated. NET_RX_STACK_SIZE should be used instead.
-   #define NET_RX_STACK_SIZE TCP_IP_RX_STACK_SIZE
-#endif
-
-#ifdef TCP_IP_RX_PRIORITY
-   #warning TCP_IP_RX_PRIORITY property is deprecated. NET_RX_PRIORITY should be used instead.
-   #define NET_RX_PRIORITY TCP_IP_RX_PRIORITY
+//RTOS support
+#ifndef NET_RTOS_SUPPORT
+   #define NET_RTOS_SUPPORT ENABLED
+#elif (NET_RTOS_SUPPORT != ENABLED && NET_RTOS_SUPPORT != DISABLED)
+   #error NET_RTOS_SUPPORT parameter is not valid
 #endif
 
 //Number of network adapters
@@ -150,46 +118,25 @@ struct _NetInterface;
    #error NET_STATIC_OS_RESOURCES parameter is not valid
 #endif
 
-//Stack size required to run the TCP/IP tick task
-#ifndef NET_TICK_STACK_SIZE
-   #define NET_TICK_STACK_SIZE 550
-#elif (NET_TICK_STACK_SIZE < 1)
-   #error NET_TICK_STACK_SIZE parameter is not valid
+//Stack size required to run the TCP/IP task
+#ifndef NET_TASK_STACK_SIZE
+   #define NET_TASK_STACK_SIZE 650
+#elif (NET_TASK_STACK_SIZE < 1)
+   #error NET_TASK_STACK_SIZE parameter is not valid
 #endif
 
-//Priority at which the TCP/IP tick task should run
-#ifndef NET_TICK_PRIORITY
-   #define NET_TICK_PRIORITY 1
-#elif (NET_TICK_PRIORITY < 0)
-   #error NET_TICK_PRIORITY parameter is not valid
+//Priority at which the TCP/IP task should run
+#ifndef NET_TASK_PRIORITY
+   #define NET_TASK_PRIORITY 2
+#elif (NET_TASK_PRIORITY < 0)
+   #error NET_TASK_PRIORITY parameter is not valid
 #endif
 
 //TCP/IP stack tick interval
 #ifndef NET_TICK_INTERVAL
    #define NET_TICK_INTERVAL 100
-#elif (NET_TICK_INTERVAL < 100)
+#elif (NET_TICK_INTERVAL < 10)
    #error NET_TICK_INTERVAL parameter is not valid
-#endif
-
-//Stack size required to run the TCP/IP RX task
-#ifndef NET_RX_STACK_SIZE
-   #define NET_RX_STACK_SIZE 650
-#elif (NET_RX_STACK_SIZE < 1)
-   #error NET_RX_STACK_SIZE parameter is not valid
-#endif
-
-//Priority at which the TCP/IP RX task should run
-#ifndef NET_RX_PRIORITY
-   #define NET_RX_PRIORITY 2
-#elif (NET_RX_PRIORITY < 0)
-   #error NET_RX_PRIORITY parameter is not valid
-#endif
-
-//Deprecated API support
-#ifndef NET_DEPRECATED_API_SUPPORT
-   #define NET_DEPRECATED_API_SUPPORT ENABLED
-#elif (NET_DEPRECATED_API_SUPPORT != ENABLED && NET_DEPRECATED_API_SUPPORT != DISABLED)
-   #error NET_DEPRECATED_API_SUPPORT parameter is not valid
 #endif
 
 
@@ -199,89 +146,73 @@ struct _NetInterface;
 
 struct _NetInterface
 {
-   uint32_t id;                                         ///<A unique number identifying the interface
-   char_t name[NET_MAX_IF_NAME_LEN];                    ///<A unique name identifying the interface
-   char_t hostname[NET_MAX_HOSTNAME_LEN];               ///<Host name
-   MacAddr macAddr;                                     ///<Link-layer address
-   char_t proxyName[NET_MAX_PROXY_NAME_LEN];            ///<Proxy server name
-   uint16_t proxyPort;                                  ///<Proxy server port
-   OsMutex macFilterMutex;                              ///<Mutex preventing simultaneous access to the MAC filter table
-   MacFilterEntry macFilter[MAC_FILTER_MAX_SIZE];       ///<MAC filter table
-   uint_t macFilterSize;                                ///<Number of entries in the MAC filter table
-   uint8_t ethFrame[1536 /*ETH_MAX_FRAME_SIZE*/];       ///<Incoming Ethernet frame
-   OsEvent nicTxEvent;                                  ///<Network controller TX event
-   OsEvent nicRxEvent;                                  ///<Network controller RX event
-   bool_t phyEvent;                                     ///<A PHY event is pending
-   OsMutex nicDriverMutex;                              ///<Mutex preventing simultaneous access to the NIC driver
-   const NicDriver *nicDriver;                          ///<NIC driver
-   const PhyDriver *phyDriver;                          ///<PHY driver
-   const SpiDriver *spiDriver;                          ///<Underlying SPI driver
-   const UartDriver *uartDriver;                        ///<Underlying UART driver
-   const ExtIntDriver *extIntDriver;                    ///<External interrupt line driver
-   uint8_t nicContext[NIC_CONTEXT_SIZE];                ///<Driver specific context
-   bool_t linkState;                                    ///<Link state
-   bool_t speed100;                                     ///<Link speed
-   bool_t speed1000;
-   bool_t fullDuplex;                                   ///<Duplex mode
-   bool_t configured;                                   ///<Configuration done
+   uint32_t id;                                   ///<A unique number identifying the interface
+   Eui64 eui64;                                   ///<EUI-64 interface identifier
+   char_t name[NET_MAX_IF_NAME_LEN + 1];          ///<A unique name identifying the interface
+   char_t hostname[NET_MAX_HOSTNAME_LEN + 1];     ///<Host name
+   char_t proxyName[NET_MAX_PROXY_NAME_LEN + 1];  ///<Proxy server name
+   uint16_t proxyPort;                            ///<Proxy server port
+   const NicDriver *nicDriver;                    ///<NIC driver
+   const PhyDriver *phyDriver;                    ///<PHY driver
+   const SpiDriver *spiDriver;                    ///<Underlying SPI driver
+   const UartDriver *uartDriver;                  ///<Underlying UART driver
+   const ExtIntDriver *extIntDriver;              ///<External interrupt line driver
+   uint8_t nicContext[NIC_CONTEXT_SIZE];          ///<Driver specific context
+   OsEvent nicTxEvent;                            ///<Network controller TX event
+   bool_t nicEvent;                               ///<A NIC event is pending
+   bool_t phyEvent;                               ///<A PHY event is pending
+   bool_t linkState;                              ///<Link state
+   uint32_t linkSpeed;                            ///<Link speed
+   NicDuplexMode duplexMode;                      ///<Duplex mode
+   bool_t configured;                             ///<Configuration done
+   uint8_t ethFrame[1536 /*ETH_MAX_FRAME_SIZE*/]; ///<Incoming Ethernet frame
+
+#if (ETH_SUPPORT == ENABLED)
+   MacAddr macAddr;                               ///<Link-layer address
+   MacFilterEntry macMulticastFilter[MAC_MULTICAST_FILTER_SIZE]; ///<Multicast MAC filter
+#endif
 
 #if (IPV4_SUPPORT == ENABLED)
-   Ipv4Config ipv4Config;                               ///<IPv4 configuration
-   uint16_t ipv4Identification;                         ///<IPv4 fragment identification field
-#if (IPV4_FRAG_SUPPORT == ENABLED)
-   OsMutex ipv4FragQueueMutex;                          ///<Mutex preventing simultaneous access to reassembly queue
-   Ipv4FragDesc ipv4FragQueue[IPV4_MAX_FRAG_DATAGRAMS]; ///<IPv4 fragment reassembly queue
-#endif
-   OsMutex arpCacheMutex;                               ///<Mutex preventing simultaneous access to ARP cache
-   ArpCacheEntry arpCache[ARP_CACHE_SIZE];              ///<ARP cache
-   OsMutex ipv4FilterMutex;                             ///<Mutex preventing simultaneous access to the IPv4 filter table
-   Ipv4FilterEntry ipv4Filter[IPV4_FILTER_MAX_SIZE];    ///<IPv4 filter table
-   uint_t ipv4FilterSize;                               ///<Number of entries in the IPv4 filter table
+   Ipv4Context ipv4Context;                       ///<IPv4 context
+   ArpCacheEntry arpCache[ARP_CACHE_SIZE];        ///<ARP cache
 #if (IGMP_SUPPORT == ENABLED)
-   systime_t igmpv1RouterPresentTimer;                  ///<IGMPv1 router present timer
-   bool_t igmpv1RouterPresent;                          ///<An IGMPv1 query has been recently heard
+   systime_t igmpv1RouterPresentTimer;            ///<IGMPv1 router present timer
+   bool_t igmpv1RouterPresent;                    ///<An IGMPv1 query has been recently heard
 #endif
 #if (AUTO_IP_SUPPORT == ENABLED)
-   AutoIpContext *autoIpContext;                        ///<Auto-IP context
+   AutoIpContext *autoIpContext;                  ///<Auto-IP context
+#endif
+#if (DHCP_CLIENT_SUPPORT == ENABLED)
+   DhcpClientCtx *dhcpClientContext;              ///<DHCP client context
 #endif
 #endif
 
 #if (IPV6_SUPPORT == ENABLED)
-   Ipv6Config ipv6Config;                               ///<IPv6 configuration
-#if (IPV6_FRAG_SUPPORT == ENABLED)
-   uint32_t ipv6Identification;                         ///<IPv6 Fragment identification field
-   OsMutex ipv6FragQueueMutex;                          ///<Mutex preventing simultaneous access to reassembly queue
-   Ipv6FragDesc ipv6FragQueue[IPV6_MAX_FRAG_DATAGRAMS]; ///<IPv6 fragment reassembly queue
+   Ipv6Context ipv6Context;                       ///<IPv6 context
+#if (NDP_SUPPORT == ENABLED)
+   NdpContext ndpContext;                         ///<NDP context
 #endif
-   OsMutex ndpCacheMutex;                               ///<Mutex preventing simultaneous access to Neighbor cache
-   NdpCacheEntry ndpCache[NDP_CACHE_SIZE];              ///<Neighbor cache
-   OsMutex ipv6FilterMutex;                             ///<Mutex preventing simultaneous access to the IPv6 filter table
-   Ipv6FilterEntry ipv6Filter[IPV6_FILTER_MAX_SIZE];    ///<IPv6 filter table
-   uint_t ipv6FilterSize;                               ///<Number of entries in the IPv6 filter table
+#if (NDP_ROUTER_ADV_SUPPORT == ENABLED)
+   NdpRouterAdvContext *ndpRouterAdvContext;      ///<RA service context
+#endif
 #if (SLAAC_SUPPORT == ENABLED)
-   SlaacContext *slaacContext;                          ///<SLAAC context
+   SlaacContext *slaacContext;                    ///<SLAAC context
+#endif
+#if (DHCPV6_CLIENT_SUPPORT == ENABLED)
+   Dhcpv6ClientCtx *dhcpv6ClientContext;          ///<DHCPv6 client context
 #endif
 #endif
 
 #if (MDNS_RESPONDER_SUPPORT == ENABLED)
-   MdnsContext mdnsContext;                             ///<mDNS responder context
+   MdnsResponderContext *mdnsResponderContext;    ///<mDNS responder context
 #endif
 
 #if (DNS_SD_SUPPORT == ENABLED)
-   char_t instanceName[DNS_SD_MAX_INSTANCE_LEN];        ///<Instance name
-   const DnsSdService *services;                        ///<List of registered services
-   uint_t numServices;                                  ///<Number of registered services
+   DnsSdContext *dnsSdContext;                    ///DNS-SD context
 #endif
 
 #if (PPP_SUPPORT == ENABLED)
-   PppContext *pppContext;                              ///<PPP context
-#endif
-
-#if (NET_STATIC_OS_RESOURCES == ENABLED)
-   OsTask rxTask;                                       ///<Task that handles incoming frames
-   uint_t rxTaskStack[NET_RX_STACK_SIZE];               ///<Stack size required to run RX task
-#else
-   OsTask *rxTask;                                      ///<Task that handles incoming frames
+   PppContext *pppContext;                        ///<PPP context
 #endif
 
 #if (MIB2_SUPPORT == ENABLED)
@@ -309,7 +240,9 @@ typedef struct
 } LinkChangeCallbackDesc;
 
 
-//Network interfaces
+//Global variables
+extern OsMutex netMutex;
+extern OsEvent netEvent;
 extern NetInterface netInterface[NET_INTERFACE_COUNT];
 
 //TCP/IP stack related functions
@@ -317,6 +250,9 @@ error_t netInit(void);
 
 error_t netSetMacAddr(NetInterface *interface, const MacAddr *macAddr);
 error_t netGetMacAddr(NetInterface *interface, MacAddr *macAddr);
+
+error_t netSetEui64(NetInterface *interface, const Eui64 *eui64);
+error_t netGetEui64(NetInterface *interface, Eui64 *eui64);
 
 error_t netSetInterfaceName(NetInterface *interface, const char_t *name);
 error_t netSetHostname(NetInterface *interface, const char_t *name);
@@ -332,8 +268,8 @@ bool_t netGetLinkState(NetInterface *interface);
 
 error_t netConfigInterface(NetInterface *interface);
 
-void netTickTask(void *param);
-void netRxTask(void *param);
+void netTask(void);
+void netTick(void);
 
 NetInterface *netGetDefaultInterface(void);
 
@@ -347,34 +283,5 @@ error_t netAttachLinkChangeCallback(NetInterface *interface,
 error_t netDetachLinkChangeCallback(uint_t cookie);
 
 void netInvokeLinkChangeCallback(NetInterface *interface, bool_t linkState);
-
-//Deprecated API
-#if (NET_DEPRECATED_API_SUPPORT == ENABLED)
-   #define tcpIpStackInit netInit
-   #define tcpIpStackSetInterfaceName netSetInterfaceName
-   #define tcpIpStackSetHostname netSetHostname
-   #define tcpIpStackSetDriver netSetDriver
-   #define tcpIpStackSetPhyDriver netSetPhyDriver
-   #define tcpIpStackSetSpiDriver netSetSpiDriver
-   #define tcpIpStackSetUartDriver netSetUartDriver
-   #define tcpIpStackSetExtIntDriver netSetExtIntDriver
-   #define tcpIpStackSetMacAddr netSetMacAddr
-   #define tcpIpStackSetProxy netSetProxy
-   #define tcpIpStackGetLinkState netGetLinkState
-   #define tcpIpStackConfigInterface netConfigInterface
-   #define tcpIpStackTickTask netTickTask
-   #define tcpIpStackRxTask netRxTask
-   #define tcpIpStackGetDefaultInterface netGetDefaultInterface
-   #define tcpIpStackInitRand netInitRand
-   #define tcpIpStackGetRand netGetRand
-   #define tcpIpStackGetRandRange netGetRandRange
-   #define tcpIpStackAttachLinkChangeCallback netAttachLinkChangeCallback
-   #define tcpIpStackDetachLinkChangeCallback netDetachLinkChangeCallback
-   #define tcpIpStackInvokeLinkChangeCallback netInvokeLinkChangeCallback
-
-   #define ChunkedBuffer NetBuffer
-   #define chunkedBufferGetLength netBufferGetLength
-   #define chunkedBufferRead netBufferRead
-#endif
 
 #endif

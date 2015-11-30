@@ -31,7 +31,7 @@
  * - RFC 3376: Internet Group Management Protocol, Version 3
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -46,6 +46,9 @@
 
 //Check TCP/IP stack configuration
 #if (IPV4_SUPPORT == ENABLED && IGMP_SUPPORT == ENABLED)
+
+//Tick counter to handle periodic operations
+systime_t igmpTickCounter;
 
 
 /**
@@ -165,34 +168,32 @@ void igmpTick(NetInterface *interface)
    if(timeCompare(time, interface->igmpv1RouterPresentTimer) >= 0)
       interface->igmpv1RouterPresent = FALSE;
 
-   //Acquire exclusive access to the IPv4 filter table
-   osAcquireMutex(&interface->ipv4FilterMutex);
-
-   //Loop through filter table entries
-   for(i = 0; i < interface->ipv4FilterSize; i++)
+   //Go through the multicast filter table
+   for(i = 0; i < IPV4_MULTICAST_FILTER_SIZE; i++)
    {
       //Point to the current entry
-      entry = &interface->ipv4Filter[i];
+      entry = &interface->ipv4Context.multicastFilter[i];
 
-      //Delaying Member state?
-      if(entry->state == IGMP_STATE_DELAYING_MEMBER)
+      //Valid entry?
+      if(entry->refCount > 0)
       {
-         //Timer expired?
-         if(timeCompare(time, entry->timer) >= 0)
+         //Delaying Member state?
+         if(entry->state == IGMP_STATE_DELAYING_MEMBER)
          {
-            //Send a Membership Report message for the group on the interface
-            igmpSendReportMessage(interface, entry->addr);
+            //Timer expired?
+            if(timeCompare(time, entry->timer) >= 0)
+            {
+               //Send a Membership Report message for the group on the interface
+               igmpSendReportMessage(interface, entry->addr);
 
-            //Set flag
-            entry->flag = TRUE;
-            //Switch to the Idle Member state
-            entry->state = IGMP_STATE_IDLE_MEMBER;
+               //Set flag
+               entry->flag = TRUE;
+               //Switch to the Idle Member state
+               entry->state = IGMP_STATE_IDLE_MEMBER;
+            }
          }
       }
    }
-
-   //Release exclusive access to the IPv4 filter table
-   osReleaseMutex(&interface->ipv4FilterMutex);
 }
 
 
@@ -210,9 +211,6 @@ void igmpLinkChangeEvent(NetInterface *interface)
    //Get current time
    time = osGetSystemTime();
 
-   //Acquire exclusive access to the IPv4 filter table
-   osAcquireMutex(&interface->ipv4FilterMutex);
-
    //Link up event?
    if(interface->linkState)
    {
@@ -221,47 +219,52 @@ void igmpLinkChangeEvent(NetInterface *interface)
       //Start IGMPv1 router present timer
       interface->igmpv1RouterPresentTimer = time + IGMP_V1_ROUTER_PRESENT_TIMEOUT;
 
-      //Loop through filter table entries
-      for(i = 0; i < interface->ipv4FilterSize; i++)
+      //Go through the multicast filter table
+      for(i = 0; i < IPV4_MULTICAST_FILTER_SIZE; i++)
       {
          //Point to the current entry
-         entry = &interface->ipv4Filter[i];
+         entry = &interface->ipv4Context.multicastFilter[i];
 
-         //The all-systems group (address 224.0.0.1) is handled as a special
-         //case. The host starts in Idle Member state for that group on every
-         //interface and never transitions to another state
-         if(entry->addr == IGMP_ALL_SYSTEMS_ADDR)
-            continue;
+         //Valid entry?
+         if(entry->refCount > 0)
+         {
+            //The all-systems group (address 224.0.0.1) is handled as a special
+            //case. The host starts in Idle Member state for that group on every
+            //interface and never transitions to another state
+            if(entry->addr != IGMP_ALL_SYSTEMS_ADDR)
+            {
+               //Send an unsolicited Membership Report for that group
+               igmpSendReportMessage(interface, entry->addr);
 
-         //Send an unsolicited Membership Report for that group
-         igmpSendReportMessage(interface, entry->addr);
-
-         //Set flag
-         entry->flag = TRUE;
-         //Start timer
-         entry->timer = time + IGMP_UNSOLICITED_REPORT_INTERVAL;
-         //Enter the Delaying Member state
-         entry->state = IGMP_STATE_DELAYING_MEMBER;
+               //Set flag
+               entry->flag = TRUE;
+               //Start timer
+               entry->timer = time + IGMP_UNSOLICITED_REPORT_INTERVAL;
+               //Enter the Delaying Member state
+               entry->state = IGMP_STATE_DELAYING_MEMBER;
+            }
+         }
       }
    }
    //Link down event?
    else
    {
-      //Loop through filter table entries
-      for(i = 0; i < interface->ipv4FilterSize; i++)
+      //Go through the multicast filter table
+      for(i = 0; i < IPV4_MULTICAST_FILTER_SIZE; i++)
       {
          //Point to the current entry
-         entry = &interface->ipv4Filter[i];
+         entry = &interface->ipv4Context.multicastFilter[i];
 
-         //Clear flag
-         entry->flag = FALSE;
-         //Enter the Idle Member state
-         entry->state = IGMP_STATE_IDLE_MEMBER;
+         //Valid entry?
+         if(entry->refCount > 0)
+         {
+            //Clear flag
+            entry->flag = FALSE;
+            //Enter the Idle Member state
+            entry->state = IGMP_STATE_IDLE_MEMBER;
+         }
       }
    }
-
-   //Release exclusive access to the IPv4 filter table
-   osReleaseMutex(&interface->ipv4FilterMutex);
 }
 
 
@@ -369,56 +372,54 @@ void igmpProcessQueryMessage(NetInterface *interface,
       maxRespTime = message->maxRespTime * 10;
    }
 
-   //Acquire exclusive access to the IPv4 filter table
-   osAcquireMutex(&interface->ipv4FilterMutex);
-
-   //Loop through filter table entries
-   for(i = 0; i < interface->ipv4FilterSize; i++)
+   //Go through the multicast filter table
+   for(i = 0; i < IPV4_MULTICAST_FILTER_SIZE; i++)
    {
       //Point to the current entry
-      entry = &interface->ipv4Filter[i];
+      entry = &interface->ipv4Context.multicastFilter[i];
 
-      //The all-systems group (224.0.0.1) is handled as a special case. The
-      //host starts in Idle Member state for that group on every interface
-      //and never transitions to another state
-      if(entry->addr == IGMP_ALL_SYSTEMS_ADDR)
-         continue;
-
-      //A General Query applies to all memberships on the interface from which
-      //the Query is received. A Group-Specific Query applies to membership
-      //in a single group on the interface from which the Query is received
-      if(message->groupAddr == IPV4_UNSPECIFIED_ADDR ||
-         message->groupAddr == entry->addr)
+      //Valid entry?
+      if(entry->refCount > 0)
       {
-         //Delaying Member state?
-         if(entry->state == IGMP_STATE_DELAYING_MEMBER)
+         //The all-systems group (224.0.0.1) is handled as a special case. The
+         //host starts in Idle Member state for that group on every interface
+         //and never transitions to another state
+         if(entry->addr != IGMP_ALL_SYSTEMS_ADDR)
          {
-            //The timer has not yet expired?
-            if(timeCompare(time, entry->timer) < 0)
+            //A General Query applies to all memberships on the interface from which
+            //the Query is received. A Group-Specific Query applies to membership
+            //in a single group on the interface from which the Query is received
+            if(message->groupAddr == IPV4_UNSPECIFIED_ADDR ||
+               message->groupAddr == entry->addr)
             {
-               //If a timer for the group is already running, it is reset to
-               //the random value only if the requested Max Response Time is
-               //less than the remaining value of the running timer
-               if(maxRespTime < (entry->timer - time))
+               //Delaying Member state?
+               if(entry->state == IGMP_STATE_DELAYING_MEMBER)
                {
-                  //Restart delay timer
+                  //The timer has not yet expired?
+                  if(timeCompare(time, entry->timer) < 0)
+                  {
+                     //If a timer for the group is already running, it is reset to
+                     //the random value only if the requested Max Response Time is
+                     //less than the remaining value of the running timer
+                     if(maxRespTime < (entry->timer - time))
+                     {
+                        //Restart delay timer
+                        entry->timer = time + igmpRand(maxRespTime);
+                     }
+                  }
+               }
+               //Idle Member state?
+               else if(entry->state == IGMP_STATE_IDLE_MEMBER)
+               {
+                  //Switch to the Delaying Member state
+                  entry->state = IGMP_STATE_DELAYING_MEMBER;
+                  //Delay the response by a random amount of time
                   entry->timer = time + igmpRand(maxRespTime);
                }
             }
          }
-         //Idle Member state?
-         else if(entry->state == IGMP_STATE_IDLE_MEMBER)
-         {
-            //Switch to the Delaying Member state
-            entry->state = IGMP_STATE_DELAYING_MEMBER;
-            //Delay the response by a random amount of time
-            entry->timer = time + igmpRand(maxRespTime);
-         }
       }
    }
-
-   //Release exclusive access to the IPv4 filter table
-   osReleaseMutex(&interface->ipv4FilterMutex);
 }
 
 
@@ -435,32 +436,30 @@ void igmpProcessReportMessage(NetInterface *interface,
    uint_t i;
    Ipv4FilterEntry *entry;
 
-   //Acquire exclusive access to the IPv4 filter table
-   osAcquireMutex(&interface->ipv4FilterMutex);
-
-   //Loop through filter table entries
-   for(i = 0; i < interface->ipv4FilterSize; i++)
+   //Go through the multicast filter table
+   for(i = 0; i < IPV4_MULTICAST_FILTER_SIZE; i++)
    {
       //Point to the current entry
-      entry = &interface->ipv4Filter[i];
+      entry = &interface->ipv4Context.multicastFilter[i];
 
-      //Report messages are ignored for memberships in
-      //the Non-Member or Idle Member state
-      if(entry->state == IGMP_STATE_DELAYING_MEMBER)
+      //Valid entry?
+      if(entry->refCount > 0)
       {
-         //The Membership Report message matches the current entry?
-         if(message->groupAddr == entry->addr)
+         //Report messages are ignored for memberships in
+         //the Non-Member or Idle Member state
+         if(entry->state == IGMP_STATE_DELAYING_MEMBER)
          {
-            //Clear flag
-            entry->flag = FALSE;
-            //Switch to the Idle Member state
-            entry->state = IGMP_STATE_IDLE_MEMBER;
+            //The Membership Report message matches the current entry?
+            if(message->groupAddr == entry->addr)
+            {
+               //Clear flag
+               entry->flag = FALSE;
+               //Switch to the Idle Member state
+               entry->state = IGMP_STATE_IDLE_MEMBER;
+            }
          }
       }
    }
-
-   //Release exclusive access to the IPv4 filter table
-   osReleaseMutex(&interface->ipv4FilterMutex);
 }
 
 
@@ -511,7 +510,7 @@ error_t igmpSendReportMessage(NetInterface *interface, Ipv4Addr ipAddr)
    message->checksum = ipCalcChecksumEx(buffer, offset, sizeof(IgmpMessage));
 
    //Format IPv4 pseudo header
-   pseudoHeader.srcAddr = interface->ipv4Config.addr;
+   pseudoHeader.srcAddr = interface->ipv4Context.addr;
    pseudoHeader.destAddr = ipAddr;
    pseudoHeader.reserved = 0;
    pseudoHeader.protocol = IPV4_PROTOCOL_IGMP;
@@ -579,7 +578,7 @@ error_t igmpSendLeaveGroupMessage(NetInterface *interface, Ipv4Addr ipAddr)
    message->checksum = ipCalcChecksumEx(buffer, offset, sizeof(IgmpMessage));
 
    //Format IPv4 pseudo header
-   pseudoHeader.srcAddr = interface->ipv4Config.addr;
+   pseudoHeader.srcAddr = interface->ipv4Context.addr;
    pseudoHeader.destAddr = IGMP_ALL_ROUTERS_ADDR;
    pseudoHeader.reserved = 0;
    pseudoHeader.protocol = IPV4_PROTOCOL_IGMP;

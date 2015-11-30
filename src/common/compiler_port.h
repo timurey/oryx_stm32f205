@@ -21,7 +21,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _COMPILER_PORT_H
@@ -48,6 +48,18 @@ typedef uint32_t systime_t;
 #elif defined(__XC32)
    #define PRIuSIZE "u"
    #define PRIuTIME "u"
+#elif defined(__CWCC__)
+   #define PRIu8 "u"
+   #define PRIu16 "u"
+   #define PRIu32 "u"
+   #define PRIx8 "x"
+   #define PRIx16 "x"
+   #define PRIx32 "x"
+   #define PRIX8 "X"
+   #define PRIX16 "X"
+   #define PRIX32 "X"
+   #define PRIuSIZE "u"
+   #define PRIuTIME "u"
 #else
    #define PRIuSIZE "u"
    #define PRIuTIME "lu"
@@ -60,6 +72,20 @@ typedef uint32_t systime_t;
    #define PRIu16 "u"
 #endif
 
+//CodeWarrior compiler?
+#if defined(__CWCC__)
+   typedef uint32_t time_t;
+   int strcasecmp(const char *s1, const char *s2);
+   int strncasecmp(const char *s1, const char *s2, size_t n);
+   char *strtok_r(char *s, const char *delim, char **last);
+//TI ARM C compiler?
+#elif defined(__TI_ARM__)
+   int strcasecmp(const char *s1, const char *s2);
+   int strncasecmp(const char *s1, const char *s2, size_t n);
+   char *strtok_r(char *s, const char *delim, char **last);
+#endif
+
+//Microchip XC32 compiler?
 #if defined(__XC32)
    #define sprintf _sprintf
    int sprintf(char * str, const char * format, ...);
@@ -87,6 +113,18 @@ typedef uint32_t systime_t;
    #define __start_packed __packed
    #undef __end_packed
    #define __end_packed
+//CodeWarrior compiler?
+#elif defined(__CWCC__)
+   #undef __start_packed
+   #define __start_packed
+   #undef __end_packed
+   #define __end_packed
+//TI ARM C compiler?
+#elif defined(__TI_ARM__)
+   #undef __start_packed
+   #define __start_packed
+   #undef __end_packed
+   #define __end_packed __attribute__((__packed__))
 //Win32 compiler?
 #elif defined(_WIN32)
    #undef interface

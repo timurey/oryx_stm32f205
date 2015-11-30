@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Dependencies
@@ -37,9 +37,6 @@
 
 //Check TCP/IP stack configuration
 #if (MIB2_SUPPORT == ENABLED)
-
-//Mutex preventing simultaneous access to the MIB-II base
-static OsMutex mib2Mutex;
 
 
 /**
@@ -56,15 +53,19 @@ error_t mib2Init(void)
    memset(&mib2Base, 0, sizeof(mib2Base));
 
    //sysDescr object
-   strcpy(mib2Base.sysGroup.sysDescr, "System Description");
+   strcpy(mib2Base.sysGroup.sysDescr, "Description");
    mib2Base.sysGroup.sysDescrLen = strlen(mib2Base.sysGroup.sysDescr);
-
-   //Create a mutex to prevent simultaneous access to the MIB-II base
-   if(!osCreateMutex(&mib2Mutex))
-   {
-      //Failed to create mutex
-      return ERROR_OUT_OF_RESOURCES;
-   }
+   //sysContact object
+   strcpy(mib2Base.sysGroup.sysContact, "Contact");
+   mib2Base.sysGroup.sysContactLen = strlen(mib2Base.sysGroup.sysContact);
+   //sysName object
+   strcpy(mib2Base.sysGroup.sysName, "Name");
+   mib2Base.sysGroup.sysNameLen = strlen(mib2Base.sysGroup.sysName);
+   //sysLocation object
+   strcpy(mib2Base.sysGroup.sysLocation, "Location");
+   mib2Base.sysGroup.sysLocationLen = strlen(mib2Base.sysGroup.sysLocation);
+   //sysServices object
+   mib2Base.sysGroup.sysServices = 0;
 
    //Successful processing
    return NO_ERROR;
@@ -77,8 +78,8 @@ error_t mib2Init(void)
 
 void mib2Lock(void)
 {
-   //Enter critical section
-   osAcquireMutex(&mib2Mutex);
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
 }
 
 
@@ -88,8 +89,8 @@ void mib2Lock(void)
 
 void mib2Unlock(void)
 {
-   //Leave critical section
-   osReleaseMutex(&mib2Mutex);
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 }
 
 

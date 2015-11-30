@@ -1,6 +1,6 @@
 /**
  * @file tcp_misc.h
- * @brief TCP miscellaneous functions
+ * @brief Helper functions for TCP
  *
  * @section License
  *
@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _TCP_MISC_H

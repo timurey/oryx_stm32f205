@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -34,6 +34,9 @@
 #include "core/net.h"
 #include "drivers/m2sxxx_eth.h"
 #include "debug.h"
+
+//Underlying network interface
+static NetInterface *nicDriverInterface;
 
 //IAR EWARM compiler?
 #if defined(__ICCARM__)
@@ -88,8 +91,9 @@ const NicDriver m2sxxxEthDriver =
    m2sxxxEthEnableIrq,
    m2sxxxEthDisableIrq,
    m2sxxxEthEventHandler,
-   m2sxxxEthSetMacFilter,
    m2sxxxEthSendPacket,
+   m2sxxxEthSetMulticastFilter,
+   m2sxxxEthUpdateMacConfig
    m2sxxxEthWritePhyReg,
    m2sxxxEthReadPhyReg,
    TRUE,
@@ -110,6 +114,9 @@ error_t m2sxxxEthInit(NetInterface *interface)
 
    //Debug message
    TRACE_INFO("Initializing M2Sxxx Ethernet MAC...\r\n");
+
+   //Save underlying network interface
+   nicDriverInterface = interface;
 
    //Disable EDAC feature
    SYSREG->EDAC_CR &= ~(EDAC_CR_MAC_EDAC_RX_EN | EDAC_CR_MAC_EDAC_TX_EN);
@@ -201,9 +208,7 @@ error_t m2sxxxEthInit(NetInterface *interface)
    //Enable the DMA transfer of received packets
    MAC->DMA_RX_CTRL = DMA_RX_CTRL_RX_EN;
 
-   //Force the TCP/IP stack to check the link state
-   osSetEvent(&interface->nicRxEvent);
-   //M2Sxxx Ethernet MAC is now ready to send
+   //Accept any packets from the upper layer
    osSetEvent(&interface->nicTxEvent);
 
    //Successful initialization
@@ -328,13 +333,10 @@ void EthernetMAC_IRQHandler(void)
 {
    bool_t flag;
    uint32_t status;
-   NetInterface *interface;
 
    //Enter interrupt service routine
    osEnterIsr();
 
-   //Point to the structure describing the network interface
-   interface = &netInterface[0];
    //This flag will be set if a higher priority task must be woken
    flag = FALSE;
 
@@ -350,18 +352,21 @@ void EthernetMAC_IRQHandler(void)
       //Check whether the TX buffer is available for writing
       if(txCurDmaDesc->size & DMA_DESC_EMPTY_FLAG)
       {
-         //Notify the user that the transmitter is ready to send
-         flag |= osSetEventFromIsr(&interface->nicTxEvent);
+         //Notify the TCP/IP stack that the transmitter is ready to send
+         flag |= osSetEventFromIsr(&nicDriverInterface->nicTxEvent);
       }
    }
+
    //A packet has been received?
    if(status & DMA_IRQ_RX_PKT_RECEIVED)
    {
       //Disable RX interrupt
       MAC->DMA_IRQ_MASK &= ~DMA_IRQ_MASK_RX_PKT_RECEIVED;
 
-      //Notify the user that a packet has been received
-      flag |= osSetEventFromIsr(&interface->nicRxEvent);
+      //Set event flag
+      nicDriverInterface->nicEvent = TRUE;
+      //Notify the TCP/IP stack of the event
+      flag |= osSetEventFromIsr(&netEvent);
    }
 
    //Leave interrupt service routine
@@ -378,66 +383,6 @@ void m2sxxxEthEventHandler(NetInterface *interface)
 {
    error_t error;
    size_t length;
-   bool_t linkStateChange;
-   uint32_t temp;
-
-   //PHY event is pending?
-   if(interface->phyEvent)
-   {
-      //Acknowledge the event by clearing the flag
-      interface->phyEvent = FALSE;
-      //Handle PHY specific events
-      linkStateChange = interface->phyDriver->eventHandler(interface);
-
-      //Check whether the link state has changed?
-      if(linkStateChange)
-      {
-         //Set speed and duplex mode for proper operation
-         if(interface->linkState)
-         {
-            //10BASE-T or 100BASE-TX operation mode?
-            if(interface->speed100)
-            {
-               //The link operates at 100 Mbps
-               temp = SYSREG->MAC_CR & ~MAC_CR_ETH_LINE_SPEED;
-               SYSREG->MAC_CR = temp | MAC_CR_ETH_LINE_SPEED_100MBPS;
-               //Configure the RMII module with the current operating speed
-               MAC->INTERFACE_CTRL |= INTERFACE_CTRL_SPEED;
-               //Use nibble mode
-               temp = MAC->CFG2 & ~CFG2_INTERFACE_MODE;
-               MAC->CFG2 = temp | CFG2_INTERFACE_MODE_NIBBLE;
-            }
-            else
-            {
-               //The link operates at 10 Mbps
-               temp = SYSREG->MAC_CR & ~MAC_CR_ETH_LINE_SPEED;
-               SYSREG->MAC_CR = temp | MAC_CR_ETH_LINE_SPEED_10MBPS;
-               //Configure the RMII module with the current operating speed
-               MAC->INTERFACE_CTRL &= ~INTERFACE_CTRL_SPEED;
-               //Use nibble mode
-               temp = MAC->CFG2 & ~CFG2_INTERFACE_MODE;
-               MAC->CFG2 = temp | CFG2_INTERFACE_MODE_NIBBLE;
-            }
-
-            //Half-duplex or full-duplex mode?
-            if(interface->fullDuplex)
-            {
-               //Configure MAC to operate in full-duplex mode
-               MAC->CFG2 |= CFG2_FULL_DUPLEX;
-               MAC->FIFO_CFG5 &= ~FIFO_CFG5_CFGHDPLX;
-            }
-            else
-            {
-               //Configure MAC to operate in half-duplex mode
-               MAC->CFG2 &= ~CFG2_FULL_DUPLEX;
-               MAC->FIFO_CFG5 |= FIFO_CFG5_CFGHDPLX;
-            }
-         }
-
-         //Process link state change event
-         nicNotifyLinkChange(interface);
-      }
-   }
 
    //Packet received?
    if(MAC->DMA_RX_STATUS & DMA_RX_STATUS_RX_PKT_RECEIVED)
@@ -463,19 +408,6 @@ void m2sxxxEthEventHandler(NetInterface *interface)
 
    //Re-enable Ethernet interrupts
    MAC->DMA_IRQ_MASK = DMA_IRQ_MASK_RX_PKT_RECEIVED | DMA_IRQ_MASK_TX_PKT_SENT;
-}
-
-
-/**
- * @brief Configure multicast MAC address filtering
- * @param[in] interface Underlying network interface
- * @return Error code
- **/
-
-error_t m2sxxxEthSetMacFilter(NetInterface *interface)
-{
-   //SmartFusion2 Ethernet MAC does not implement any hash table
-   return NO_ERROR;
 }
 
 
@@ -601,6 +533,76 @@ error_t m2sxxxEthReceivePacket(NetInterface *interface,
 
    //Return status code
    return error;
+}
+
+
+/**
+ * @brief Configure multicast MAC address filtering
+ * @param[in] interface Underlying network interface
+ * @return Error code
+ **/
+
+error_t m2sxxxEthSetMulticastFilter(NetInterface *interface)
+{
+   //SmartFusion2 Ethernet MAC does not implement any hash table
+   return NO_ERROR;
+}
+
+
+/**
+ * @brief Adjust MAC configuration parameters for proper operation
+ * @param[in] interface Underlying network interface
+ * @return Error code
+ **/
+
+error_t m2sxxxEthUpdateMacConfig(NetInterface *interface)
+{
+   uint32_t temp;
+
+   //10BASE-T or 100BASE-TX operation mode?
+   if(interface->linkSpeed == NIC_LINK_SPEED_100MBPS)
+   {
+      //The link operates at 100 Mbps
+      temp = SYSREG->MAC_CR & ~MAC_CR_ETH_LINE_SPEED;
+      SYSREG->MAC_CR = temp | MAC_CR_ETH_LINE_SPEED_100MBPS;
+
+      //Configure the RMII module with the current operating speed
+      MAC->INTERFACE_CTRL |= INTERFACE_CTRL_SPEED;
+
+      //Use nibble mode
+      temp = MAC->CFG2 & ~CFG2_INTERFACE_MODE;
+      MAC->CFG2 = temp | CFG2_INTERFACE_MODE_NIBBLE;
+   }
+   else
+   {
+      //The link operates at 10 Mbps
+      temp = SYSREG->MAC_CR & ~MAC_CR_ETH_LINE_SPEED;
+      SYSREG->MAC_CR = temp | MAC_CR_ETH_LINE_SPEED_10MBPS;
+
+      //Configure the RMII module with the current operating speed
+      MAC->INTERFACE_CTRL &= ~INTERFACE_CTRL_SPEED;
+
+      //Use nibble mode
+      temp = MAC->CFG2 & ~CFG2_INTERFACE_MODE;
+      MAC->CFG2 = temp | CFG2_INTERFACE_MODE_NIBBLE;
+   }
+
+   //Half-duplex or full-duplex mode?
+   if(interface->duplexMode == NIC_FULL_DUPLEX_MODE)
+   {
+      //Configure MAC to operate in full-duplex mode
+      MAC->CFG2 |= CFG2_FULL_DUPLEX;
+      MAC->FIFO_CFG5 &= ~FIFO_CFG5_CFGHDPLX;
+   }
+   else
+   {
+      //Configure MAC to operate in half-duplex mode
+      MAC->CFG2 &= ~CFG2_FULL_DUPLEX;
+      MAC->FIFO_CFG5 |= FIFO_CFG5_CFGHDPLX;
+   }
+
+   //Successful processing
+   return NO_ERROR;
 }
 
 

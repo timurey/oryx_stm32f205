@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -43,8 +43,8 @@
 #if (DNS_CLIENT_SUPPORT == ENABLED || MDNS_CLIENT_SUPPORT == ENABLED || \
    NBNS_CLIENT_SUPPORT == ENABLED)
 
-//Mutex preventing simultaneous access to the DNS cache
-OsMutex dnsCacheMutex;
+//Tick counter to handle periodic operations
+systime_t dnsTickCounter;
 //DNS cache
 DnsCacheEntry dnsCache[DNS_CACHE_SIZE];
 
@@ -56,13 +56,6 @@ DnsCacheEntry dnsCache[DNS_CACHE_SIZE];
 
 error_t dnsInit(void)
 {
-   //Create a mutex to prevent simultaneous access to the DNS cache
-   if(!osCreateMutex(&dnsCacheMutex))
-   {
-      //Failed to create mutex
-      return ERROR_OUT_OF_RESOURCES;
-   }
-
    //Initialize DNS cache
    memset(dnsCache, 0, sizeof(dnsCache));
 
@@ -81,9 +74,6 @@ void dnsFlushCache(NetInterface *interface)
    uint_t i;
    DnsCacheEntry *entry;
 
-   //Acquire exclusive access to the DNS cache
-   osAcquireMutex(&dnsCacheMutex);
-
    //Go through DNS cache
    for(i = 0; i < DNS_CACHE_SIZE; i++)
    {
@@ -98,9 +88,6 @@ void dnsFlushCache(NetInterface *interface)
             dnsDeleteEntry(entry);
       }
    }
-
-   //Release exclusive access to the DNS cache
-   osReleaseMutex(&dnsCacheMutex);
 }
 
 
@@ -237,9 +224,6 @@ void dnsTick(void)
    //Get current time
    time = osGetSystemTime();
 
-   //Acquire exclusive access to the DNS cache
-   osAcquireMutex(&dnsCacheMutex);
-
    //Go through DNS cache
    for(i = 0; i < DNS_CACHE_SIZE; i++)
    {
@@ -250,7 +234,7 @@ void dnsTick(void)
       if(entry->state == DNS_STATE_IN_PROGRESS)
       {
          //The request timed out?
-         if((time - entry->timestamp) >= entry->timeout)
+         if(timeCompare(time, entry->timestamp + entry->timeout) >= 0)
          {
             //Check whether the maximum number of retransmissions has been exceeded
             if(entry->retransmitCount > 0)
@@ -269,7 +253,7 @@ void dnsTick(void)
                if(entry->protocol == HOST_NAME_RESOLVER_MDNS)
                {
                   //Retransmit mDNS query
-                  error = mdnsSendQuery(entry);
+                  error = mdnsClientSendQuery(entry);
                }
                else
 #endif
@@ -342,16 +326,13 @@ void dnsTick(void)
       else if(entry->state == DNS_STATE_RESOLVED)
       {
          //Check the lifetime of the current DNS cache entry
-         if((time - entry->timestamp) >= entry->timeout)
+         if(timeCompare(time, entry->timestamp + entry->timeout) >= 0)
          {
             //Periodically time out DNS cache entries
             dnsDeleteEntry(entry);
          }
       }
    }
-
-   //Release exclusive access to the DNS cache
-   osReleaseMutex(&dnsCacheMutex);
 }
 
 #endif

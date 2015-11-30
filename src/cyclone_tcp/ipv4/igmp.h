@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _IGMP_H
@@ -42,7 +42,7 @@
 //IGMP tick interval
 #ifndef IGMP_TICK_INTERVAL
    #define IGMP_TICK_INTERVAL 1000
-#elif (IGMP_TICK_INTERVAL < 100)
+#elif (IGMP_TICK_INTERVAL < 10)
    #error IGMP_TICK_INTERVAL parameter is not valid
 #endif
 
@@ -102,8 +102,8 @@ typedef enum
 } IgmpType;
 
 
-//Win32 compiler?
-#if defined(_WIN32)
+//CodeWarrior or Win32 compiler?
+#if defined(__CWCC__) || defined(_WIN32)
    #pragma pack(push, 1)
 #endif
 
@@ -121,11 +121,14 @@ typedef __start_packed struct
 } __end_packed IgmpMessage;
 
 
-//Win32 compiler?
-#if defined(_WIN32)
+//CodeWarrior or Win32 compiler?
+#if defined(__CWCC__) || defined(_WIN32)
    #pragma pack(pop)
 #endif
 
+
+//Tick counter to handle periodic operations
+extern systime_t igmpTickCounter;
 
 //IGMP related functions
 error_t igmpInit(NetInterface *interface);

@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _DM9000_H
@@ -41,12 +41,12 @@
 
 //DM9000 index register
 #ifndef DM9000_INDEX_REG
-   #define DM9000_INDEX_REG ((volatile uint16_t *) 0x30000000)
+   #define DM9000_INDEX_REG *((volatile uint16_t *) 0x30000000)
 #endif
 
-//DM9000 data register (CMD is A12)
+//DM9000 data register
 #ifndef DM9000_DATA_REG
-   #define DM9000_DATA_REG ((volatile uint16_t *) 0x30001000)
+   #define DM9000_DATA_REG *((volatile uint16_t *) 0x30001000)
 #endif
 
 //DM9000 bus timing
@@ -376,13 +376,13 @@ void dm9000DisableIrq(NetInterface *interface);
 bool_t dm9000IrqHandler(NetInterface *interface);
 void dm9000EventHandler(NetInterface *interface);
 
-error_t dm9000SetMacFilter(NetInterface *interface);
-
 error_t dm9000SendPacket(NetInterface *interface,
    const NetBuffer *buffer, size_t offset);
 
 error_t dm9000ReceivePacket(NetInterface *interface,
    uint8_t *buffer, size_t size, size_t *length);
+
+error_t dm9000SetMulticastFilter(NetInterface *interface);
 
 void dm9000WriteReg(uint8_t address, uint8_t data);
 uint8_t dm9000ReadReg(uint8_t address);

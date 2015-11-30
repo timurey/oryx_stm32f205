@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -36,6 +36,9 @@
 #include "core/net.h"
 #include "drivers/a2fxxxm3_eth.h"
 #include "debug.h"
+
+//Underlying network interface
+static NetInterface *nicDriverInterface;
 
 //IAR EWARM compiler?
 #if defined(__ICCARM__)
@@ -90,8 +93,9 @@ const NicDriver a2fxxxm3EthDriver =
    a2fxxxm3EthEnableIrq,
    a2fxxxm3EthDisableIrq,
    a2fxxxm3EthEventHandler,
-   a2fxxxm3EthSetMacFilter,
    a2fxxxm3EthSendPacket,
+   a2fxxxm3EthSetMulticastFilter,
+   a2fxxxm3EthUpdateMacConfig,
    a2fxxxm3EthWritePhyReg,
    a2fxxxm3EthReadPhyReg,
    TRUE,
@@ -112,6 +116,9 @@ error_t a2fxxxm3EthInit(NetInterface *interface)
 
    //Debug message
    TRACE_INFO("Initializing A2FxxxM3 Ethernet MAC...\r\n");
+
+   //Save underlying network interface
+   nicDriverInterface = interface;
 
    //Perform a software reset
    MAC->CSR0 |= CSR0_SWR_MASK;
@@ -147,9 +154,7 @@ error_t a2fxxxm3EthInit(NetInterface *interface)
    //Any error to report?
    if(error) return error;
 
-   //Force the TCP/IP stack to check the link state
-   osSetEvent(&interface->nicRxEvent);
-   //A2FxxxM3 Ethernet MAC is now ready to send
+   //Accept any packets from the upper layer
    osSetEvent(&interface->nicTxEvent);
 
    //Successful initialization
@@ -261,13 +266,10 @@ void EthernetMAC_IRQHandler(void)
 {
    bool_t flag;
    uint32_t status;
-   NetInterface *interface;
 
    //Enter interrupt service routine
    osEnterIsr();
 
-   //Point to the structure describing the network interface
-   interface = &netInterface[0];
    //This flag will be set if a higher priority task must be woken
    flag = FALSE;
 
@@ -283,18 +285,21 @@ void EthernetMAC_IRQHandler(void)
       //Check whether the TX buffer is available for writing
       if(!(txCurDmaDesc->tdes0 & TDES0_OWN))
       {
-         //Notify the user that the transmitter is ready to send
-         flag |= osSetEventFromIsr(&interface->nicTxEvent);
+         //Notify the TCP/IP stack that the transmitter is ready to send
+         flag |= osSetEventFromIsr(&nicDriverInterface->nicTxEvent);
       }
    }
+
    //A packet has been received?
    if(status & CSR5_RI_MASK)
    {
       //Disable RIE interrupt
       MAC->CSR7 &= ~CSR7_RIE_MASK;
 
-      //Notify the user that a packet has been received
-      flag |= osSetEventFromIsr(&interface->nicRxEvent);
+      //Set event flag
+      nicDriverInterface->nicEvent = TRUE;
+      //Notify the TCP/IP stack of the event
+      flag |= osSetEventFromIsr(&netEvent);
    }
 
    //Clear NIS interrupt flag
@@ -314,50 +319,6 @@ void a2fxxxm3EthEventHandler(NetInterface *interface)
 {
    error_t error;
    size_t length;
-   bool_t linkStateChange;
-
-   //PHY event is pending?
-   if(interface->phyEvent)
-   {
-      //Acknowledge the event by clearing the flag
-      interface->phyEvent = FALSE;
-      //Handle PHY specific events
-      linkStateChange = interface->phyDriver->eventHandler(interface);
-
-      //Check whether the link state has changed?
-      if(linkStateChange)
-      {
-         //Set speed and duplex mode for proper operation
-         if(interface->linkState)
-         {
-            //Stop transmission
-            while(((MAC->CSR5 & CSR5_TS_MASK) >> CSR5_TS_SHIFT) != CSR5_TS_STOPPED)
-               MAC->CSR6 &= ~CSR6_ST_MASK;
-
-            //Stop reception
-            while(((MAC->CSR5 & CSR5_RS_MASK) >> CSR5_RS_SHIFT) != CSR5_RS_STOPPED)
-               MAC->CSR6 &= ~CSR6_SR_MASK;
-
-            //10BASE-T or 100BASE-TX operation mode?
-            if(interface->speed100)
-               MAC->CSR6 |= CSR6_TTM_MASK;
-            else
-               MAC->CSR6 &= ~CSR6_TTM_MASK;
-
-            //Half-duplex or full-duplex mode?
-            if(interface->fullDuplex)
-               MAC->CSR6 |= CSR6_FD_MASK;
-            else
-               MAC->CSR6 &= ~CSR6_FD_MASK;
-         }
-
-         //Restart transmission and reception
-         MAC->CSR6 |= CSR6_ST_MASK | CSR6_SR_MASK;
-
-         //Process link state change event
-         nicNotifyLinkChange(interface);
-      }
-   }
 
    //Packet received?
    if(MAC->CSR5 & CSR5_RI_MASK)
@@ -385,25 +346,6 @@ void a2fxxxm3EthEventHandler(NetInterface *interface)
 
    //Re-enable Ethernet interrupts
    MAC->CSR7 |= CSR7_NIE_MASK | CSR7_RIE_MASK | CSR7_TIE_MASK;
-}
-
-
-/**
- * @brief Configure multicast MAC address filtering
- * @param[in] interface Underlying network interface
- * @return Error code
- **/
-
-error_t a2fxxxm3EthSetMacFilter(NetInterface *interface)
-{
-   //Enable the reception of multicast frames if necessary
-   if(interface->macFilterSize > 0)
-      MAC->CSR6 |= CSR6_PM_MASK;
-   else
-      MAC->CSR6 &= ~CSR6_PM_MASK;
-
-   //Successful processing
-   return NO_ERROR;
 }
 
 
@@ -570,6 +512,82 @@ error_t a2fxxxm3EthReceivePacket(NetInterface *interface,
 
    //Return status code
    return error;
+}
+
+
+/**
+ * @brief Configure multicast MAC address filtering
+ * @param[in] interface Underlying network interface
+ * @return Error code
+ **/
+
+error_t a2fxxxm3EthSetMulticastFilter(NetInterface *interface)
+{
+   uint_t i;
+   bool_t acceptMulticast;
+
+   //This flag will be set if multicast addresses should be accepted
+   acceptMulticast = FALSE;
+
+   //The MAC filter table contains the multicast MAC addresses
+   //to accept when receiving an Ethernet frame
+   for(i = 0; i < MAC_MULTICAST_FILTER_SIZE; i++)
+   {
+      //Valid entry?
+      if(interface->macMulticastFilter[i].refCount > 0)
+      {
+         //Accept multicast addresses
+         acceptMulticast = TRUE;
+         //We are done
+         break;
+      }
+   }
+
+   //Enable the reception of multicast frames if necessary
+   if(acceptMulticast)
+      MAC->CSR6 |= CSR6_PM_MASK;
+   else
+      MAC->CSR6 &= ~CSR6_PM_MASK;
+
+   //Successful processing
+   return NO_ERROR;
+}
+
+
+/**
+ * @brief Adjust MAC configuration parameters for proper operation
+ * @param[in] interface Underlying network interface
+ * @return Error code
+ **/
+
+error_t a2fxxxm3EthUpdateMacConfig(NetInterface *interface)
+{
+   //Stop transmission
+   while(((MAC->CSR5 & CSR5_TS_MASK) >> CSR5_TS_SHIFT) != CSR5_TS_STOPPED)
+      MAC->CSR6 &= ~CSR6_ST_MASK;
+
+   //Stop reception
+   while(((MAC->CSR5 & CSR5_RS_MASK) >> CSR5_RS_SHIFT) != CSR5_RS_STOPPED)
+      MAC->CSR6 &= ~CSR6_SR_MASK;
+
+   //10BASE-T or 100BASE-TX operation mode?
+   if(interface->linkSpeed == NIC_LINK_SPEED_100MBPS)
+      MAC->CSR6 |= CSR6_TTM_MASK;
+   else
+      MAC->CSR6 &= ~CSR6_TTM_MASK;
+
+   //Half-duplex or full-duplex mode?
+   if(interface->duplexMode == NIC_FULL_DUPLEX_MODE)
+      MAC->CSR6 |= CSR6_FD_MASK;
+   else
+      MAC->CSR6 &= ~CSR6_FD_MASK;
+   }
+
+   //Restart transmission and reception
+   MAC->CSR6 |= CSR6_ST_MASK | CSR6_SR_MASK;
+
+   //Successful processing
+   return NO_ERROR;
 }
 
 

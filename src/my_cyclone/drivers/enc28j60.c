@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.2
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -56,20 +56,21 @@ static OsEvent spiSemaphore;
 
 const NicDriver enc28j60Driver =
 {
-		NIC_TYPE_ETHERNET,
-		ETH_MTU,
-		enc28j60Init,
-		enc28j60Tick,
-		enc28j60EnableIrq,
-		enc28j60DisableIrq,
-		enc28j60EventHandler,
-		enc28j60SetMacFilter,
-		enc28j60SendPacket,
-		NULL,
-		NULL,
-		TRUE,
-		TRUE,
-		TRUE
+	NIC_TYPE_ETHERNET,
+	ETH_MTU,
+	enc28j60Init,
+	enc28j60Tick,
+	enc28j60EnableIrq,
+	enc28j60DisableIrq,
+	enc28j60EventHandler,
+	enc28j60SendPacket,
+	enc28j60SetMulticastFilter,
+	NULL,
+	NULL,
+	NULL,
+	TRUE,
+	TRUE,
+	TRUE
 };
 
 static void Delay_ms(uint32_t ms)
@@ -89,9 +90,7 @@ static void Delay_ms(uint32_t ms)
 
 error_t enc28j60Init(NetInterface *interface)
 {
-#if (TRACE_LEVEL>TRACE_LEVEL_DEBUG)
-   uint8_t revisionId;
-#endif
+	uint8_t revisionId;
 	Enc28j60Context *context;
 #ifdef SPI_USE_DMA
 	if(!osCreateEvent(&spiSemaphore))
@@ -122,13 +121,11 @@ error_t enc28j60Init(NetInterface *interface)
 	context->currentBank = UINT16_MAX;
 	context->nextPacket = ENC28J60_RX_BUFFER_START;
 
-#if (TRACE_LEVEL>TRACE_LEVEL_DEBUG)
 	//Read silicon revision ID
 	revisionId = enc28j60ReadReg(interface, ENC28J60_REG_EREVID);
 
 	//Debug message
 	TRACE_INFO("ENC28J60 revision ID: 0x%02X\r\n", revisionId);
-#endif
 
 	//Disable CLKOUT output
 	enc28j60WriteReg(interface, ENC28J60_REG_ECOCON, 0x00);
@@ -154,7 +151,7 @@ error_t enc28j60Init(NetInterface *interface)
 
 	//Configure the receive filters
 	enc28j60WriteReg(interface, ENC28J60_REG_ERXFCON, ERXFCON_UCEN |
-			ERXFCON_CRCEN | ERXFCON_HTEN | ERXFCON_BCEN);
+		ERXFCON_CRCEN | ERXFCON_HTEN | ERXFCON_BCEN);
 
 	//Initialize the hash table
 	enc28j60WriteReg(interface, ENC28J60_REG_EHT0, 0x00);
@@ -171,16 +168,16 @@ error_t enc28j60Init(NetInterface *interface)
 
 	//Enable the MAC to receive frames
 	enc28j60WriteReg(interface, ENC28J60_REG_MACON1,
-			MACON1_TXPAUS | MACON1_RXPAUS | MACON1_MARXEN);
+		MACON1_TXPAUS | MACON1_RXPAUS | MACON1_MARXEN);
 
 	//Enable automatic padding to at least 60 bytes, always append a valid CRC
 	//and check frame length. MAC can operate in half-duplex or full-duplex mode
 #if (ENC28J60_FULL_DUPLEX_SUPPORT == ENABLED)
 	enc28j60WriteReg(interface, ENC28J60_REG_MACON3, MACON3_PADCFG(1) |
-			MACON3_TXCRCEN | MACON3_FRMLNEN | MACON3_FULDPX);
+		MACON3_TXCRCEN | MACON3_FRMLNEN | MACON3_FULDPX);
 #else
 	enc28j60WriteReg(interface, ENC28J60_REG_MACON3, MACON3_PADCFG(1) |
-			MACON3_TXCRCEN | MACON3_FRMLNEN);
+		MACON3_TXCRCEN | MACON3_FRMLNEN);
 #endif
 
 	//When the medium is occupied, the MAC will wait indefinitely for it to
@@ -217,18 +214,18 @@ error_t enc28j60Init(NetInterface *interface)
 
 	//LEDA displays link status and LEDB displays TX/RX activity
 	enc28j60WritePhyReg(interface, ENC28J60_PHY_REG_PHLCON,
-			PHLCON_LACFG(4) | PHLCON_LBCFG(7) | PHLCON_LFRQ(0) | PHLCON_STRCH);
+		PHLCON_LACFG(4) | PHLCON_LBCFG(7) | PHLCON_LFRQ(0) | PHLCON_STRCH);
 
 	//Clear interrupt flags
 	enc28j60WriteReg(interface, ENC28J60_REG_EIR, 0x00);
 
 	//Configure interrupts as desired
 	enc28j60WriteReg(interface, ENC28J60_REG_EIE, EIE_INTIE |
-			EIE_PKTIE | EIE_LINKIE | EIE_TXIE | EIE_TXERIE);
+		EIE_PKTIE | EIE_LINKIE | EIE_TXIE | EIE_TXERIE);
 
 	//Configure PHY interrupts as desired
 	enc28j60WritePhyReg(interface, ENC28J60_PHY_REG_PHIE,
-			PHIE_PLNKIE | PHIE_PGEIE);
+		PHIE_PLNKIE | PHIE_PGEIE);
 
 	//Set RXEN to enable reception
 	enc28j60SetBit(interface, ENC28J60_REG_ECON1, ECON1_RXEN);
@@ -237,10 +234,13 @@ error_t enc28j60Init(NetInterface *interface)
 	enc28j60DumpReg(interface);
 	enc28j60DumpPhyReg(interface);
 
-	//Force the TCP/IP stack to check the link state
-	osSetEvent(&interface->nicRxEvent);
-	//ENC28J60 transmitter is now ready to send
+	//Accept any packets from the upper layer
 	osSetEvent(&interface->nicTxEvent);
+
+	//Force the TCP/IP stack to poll the link state at startup
+	interface->nicEvent = TRUE;
+	//Notify the TCP/IP stack of the event
+	osSetEvent(&netEvent);
 
 	//Successful initialization
 	return NO_ERROR;
@@ -254,7 +254,7 @@ error_t enc28j60Init(NetInterface *interface)
 
 void enc28j60Tick(NetInterface *interface)
 {
-   (void)interface;
+	(void)interface;
 }
 
 
@@ -307,24 +307,33 @@ bool_t enc28j60IrqHandler(NetInterface *interface)
 	{
 		//Disable LINKIE interrupt
 		enc28j60ClearBit(interface, ENC28J60_REG_EIE, EIE_LINKIE);
-		//Notify the user that the link state has changed
-		flag |= osSetEventFromIsr(&interface->nicRxEvent);
+
+		//Set event flag
+		interface->nicEvent = TRUE;
+		//Notify the TCP/IP stack of the event
+		flag |= osSetEventFromIsr(&netEvent);
 	}
+
 	//Packet received?
 	if(status & EIR_PKTIF)
 	{
 		//Disable PKTIE interrupt
 		enc28j60ClearBit(interface, ENC28J60_REG_EIE, EIE_PKTIE);
-		//Notify the user that a packet has been received
-		flag |= osSetEventFromIsr(&interface->nicRxEvent);
+
+		//Set event flag
+		interface->nicEvent = TRUE;
+		//Notify the TCP/IP stack of the event
+		flag |= osSetEventFromIsr(&netEvent);
 	}
+
 	//Packet transmission complete?
 	if(status & (EIR_TXIF | EIE_TXERIE))
 	{
-		//Notify the user that the transmitter is ready to send
-		flag |= osSetEventFromIsr(&interface->nicTxEvent);
 		//Clear interrupt flags
 		enc28j60ClearBit(interface, ENC28J60_REG_EIR, EIR_TXIF | EIE_TXERIE);
+
+		//Notify the TCP/IP stack that the transmitter is ready to send
+		flag |= osSetEventFromIsr(&interface->nicTxEvent);
 	}
 
 	//Once the interrupt has been serviced, the INTIE bit
@@ -344,7 +353,8 @@ bool_t enc28j60IrqHandler(NetInterface *interface)
 void enc28j60EventHandler(NetInterface *interface)
 {
 	error_t error;
-	uint16_t status, status1;
+	uint16_t status;
+	uint16_t value;
 	size_t length;
 
 	//Read interrupt status register
@@ -358,43 +368,34 @@ void enc28j60EventHandler(NetInterface *interface)
 		//Clear interrupt flag
 		enc28j60ClearBit(interface, ENC28J60_REG_EIR, EIR_LINKIF);
 		//Read PHY status register
-		status1 = enc28j60ReadPhyReg(interface, ENC28J60_PHY_REG_PHSTAT2);
+		value = enc28j60ReadPhyReg(interface, ENC28J60_PHY_REG_PHSTAT2);
 
 		//Check link state
-		if(status1 & PHSTAT2_LSTAT)
+		if(value & PHSTAT2_LSTAT)
 		{
-			//Link is up
-			interface->linkState = TRUE;
 			//Link speed
-			interface->speed100 = FALSE;
+			interface->linkSpeed = NIC_LINK_SPEED_10MBPS;
 
 #if (ENC28J60_FULL_DUPLEX_SUPPORT == ENABLED)
 			//Full-duplex mode
-			interface->fullDuplex = TRUE;
-			//Display link state
-			TRACE_INFO("Link is up (%s)...\r\n", interface->name);
-			//Display actual speed and duplex mode
-			TRACE_INFO("10BASE-T Full-Duplex\r\n");
+			interface->duplexMode = NIC_FULL_DUPLEX_MODE;
 #else
 			//Half-duplex mode
-			interface->fullDuplex = FALSE;
-			//Display link state
-			TRACE_INFO("Link is up (%s)...\r\n", interface->name);
-			//Display actual speed and duplex mode
-			TRACE_INFO("10BASE-T Half-Duplex\r\n");
+			interface->duplexMode = NIC_HALF_DUPLEX_MODE;
 #endif
+			//Link is up
+			interface->linkState = TRUE;
 		}
 		else
 		{
 			//Link is down
 			interface->linkState = FALSE;
-			//Display link state
-			TRACE_INFO("Link is down (%s)...\r\n", interface->name);
 		}
 
 		//Process link state change event
 		nicNotifyLinkChange(interface);
 	}
+
 	//Check whether a packet has been received?
 	if(status & EIR_PKTIF)
 	{
@@ -406,7 +407,7 @@ void enc28j60EventHandler(NetInterface *interface)
 		{
 			//Read incoming packet
 			error = enc28j60ReceivePacket(interface,
-					interface->ethFrame, ETH_MAX_FRAME_SIZE, &length);
+				interface->ethFrame, ETH_MAX_FRAME_SIZE, &length);
 
 			//Check whether a valid packet has been received
 			if(!error)
@@ -424,61 +425,6 @@ void enc28j60EventHandler(NetInterface *interface)
 }
 
 
-/**
- * @brief Configure multicast MAC address filtering
- * @param[in] interface Underlying network interface
- * @return Error code
- **/
-
-error_t enc28j60SetMacFilter(NetInterface *interface)
-{
-	uint_t i;
-	uint_t k;
-	uint32_t crc;
-	uint8_t hashTable[8];
-
-	//Debug message
-	TRACE_DEBUG("Updating ENC28J60 hash table...\r\n");
-
-	//Clear hash table
-	memset(hashTable, 0, sizeof(hashTable));
-
-	//The MAC filter table contains the multicast MAC addresses
-	//to accept when receiving an Ethernet frame
-	for(i = 0; i < interface->macFilterSize; i++)
-	{
-		//Compute CRC over the current MAC address
-		crc = enc28j60CalcCrc(&interface->macFilter[i].addr, sizeof(MacAddr));
-		//Calculate the corresponding index in the table
-		k = (crc >> 23) & 0x3F;
-		//Update hash table contents
-		hashTable[k / 8] |= (1 << (k % 8));
-	}
-
-	//Write the hash table to the ENC28J60 controller
-	enc28j60WriteReg(interface, ENC28J60_REG_EHT0, hashTable[0]);
-	enc28j60WriteReg(interface, ENC28J60_REG_EHT1, hashTable[1]);
-	enc28j60WriteReg(interface, ENC28J60_REG_EHT2, hashTable[2]);
-	enc28j60WriteReg(interface, ENC28J60_REG_EHT3, hashTable[3]);
-	enc28j60WriteReg(interface, ENC28J60_REG_EHT4, hashTable[4]);
-	enc28j60WriteReg(interface, ENC28J60_REG_EHT5, hashTable[5]);
-	enc28j60WriteReg(interface, ENC28J60_REG_EHT6, hashTable[6]);
-	enc28j60WriteReg(interface, ENC28J60_REG_EHT7, hashTable[7]);
-
-	//Debug message
-	TRACE_DEBUG("  EHT0 = %02" PRIX8 "\r\n", enc28j60ReadReg(interface, ENC28J60_REG_EHT0));
-	TRACE_DEBUG("  EHT1 = %02" PRIX8 "\r\n", enc28j60ReadReg(interface, ENC28J60_REG_EHT1));
-	TRACE_DEBUG("  EHT2 = %02" PRIX8 "\r\n", enc28j60ReadReg(interface, ENC28J60_REG_EHT2));
-	TRACE_DEBUG("  EHT3 = %02" PRIX8 "\r\n", enc28j60ReadReg(interface, ENC28J60_REG_EHT3));
-	TRACE_DEBUG("  EHT0 = %02" PRIX8 "\r\n", enc28j60ReadReg(interface, ENC28J60_REG_EHT4));
-	TRACE_DEBUG("  EHT1 = %02" PRIX8 "\r\n", enc28j60ReadReg(interface, ENC28J60_REG_EHT5));
-	TRACE_DEBUG("  EHT2 = %02" PRIX8 "\r\n", enc28j60ReadReg(interface, ENC28J60_REG_EHT6));
-	TRACE_DEBUG("  EHT3 = %02" PRIX8 "\r\n", enc28j60ReadReg(interface, ENC28J60_REG_EHT7));
-
-	//Successful processing
-	return NO_ERROR;
-}
-
 
 /**
  * @brief Send a packet
@@ -489,7 +435,7 @@ error_t enc28j60SetMacFilter(NetInterface *interface)
  **/
 
 error_t enc28j60SendPacket(NetInterface *interface,
-		const NetBuffer *buffer, size_t offset)
+	const NetBuffer *buffer, size_t offset)
 {
 	size_t length;
 
@@ -555,7 +501,7 @@ error_t enc28j60SendPacket(NetInterface *interface,
  **/
 
 error_t enc28j60ReceivePacket(NetInterface *interface,
-		uint8_t *buffer, size_t size, size_t *length)
+	uint8_t *buffer, size_t size, size_t *length)
 {
 	error_t error;
 	uint16_t n;
@@ -624,6 +570,68 @@ error_t enc28j60ReceivePacket(NetInterface *interface,
 	return error;
 }
 
+/**
+ * @brief Configure multicast MAC address filtering
+ * @param[in] interface Underlying network interface
+ * @return Error code
+ **/
+
+error_t enc28j60SetMulticastFilter(NetInterface *interface)
+{
+	uint_t i;
+	uint_t k;
+	uint32_t crc;
+	uint8_t hashTable[8];
+	MacFilterEntry *entry;
+
+	//Debug message
+	TRACE_DEBUG("Updating ENC28J60 hash table...\r\n");
+
+	//Clear hash table
+	memset(hashTable, 0, sizeof(hashTable));
+
+	//The MAC filter table contains the multicast MAC addresses
+	//to accept when receiving an Ethernet frame
+	for(i = 0; i < MAC_MULTICAST_FILTER_SIZE; i++)
+	{
+		//Point to the current entry
+		entry = &interface->macMulticastFilter[i];
+
+		//Valid entry?
+		if(entry->refCount > 0)
+		{
+			//Compute CRC over the current MAC address
+			crc = enc28j60CalcCrc(&entry->addr, sizeof(MacAddr));
+			//Calculate the corresponding index in the table
+			k = (crc >> 23) & 0x3F;
+			//Update hash table contents
+			hashTable[k / 8] |= (1 << (k % 8));
+		}
+	}
+
+	//Write the hash table to the ENC28J60 controller
+	enc28j60WriteReg(interface, ENC28J60_REG_EHT0, hashTable[0]);
+	enc28j60WriteReg(interface, ENC28J60_REG_EHT1, hashTable[1]);
+	enc28j60WriteReg(interface, ENC28J60_REG_EHT2, hashTable[2]);
+	enc28j60WriteReg(interface, ENC28J60_REG_EHT3, hashTable[3]);
+	enc28j60WriteReg(interface, ENC28J60_REG_EHT4, hashTable[4]);
+	enc28j60WriteReg(interface, ENC28J60_REG_EHT5, hashTable[5]);
+	enc28j60WriteReg(interface, ENC28J60_REG_EHT6, hashTable[6]);
+	enc28j60WriteReg(interface, ENC28J60_REG_EHT7, hashTable[7]);
+
+	//Debug message
+	TRACE_DEBUG("  EHT0 = %02" PRIX8 "\r\n", enc28j60ReadReg(interface, ENC28J60_REG_EHT0));
+	TRACE_DEBUG("  EHT1 = %02" PRIX8 "\r\n", enc28j60ReadReg(interface, ENC28J60_REG_EHT1));
+	TRACE_DEBUG("  EHT2 = %02" PRIX8 "\r\n", enc28j60ReadReg(interface, ENC28J60_REG_EHT2));
+	TRACE_DEBUG("  EHT3 = %02" PRIX8 "\r\n", enc28j60ReadReg(interface, ENC28J60_REG_EHT3));
+	TRACE_DEBUG("  EHT0 = %02" PRIX8 "\r\n", enc28j60ReadReg(interface, ENC28J60_REG_EHT4));
+	TRACE_DEBUG("  EHT1 = %02" PRIX8 "\r\n", enc28j60ReadReg(interface, ENC28J60_REG_EHT5));
+	TRACE_DEBUG("  EHT2 = %02" PRIX8 "\r\n", enc28j60ReadReg(interface, ENC28J60_REG_EHT6));
+	TRACE_DEBUG("  EHT3 = %02" PRIX8 "\r\n", enc28j60ReadReg(interface, ENC28J60_REG_EHT7));
+
+	//Successful processing
+	return NO_ERROR;
+}
 
 /**
  * @brief ENC28J60 controller reset
@@ -636,7 +644,7 @@ void enc28j60SoftReset(NetInterface *interface)
 	interface->spiDriver->assertCs();
 
 	//Write opcode
-	spiTransfer(ENC28J60_CMD_SRC);
+	interface->spiDriver->transfer(ENC28J60_CMD_SRC);
 
 	//Terminate the operation by raising the CS pin
 	interface->spiDriver->deassertCs();
@@ -711,7 +719,7 @@ void enc28j60WriteReg(NetInterface *interface, uint16_t address, uint8_t data)
 	interface->spiDriver->assertCs();
 
 	//Write opcode and register address
-	spiTransfer(ENC28J60_CMD_WCR | (address & REG_ADDR_MASK));
+	interface->spiDriver->transfer(ENC28J60_CMD_WCR | (address & REG_ADDR_MASK));
 	//Write register value
 	interface->spiDriver->transfer(data);
 
@@ -738,14 +746,14 @@ uint8_t enc28j60ReadReg(NetInterface *interface, uint16_t address)
 	interface->spiDriver->assertCs();
 
 	//Write opcode and register address
-	spiTransfer(ENC28J60_CMD_RCR | (address & REG_ADDR_MASK));
+	interface->spiDriver->transfer(ENC28J60_CMD_RCR | (address & REG_ADDR_MASK));
 
 	//When reading MAC or MII registers, a dummy byte is first shifted out
 	if((address & REG_TYPE_MASK) != ETH_REG_TYPE)
-		spiTransfer(0x00);
+		interface->spiDriver->transfer(0x00);
 
 	//Read register contents
-	data = spiTransfer(0x00);
+	data = interface->spiDriver->transfer(0x00);
 
 	//Terminate the operation by raising the CS pin
 	interface->spiDriver->deassertCs();
@@ -774,9 +782,9 @@ void enc28j60WritePhyReg(NetInterface *interface, uint16_t address, uint16_t dat
 
 	//Wait until the PHY register has been written
 	while(enc28j60ReadReg(interface, ENC28J60_REG_MISTAT) & MISTAT_BUSY)
-   {
-      taskYIELD();
-   }
+	{
+		taskYIELD();
+	}
 }
 
 
@@ -798,9 +806,9 @@ uint16_t enc28j60ReadPhyReg(NetInterface *interface, uint16_t address)
 	enc28j60WriteReg(interface, ENC28J60_REG_MICMD, MICMD_MIIRD);
 	//Wait for the read operation to complete
 	while(enc28j60ReadReg(interface, ENC28J60_REG_MISTAT) & MISTAT_BUSY)
-   {
-      taskYIELD();
-   }
+	{
+		taskYIELD();
+	}
 	//Clear command register
 	enc28j60WriteReg(interface, ENC28J60_REG_MICMD, 0);
 
@@ -822,16 +830,17 @@ uint16_t enc28j60ReadPhyReg(NetInterface *interface, uint16_t address)
  **/
 
 void enc28j60WriteBuffer(NetInterface *interface,
-		const NetBuffer *buffer, size_t offset)
+	const NetBuffer *buffer, size_t offset)
 {
 	uint_t i;
+#ifndef DMA_TX
+	size_t j;
+#endif //DMA_TX
 	size_t n;
 	uint8_t *p;
-#ifndef DMA_TX
-   size_t j;
-#else //DMA_TX
 
-   extern SPI_HandleTypeDef hspi1;
+#ifdef DMA_TX
+	extern SPI_HandleTypeDef hspi1;
 
 	osResetEvent(&spiSemaphore);
 	interface->spiDriver->setMode(spiModeDmaTx);
@@ -864,7 +873,7 @@ void enc28j60WriteBuffer(NetInterface *interface,
 			osWaitForEvent(&spiSemaphore, INFINITE_DELAY);
 			while (HAL_SPI_GetState(&hspi1) != HAL_SPI_STATE_READY)
 			{
-			   taskYIELD();
+				taskYIELD();
 			}
 #endif
 			//Process the next block from the start
@@ -890,7 +899,7 @@ void enc28j60WriteBuffer(NetInterface *interface,
  **/
 
 void enc28j60ReadBuffer(NetInterface *interface,
-		uint8_t *data, size_t length)
+	uint8_t *data, size_t length)
 {
 #ifndef DMA_RX
 	size_t i;
@@ -919,7 +928,7 @@ void enc28j60ReadBuffer(NetInterface *interface,
 	osWaitForEvent(&spiSemaphore, INFINITE_DELAY);
 	while (HAL_SPI_GetState(&hspi1) != HAL_SPI_STATE_READY)
 	{
-	   taskYIELD();
+		taskYIELD();
 	}
 #endif
 	//Terminate the operation by raising the CS pin
@@ -940,9 +949,9 @@ void enc28j60SetBit(NetInterface *interface, uint16_t address, uint16_t mask)
 	interface->spiDriver->assertCs();
 
 	//Write opcode and register address
-	spiTransfer(ENC28J60_CMD_BFS | (address & REG_ADDR_MASK));
+	interface->spiDriver->transfer(ENC28J60_CMD_BFS | (address & REG_ADDR_MASK));
 	//Write bit mask
-	spiTransfer(mask);
+	interface->spiDriver->transfer(mask);
 
 	//Terminate the operation by raising the CS pin
 	interface->spiDriver->deassertCs();
@@ -962,9 +971,9 @@ void enc28j60ClearBit(NetInterface *interface, uint16_t address, uint16_t mask)
 	interface->spiDriver->assertCs();
 
 	//Write opcode and register address
-	spiTransfer(ENC28J60_CMD_BFC | (address & REG_ADDR_MASK));
+	interface->spiDriver->transfer(ENC28J60_CMD_BFC | (address & REG_ADDR_MASK));
 	//Write bit mask
-	spiTransfer(mask);
+	interface->spiDriver->transfer(mask);
 
 	//Terminate the operation by raising the CS pin
 	interface->spiDriver->deassertCs();
@@ -1014,7 +1023,7 @@ uint32_t enc28j60CalcCrc(const void *data, size_t length)
 
 void enc28j60DumpReg(NetInterface *interface)
 {
-   (void) interface;
+	(void) interface;
 #if (TRACE_LEVEL >= TRACE_LEVEL_DEBUG)
 	uint8_t i;
 	uint8_t bank;
@@ -1065,7 +1074,7 @@ void enc28j60DumpReg(NetInterface *interface)
 
 void enc28j60DumpPhyReg(NetInterface *interface)
 {
-   (void) interface;
+	(void) interface;
 #if (TRACE_LEVEL >= TRACE_LEVEL_DEBUG)
 	uint8_t i;
 

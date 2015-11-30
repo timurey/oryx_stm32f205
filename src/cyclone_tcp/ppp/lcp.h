@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _LCP_H
@@ -50,8 +50,8 @@ typedef enum
 } LcpOptionType;
 
 
-//Win32 compiler?
-#if defined(_WIN32)
+//CodeWarrior or Win32 compiler?
+#if defined(__CWCC__) || defined(_WIN32)
    #pragma pack(push, 1)
 #endif
 
@@ -140,8 +140,8 @@ typedef __start_packed struct
 } __end_packed LcpAcfcOption;
 
 
-//Win32 compiler?
-#if defined(_WIN32)
+//CodeWarrior or Win32 compiler?
+#if defined(__CWCC__) || defined(_WIN32)
    #pragma pack(pop)
 #endif
 
@@ -236,5 +236,11 @@ error_t lcpParseAuthProtocolOption(PppContext *context,
 
 error_t lcpParseMagicNumberOption(PppContext *context,
    LcpMagicNumberOption *option, PppConfigurePacket *outPacket);
+
+error_t lcpParsePfcOption(PppContext *context,
+   LcpPfcOption *option, PppConfigurePacket *outPacket);
+
+error_t lcpParseAcfcOption(PppContext *context,
+   LcpAcfcOption *option, PppConfigurePacket *outPacket);
 
 #endif

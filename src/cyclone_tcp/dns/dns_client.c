@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -53,14 +53,17 @@ error_t dnsResolve(NetInterface *interface,
    const char_t *name, HostType type, IpAddr *ipAddr)
 {
    error_t error;
-   systime_t delay;
    DnsCacheEntry *entry;
+
+#if (NET_RTOS_SUPPORT == ENABLED)
+   systime_t delay;
 
    //Debug message
    TRACE_INFO("Resolving host name %s (DNS resolver)...\r\n", name);
+#endif
 
-   //Acquire exclusive access to the DNS cache
-   osAcquireMutex(&dnsCacheMutex);
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
 
    //Search the DNS cache for the specified host name
    entry = dnsFindEntry(interface, name, type, HOST_NAME_RESOLVER_DNS);
@@ -139,9 +142,10 @@ error_t dnsResolve(NetInterface *interface,
       }
    }
 
-   //Release exclusive access to the DNS cache
-   osReleaseMutex(&dnsCacheMutex);
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
+#if (NET_RTOS_SUPPORT == ENABLED)
    //Set default polling interval
    delay = DNS_CACHE_INIT_POLLING_INTERVAL;
 
@@ -151,8 +155,8 @@ error_t dnsResolve(NetInterface *interface,
       //Wait until the next polling period
       osDelayTask(delay);
 
-      //Acquire exclusive access to the DNS cache
-      osAcquireMutex(&dnsCacheMutex);
+      //Get exclusive access
+      osAcquireMutex(&netMutex);
 
       //Search the DNS cache for the specified host name
       entry = dnsFindEntry(interface, name, type, HOST_NAME_RESOLVER_DNS);
@@ -175,8 +179,8 @@ error_t dnsResolve(NetInterface *interface,
          error = ERROR_FAILURE;
       }
 
-      //Release exclusive access to the DNS cache
-      osReleaseMutex(&dnsCacheMutex);
+      //Release exclusive access
+      osReleaseMutex(&netMutex);
 
       //Backoff support for less aggressive polling
       delay = MIN(delay * 2, DNS_CACHE_MAX_POLLING_INTERVAL);
@@ -193,6 +197,7 @@ error_t dnsResolve(NetInterface *interface,
       //Successful host name resolution
       TRACE_INFO("Host name resolved to %s...\r\n", ipAddrToString(ipAddr, NULL));
    }
+#endif
 
    //Return status code
    return error;
@@ -219,9 +224,16 @@ error_t dnsSendQuery(DnsCacheEntry *entry)
    //An IPv4 address is expected?
    if(entry->type == HOST_TYPE_IPV4)
    {
+      //Point to the IPv4 context
+      Ipv4Context *ipv4Context = &entry->interface->ipv4Context;
+
+      //Out of range index?
+      if(entry->dnsServerNum >= IPV4_DNS_SERVER_LIST_SIZE)
+         return ERROR_NO_DNS_SERVER;
+
       //Select the relevant DNS server
       destIpAddr.length = sizeof(Ipv4Addr);
-      ipv4GetDnsServer(entry->interface, entry->dnsServerNum, &destIpAddr.ipv4Addr);
+      destIpAddr.ipv4Addr = ipv4Context->dnsServerList[entry->dnsServerNum];
 
       //Make sure the IP address is valid
       if(destIpAddr.ipv4Addr == IPV4_UNSPECIFIED_ADDR)
@@ -233,9 +245,16 @@ error_t dnsSendQuery(DnsCacheEntry *entry)
    //An IPv6 address is expected?
    if(entry->type == HOST_TYPE_IPV6)
    {
+      //Point to the IPv6 context
+      Ipv6Context *ipv6Context = &entry->interface->ipv6Context;
+
+      //Out of range index?
+      if(entry->dnsServerNum >= IPV6_DNS_SERVER_LIST_SIZE)
+         return ERROR_NO_DNS_SERVER;
+
       //Select the relevant DNS server
       destIpAddr.length = sizeof(Ipv6Addr);
-      ipv6GetDnsServer(entry->interface, entry->dnsServerNum, &destIpAddr.ipv6Addr);
+      destIpAddr.ipv6Addr = ipv6Context->dnsServerList[entry->dnsServerNum];
 
       //Make sure the IP address is valid
       if(ipv6CompAddr(&destIpAddr.ipv6Addr, &IPV6_UNSPECIFIED_ADDR))
@@ -252,7 +271,8 @@ error_t dnsSendQuery(DnsCacheEntry *entry)
    //Allocate a memory buffer to hold the DNS query message
    buffer = udpAllocBuffer(DNS_MESSAGE_MAX_SIZE, &offset);
    //Failed to allocate buffer?
-   if(!buffer) return ERROR_OUT_OF_MEMORY;
+   if(!buffer)
+      return ERROR_OUT_OF_MEMORY;
 
    //Point to the DNS header
    message = netBufferAt(buffer, offset);
@@ -343,7 +363,7 @@ void dnsProcessResponse(NetInterface *interface, const IpPseudoHeader *pseudoHea
    size_t length;
    DnsHeader *message;
    DnsQuestion *question;
-   DnsResourceRecord *resourceRecord;
+   DnsResourceRecord *record;
    DnsCacheEntry *entry;
 
    //Retrieve the length of the DNS message
@@ -372,9 +392,6 @@ void dnsProcessResponse(NetInterface *interface, const IpPseudoHeader *pseudoHea
    if(ntohs(message->qdcount) != 1)
       return;
 
-   //Acquire exclusive access to the DNS cache
-   osAcquireMutex(&dnsCacheMutex);
-
    //Loop through DNS cache entries
    for(i = 0; i < DNS_CACHE_SIZE; i++)
    {
@@ -400,12 +417,12 @@ void dnsProcessResponse(NetInterface *interface, const IpPseudoHeader *pseudoHea
             //Invalid name?
             if(!pos)
                break;
-            //Malformed mDNS message?
+            //Malformed DNS message?
             if((pos + sizeof(DnsQuestion)) > length)
                break;
 
             //Compare domain name
-            if(!dnsCompareName(message, length, sizeof(DnsHeader), entry->name, 0))
+            if(dnsCompareName(message, length, sizeof(DnsHeader), entry->name, 0))
                break;
 
             //Point to the corresponding entry
@@ -414,20 +431,12 @@ void dnsProcessResponse(NetInterface *interface, const IpPseudoHeader *pseudoHea
             //Check the class of the query
             if(ntohs(question->qclass) != DNS_RR_CLASS_IN)
                break;
+
             //Check the type of the query
             if(entry->type == HOST_TYPE_IPV4 && ntohs(question->qtype) != DNS_RR_TYPE_A)
                break;
             if(entry->type == HOST_TYPE_IPV6 && ntohs(question->qtype) != DNS_RR_TYPE_AAAA)
                break;
-
-            //Make sure recursion is available
-            if(!message->ra)
-            {
-               //The entry should be deleted since name resolution has failed
-               dnsDeleteEntry(entry);
-               //Exit immediately
-               break;
-            }
 
             //Check return code
             if(message->rcode != DNS_RCODE_NO_ERROR)
@@ -450,14 +459,14 @@ void dnsProcessResponse(NetInterface *interface, const IpPseudoHeader *pseudoHea
                if(!pos) break;
 
                //Point to the associated resource record
-               resourceRecord = DNS_GET_RESOURCE_RECORD(message, pos);
+               record = DNS_GET_RESOURCE_RECORD(message, pos);
                //Point to the resource data
                pos += sizeof(DnsResourceRecord);
 
                //Make sure the resource record is valid
                if(pos > length)
                   break;
-               if((pos + ntohs(resourceRecord->rdlength)) > length)
+               if((pos + ntohs(record->rdlength)) > length)
                   break;
 
 #if (IPV4_SUPPORT == ENABLED)
@@ -465,17 +474,17 @@ void dnsProcessResponse(NetInterface *interface, const IpPseudoHeader *pseudoHea
                if(entry->type == HOST_TYPE_IPV4)
                {
                   //A resource record found?
-                  if(ntohs(resourceRecord->rtype) == DNS_RR_TYPE_A &&
-                     ntohs(resourceRecord->rdlength) == sizeof(Ipv4Addr))
+                  if(ntohs(record->rtype) == DNS_RR_TYPE_A &&
+                     ntohs(record->rdlength) == sizeof(Ipv4Addr))
                   {
                      //Copy the IPv4 address
                      entry->ipAddr.length = sizeof(Ipv4Addr);
-                     ipv4CopyAddr(&entry->ipAddr.ipv4Addr, resourceRecord->rdata);
+                     ipv4CopyAddr(&entry->ipAddr.ipv4Addr, record->rdata);
 
                      //Save current time
                      entry->timestamp = osGetSystemTime();
                      //Save TTL value
-                     entry->timeout = ntohl(resourceRecord->ttl) * 1000;
+                     entry->timeout = ntohl(record->ttl) * 1000;
                      //Limit the lifetime of the DNS cache entries
                      entry->timeout = MIN(entry->timeout, DNS_MAX_LIFETIME);
 
@@ -493,17 +502,17 @@ void dnsProcessResponse(NetInterface *interface, const IpPseudoHeader *pseudoHea
                if(entry->type == HOST_TYPE_IPV6)
                {
                   //AAAA resource record found?
-                  if(ntohs(resourceRecord->rtype) == DNS_RR_TYPE_AAAA &&
-                     ntohs(resourceRecord->rdlength) == sizeof(Ipv6Addr))
+                  if(ntohs(record->rtype) == DNS_RR_TYPE_AAAA &&
+                     ntohs(record->rdlength) == sizeof(Ipv6Addr))
                   {
                      //Copy the IPv6 address
                      entry->ipAddr.length = sizeof(Ipv6Addr);
-                     ipv6CopyAddr(&entry->ipAddr.ipv6Addr, resourceRecord->rdata);
+                     ipv6CopyAddr(&entry->ipAddr.ipv6Addr, record->rdata);
 
                      //Save current time
                      entry->timestamp = osGetSystemTime();
                      //Save TTL value
-                     entry->timeout = ntohl(resourceRecord->ttl) * 1000;
+                     entry->timeout = ntohl(record->ttl) * 1000;
                      //Limit the lifetime of the DNS cache entries
                      entry->timeout = MIN(entry->timeout, DNS_MAX_LIFETIME);
 
@@ -517,7 +526,7 @@ void dnsProcessResponse(NetInterface *interface, const IpPseudoHeader *pseudoHea
                }
 #endif
                //Point to the next resource record
-               pos += ntohs(resourceRecord->rdlength);
+               pos += ntohs(record->rdlength);
             }
 
             //We are done
@@ -525,9 +534,6 @@ void dnsProcessResponse(NetInterface *interface, const IpPseudoHeader *pseudoHea
          }
       }
    }
-
-   //Release exclusive access to the DNS cache
-   osReleaseMutex(&dnsCacheMutex);
 }
 
 #endif

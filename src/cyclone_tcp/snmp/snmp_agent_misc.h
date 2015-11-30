@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _SNMP_AGENT_MISC_H
@@ -50,7 +50,9 @@ error_t snmpSetObjectValue(SnmpAgentContext *context, SnmpVarBind *var, bool_t c
 error_t snmpGetObjectValue(SnmpAgentContext *context, SnmpVarBind *var);
 error_t snmpGetNextObject(SnmpAgentContext *context, SnmpVarBind *var);
 
-const MibObject *snmpFindMibObject(SnmpAgentContext *context,
-   const uint8_t *oid, size_t oidLen);
+error_t snmpFindMibObject(SnmpAgentContext *context,
+   const uint8_t *oid, size_t oidLen, const MibObject **object);
+
+error_t snmpCheckOid(const uint8_t *oid, size_t length);
 
 #endif

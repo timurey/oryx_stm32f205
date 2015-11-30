@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _SOCKET_H
@@ -58,14 +58,6 @@ struct _Socket;
 #elif (SOCKET_EPHEMERAL_PORT_MAX <= SOCKET_EPHEMERAL_PORT_MIN || SOCKET_EPHEMERAL_PORT_MAX > 65535)
    #error SOCKET_EPHEMERAL_PORT_MAX parameter is not valid
 #endif
-
-//Legacy definitions
-#define SOCKET_TYPE_RAW SOCKET_TYPE_RAW_IP
-#define SOCKET_PROTOCOL_ICMP SOCKET_IP_PROTO_ICMP
-#define SOCKET_PROTOCOL_IGMP SOCKET_IP_PROTO_IGMP
-#define SOCKET_PROTOCOL_TCP SOCKET_IP_PROTO_TCP
-#define SOCKET_PROTOCOL_UDP SOCKET_IP_PROTO_UDP
-#define SOCKET_PROTOCOL_ICMPV6 SOCKET_IP_PROTO_ICMPV6
 
 
 /**
@@ -221,7 +213,7 @@ struct _Socket
    uint16_t remotePort;
    systime_t timeout;
    uint8_t ttl;
-   error_t lastError;
+   int_t errno;
    OsEvent event;
    uint_t eventMask;
    uint_t eventFlags;
@@ -257,10 +249,13 @@ struct _Socket
    systime_t rttvar;              ///<Round-trip time variation
    systime_t rto;                 ///<Retransmission timeout
 
+#if (TCP_CONGESTION_CONTROL_SUPPORT == ENABLED)
    uint16_t cwnd;                 ///<Congestion window
    uint16_t ssthresh;             ///<Slow start threshold
-   uint_t dupAckCount;            ///<Number of consecutive duplicate ACKs
    uint_t n;                      ///<Number of bytes acknowledged during the whole round-trip
+#endif
+
+   uint_t dupAckCount;            ///<Number of consecutive duplicate ACKs
 
    TcpTxBuffer txBuffer;          ///<Send buffer
    size_t txBufferSize;           ///<Size of the send buffer
@@ -307,7 +302,6 @@ typedef struct
 
 
 //Global variables
-extern OsMutex socketMutex;
 extern Socket socketTable[SOCKET_MAX_COUNT];
 
 //Socket related functions
@@ -350,9 +344,6 @@ error_t socketPoll(SocketEventDesc *eventDesc, uint_t size, OsEvent *extEvent, s
 error_t socketRegisterEvents(Socket *socket, OsEvent *event, uint_t eventMask);
 error_t socketUnregisterEvents(Socket *socket);
 error_t socketGetEvents(Socket *socket, uint_t *eventFlags);
-
-error_t socketError(Socket *socket, error_t error);
-error_t socketGetLastError(Socket *socket);
 
 error_t getHostByName(NetInterface *interface,
    const char_t *name, IpAddr *ipAddr, uint_t flags);

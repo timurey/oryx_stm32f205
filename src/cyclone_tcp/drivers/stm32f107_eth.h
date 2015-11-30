@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _STM32F107_ETH_H
@@ -181,13 +181,14 @@ void stm32f107EthEnableIrq(NetInterface *interface);
 void stm32f107EthDisableIrq(NetInterface *interface);
 void stm32f107EthEventHandler(NetInterface *interface);
 
-error_t stm32f107EthSetMacFilter(NetInterface *interface);
-
 error_t stm32f107EthSendPacket(NetInterface *interface,
    const NetBuffer *buffer, size_t offset);
 
 error_t stm32f107EthReceivePacket(NetInterface *interface,
    uint8_t *buffer, size_t size, size_t *length);
+
+error_t stm32f107EthSetMulticastFilter(NetInterface *interface);
+error_t stm32f107EthUpdateMacConfig(NetInterface *interface);
 
 void stm32f107EthWritePhyReg(uint8_t phyAddr, uint8_t regAddr, uint16_t data);
 uint16_t stm32f107EthReadPhyReg(uint8_t phyAddr, uint8_t regAddr);

@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -34,6 +34,28 @@
 #include "core/net.h"
 #include "drivers/xmc4500_eth.h"
 #include "debug.h"
+
+//Underlying network interface
+static NetInterface *nicDriverInterface;
+
+//IAR EWARM compiler?
+#if defined(__ICCARM__)
+
+//Transmit buffer
+#pragma data_alignment = 4
+static uint8_t txBuffer[XMC4500_ETH_TX_BUFFER_COUNT][XMC4500_ETH_TX_BUFFER_SIZE];
+//Receive buffer
+#pragma data_alignment = 4
+static uint8_t rxBuffer[XMC4500_ETH_RX_BUFFER_COUNT][XMC4500_ETH_RX_BUFFER_SIZE];
+//Transmit DMA descriptors
+#pragma data_alignment = 4
+static Xmc4500TxDmaDesc txDmaDesc[XMC4500_ETH_TX_BUFFER_COUNT];
+//Receive DMA descriptors
+#pragma data_alignment = 4
+static Xmc4500RxDmaDesc rxDmaDesc[XMC4500_ETH_RX_BUFFER_COUNT];
+
+//Keil MDK-ARM or GCC compiler?
+#else
 
 //Transmit buffer
 static uint8_t txBuffer[XMC4500_ETH_TX_BUFFER_COUNT][XMC4500_ETH_TX_BUFFER_SIZE]
@@ -47,6 +69,8 @@ static Xmc4500TxDmaDesc txDmaDesc[XMC4500_ETH_TX_BUFFER_COUNT]
 //Receive DMA descriptors
 static Xmc4500RxDmaDesc rxDmaDesc[XMC4500_ETH_RX_BUFFER_COUNT]
    __attribute__((aligned(4)));
+
+#endif
 
 //Pointer to the current TX DMA descriptor
 static Xmc4500TxDmaDesc *txCurDmaDesc;
@@ -67,8 +91,9 @@ const NicDriver xmc4500EthDriver =
    xmc4500EthEnableIrq,
    xmc4500EthDisableIrq,
    xmc4500EthEventHandler,
-   xmc4500EthSetMacFilter,
    xmc4500EthSendPacket,
+   xmc4500EthSetMulticastFilter,
+   xmc4500EthUpdateMacConfig,
    xmc4500EthWritePhyReg,
    xmc4500EthReadPhyReg,
    TRUE,
@@ -89,6 +114,9 @@ error_t xmc4500EthInit(NetInterface *interface)
 
    //Debug message
    TRACE_INFO("Initializing XMC4500 Ethernet MAC...\r\n");
+
+   //Save underlying network interface
+   nicDriverInterface = interface;
 
    //Disable parity error trap
    SCU_PARITY->PETE = 0;
@@ -119,7 +147,8 @@ error_t xmc4500EthInit(NetInterface *interface)
    if(error) return error;
 
    //Use default MAC configuration
-   ETH0->MAC_CONFIGURATION = ETH_MAC_CONFIGURATION_DO_Msk;
+   ETH0->MAC_CONFIGURATION = ETH_MAC_CONFIGURATION_RESERVED15_Msk |
+      ETH_MAC_CONFIGURATION_DO_Msk;
 
    //Set the MAC address
    ETH0->MAC_ADDRESS0_LOW = interface->macAddr.w[0] | (interface->macAddr.w[1] << 16);
@@ -137,7 +166,7 @@ error_t xmc4500EthInit(NetInterface *interface)
    ETH0->OPERATION_MODE = ETH_OPERATION_MODE_RSF_Msk | ETH_OPERATION_MODE_TSF_Msk;
 
    //Configure DMA bus mode
-   ETH0->BUS_MODE = ETH_BUS_MODE_AAL_Msk | ETH_BUS_MODE_USP_Msk |
+   ETH0->BUS_MODE = ETH_BUS_MODE_MB_Msk | ETH_BUS_MODE_USP_Msk |
       ETH_BUS_MODE_RPBL_1 | ETH_BUS_MODE_PR_1_1 | ETH_BUS_MODE_PBL_1;
 
    //Initialize DMA descriptor lists
@@ -161,9 +190,7 @@ error_t xmc4500EthInit(NetInterface *interface)
    //Enable DMA transmission and reception
    ETH0->OPERATION_MODE |= ETH_OPERATION_MODE_ST_Msk | ETH_OPERATION_MODE_SR_Msk;
 
-   //Force the TCP/IP stack to check the link state
-   osSetEvent(&interface->nicRxEvent);
-   //XMC4500 Ethernet MAC is now ready to send
+   //Accept any packets from the upper layer
    osSetEvent(&interface->nicTxEvent);
 
    //Successful initialization
@@ -338,13 +365,10 @@ void ETH0_0_IRQHandler(void)
 {
    bool_t flag;
    uint32_t status;
-   NetInterface *interface;
 
    //Enter interrupt service routine
    osEnterIsr();
 
-   //Point to the structure describing the network interface
-   interface = &netInterface[0];
    //This flag will be set if a higher priority task must be woken
    flag = FALSE;
 
@@ -360,18 +384,21 @@ void ETH0_0_IRQHandler(void)
       //Check whether the TX buffer is available for writing
       if(!(txCurDmaDesc->tdes0 & ETH_TDES0_OWN))
       {
-         //Notify the user that the transmitter is ready to send
-         flag |= osSetEventFromIsr(&interface->nicTxEvent);
+         //Notify the TCP/IP stack that the transmitter is ready to send
+         flag |= osSetEventFromIsr(&nicDriverInterface->nicTxEvent);
       }
    }
+
    //A packet has been received?
    if(status & ETH_STATUS_RI_Msk)
    {
       //Disable RIE interrupt
       ETH0->INTERRUPT_ENABLE &= ~ETH_INTERRUPT_ENABLE_RIE_Msk;
 
-      //Notify the user that a packet has been received
-      flag |= osSetEventFromIsr(&interface->nicRxEvent);
+      //Set event flag
+      nicDriverInterface->nicEvent = TRUE;
+      //Notify the TCP/IP stack of the event
+      flag |= osSetEventFromIsr(&netEvent);
    }
 
    //Clear NIS interrupt flag
@@ -391,45 +418,6 @@ void xmc4500EthEventHandler(NetInterface *interface)
 {
    error_t error;
    size_t length;
-   bool_t linkStateChange;
-
-   //PHY event is pending?
-   if(interface->phyEvent)
-   {
-      //Acknowledge the event by clearing the flag
-      interface->phyEvent = FALSE;
-      //Handle PHY specific events
-      linkStateChange = interface->phyDriver->eventHandler(interface);
-
-      //Check whether the link state has changed?
-      if(linkStateChange)
-      {
-         //Set speed and duplex mode for proper operation
-         if(interface->linkState)
-         {
-            //Read current MAC configuration
-            uint32_t config = ETH0->MAC_CONFIGURATION;
-
-            //10BASE-T or 100BASE-TX operation mode?
-            if(interface->speed100)
-               config |= ETH_MAC_CONFIGURATION_FES_Msk;
-            else
-               config &= ~ETH_MAC_CONFIGURATION_FES_Msk;
-
-            //Half-duplex or full-duplex mode?
-            if(interface->fullDuplex)
-               config |= ETH_MAC_CONFIGURATION_DM_Msk;
-            else
-               config &= ~ETH_MAC_CONFIGURATION_DM_Msk;
-
-            //Update MAC configuration register
-            ETH0->MAC_CONFIGURATION = config;
-         }
-
-         //Process link state change event
-         nicNotifyLinkChange(interface);
-      }
-   }
 
    //Packet received?
    if(ETH0->STATUS & ETH_STATUS_RI_Msk)
@@ -458,51 +446,6 @@ void xmc4500EthEventHandler(NetInterface *interface)
    //Re-enable DMA interrupts
    ETH0->INTERRUPT_ENABLE |= ETH_INTERRUPT_ENABLE_NIE_Msk |
       ETH_INTERRUPT_ENABLE_RIE_Msk | ETH_INTERRUPT_ENABLE_TIE_Msk;
-}
-
-
-/**
- * @brief Configure multicast MAC address filtering
- * @param[in] interface Underlying network interface
- * @return Error code
- **/
-
-error_t xmc4500EthSetMacFilter(NetInterface *interface)
-{
-   uint_t i;
-   uint_t k;
-   uint32_t crc;
-   uint32_t hashTable[2];
-
-   //Debug message
-   TRACE_INFO("Updating XMC4500 hash table...\r\n");
-
-   //Clear hash table
-   hashTable[0] = 0;
-   hashTable[1] = 0;
-
-   //The MAC filter table contains the multicast MAC addresses
-   //to accept when receiving an Ethernet frame
-   for(i = 0; i < interface->macFilterSize; i++)
-   {
-      //Compute CRC over the current MAC address
-      crc = xmc4500EthCalcCrc(&interface->macFilter[i].addr, sizeof(MacAddr));
-      //The upper 6 bits in the CRC register are used to index the contents of the hash table
-      k = (crc >> 26) & 0x3F;
-      //Update hash table contents
-      hashTable[k / 32] |= (1 << (k % 32));
-   }
-
-   //Write the hash table
-   ETH0->HASH_TABLE_LOW = hashTable[0];
-   ETH0->HASH_TABLE_HIGH = hashTable[1];
-
-   //Debug message
-   TRACE_INFO("  HTL = %08" PRIX32 "\r\n", ETH0->HASH_TABLE_LOW);
-   TRACE_INFO("  HTH = %08" PRIX32 "\r\n", ETH0->HASH_TABLE_HIGH);
-
-   //Successful processing
-   return NO_ERROR;
 }
 
 
@@ -543,14 +486,8 @@ error_t xmc4500EthSendPacket(NetInterface *interface,
    //Give the ownership of the descriptor to the DMA
    txCurDmaDesc->tdes0 |= ETH_TDES0_OWN;
 
-   //Transmission is currently suspended?
-   if(ETH0->STATUS & ETH_STATUS_TU_Msk)
-   {
-      //Clear TU flag to resume processing
-      ETH0->STATUS = ETH_STATUS_TU_Msk;
-      //Instruct the DMA to poll the transmit descriptor list
-      ETH0->TRANSMIT_POLL_DEMAND = 0;
-   }
+   //Instruct the DMA to poll the transmit descriptor list
+   ETH0->TRANSMIT_POLL_DEMAND = 0;
 
    //Point to the next descriptor in the list
    txCurDmaDesc = (Xmc4500TxDmaDesc *) txCurDmaDesc->tdes3;
@@ -627,17 +564,100 @@ error_t xmc4500EthReceivePacket(NetInterface *interface,
       error = ERROR_BUFFER_EMPTY;
    }
 
-   //Reception process is suspended?
-   if(ETH0->STATUS & ETH_STATUS_RU_Msk)
-   {
-      //Clear RU flag to resume processing
-      ETH0->STATUS = ETH_STATUS_RU_Msk;
-      //Instruct the DMA to poll the receive descriptor list
-      ETH0->RECEIVE_POLL_DEMAND = 0;
-   }
+   //Instruct the DMA to poll the receive descriptor list
+   ETH0->RECEIVE_POLL_DEMAND = 0;
 
    //Return status code
    return error;
+}
+
+
+/**
+ * @brief Configure multicast MAC address filtering
+ * @param[in] interface Underlying network interface
+ * @return Error code
+ **/
+
+error_t xmc4500EthSetMulticastFilter(NetInterface *interface)
+{
+   uint_t i;
+   uint_t k;
+   uint32_t crc;
+   uint32_t hashTable[2];
+   MacFilterEntry *entry;
+
+   //Debug message
+   TRACE_DEBUG("Updating XMC4500 hash table...\r\n");
+
+   //Clear hash table
+   hashTable[0] = 0;
+   hashTable[1] = 0;
+
+   //The MAC filter table contains the multicast MAC addresses
+   //to accept when receiving an Ethernet frame
+   for(i = 0; i < MAC_MULTICAST_FILTER_SIZE; i++)
+   {
+      //Point to the current entry
+      entry = &interface->macMulticastFilter[i];
+
+      //Valid entry?
+      if(entry->refCount > 0)
+      {
+         //Compute CRC over the current MAC address
+         crc = xmc4500EthCalcCrc(&entry->addr, sizeof(MacAddr));
+
+         //The upper 6 bits in the CRC register are used to index the
+         //contents of the hash table
+         k = (crc >> 26) & 0x3F;
+
+         //Update hash table contents
+         hashTable[k / 32] |= (1 << (k % 32));
+      }
+   }
+
+   //Write the hash table
+   ETH0->HASH_TABLE_LOW = hashTable[0];
+   ETH0->HASH_TABLE_HIGH = hashTable[1];
+
+   //Debug message
+   TRACE_DEBUG("  HTL = %08" PRIX32 "\r\n", ETH0->HASH_TABLE_LOW);
+   TRACE_DEBUG("  HTH = %08" PRIX32 "\r\n", ETH0->HASH_TABLE_HIGH);
+
+   //Successful processing
+   return NO_ERROR;
+}
+
+
+/**
+ * @brief Adjust MAC configuration parameters for proper operation
+ * @param[in] interface Underlying network interface
+ * @return Error code
+ **/
+
+error_t xmc4500EthUpdateMacConfig(NetInterface *interface)
+{
+   uint32_t config;
+
+   //Read current MAC configuration
+   config = ETH0->MAC_CONFIGURATION;
+
+   //10BASE-T or 100BASE-TX operation mode?
+   if(interface->linkSpeed == NIC_LINK_SPEED_100MBPS)
+      config |= ETH_MAC_CONFIGURATION_FES_Msk;
+   else
+      config &= ~ETH_MAC_CONFIGURATION_FES_Msk;
+
+   //Half-duplex or full-duplex mode?
+   if(interface->duplexMode == NIC_FULL_DUPLEX_MODE)
+      config |= ETH_MAC_CONFIGURATION_DM_Msk;
+   else
+      config &= ~ETH_MAC_CONFIGURATION_DM_Msk;
+
+   //Update MAC configuration register
+   ETH0->MAC_CONFIGURATION = config;
+
+   //Successful processing
+   return NO_ERROR;
 }
 
 

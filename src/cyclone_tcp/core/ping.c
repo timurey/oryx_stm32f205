@@ -23,14 +23,17 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Dependencies
 #include "core/net.h"
 #include "core/ping.h"
 #include "core/ip.h"
+#include "ipv4/ipv4.h"
 #include "ipv4/icmp.h"
+#include "ipv6/ipv6.h"
+#include "ipv6/ipv6_misc.h"
 #include "ipv6/icmpv6.h"
 #include "core/socket.h"
 #include "debug.h"
@@ -47,12 +50,15 @@ static uint16_t pingSequenceNumber = 0;
  *
  * @param[in] interface Underlying network interface (optional parameter)
  * @param[in] ipAddr IP address of the host to reach
+ * @param[in] size Size of the ping packet in bytes
+ * @param[in] ttl Time-To-Live value to be used
  * @param[in] timeout Maximum time to wait before giving up
  * @param[out] rtt Round-trip time (optional parameter)
  * @return Error code
  **/
 
-error_t ping(NetInterface *interface, const IpAddr *ipAddr, systime_t timeout, systime_t *rtt)
+error_t ping(NetInterface *interface, const IpAddr *ipAddr,
+   size_t size, uint8_t ttl, systime_t timeout, systime_t *rtt)
 {
    error_t error;
    uint_t i;
@@ -64,11 +70,15 @@ error_t ping(NetInterface *interface, const IpAddr *ipAddr, systime_t timeout, s
    Socket *socket;
    IcmpEchoMessage *message;
 
+   //Limit the size of the ping request
+   size = MIN (size, PING_MAX_DATA_SIZE);
+
    //Debug message
-   TRACE_INFO("Pinging %s with 64 bytes of data...\r\n", ipAddrToString(ipAddr, NULL));
+   TRACE_INFO("Pinging %s with %u bytes of data...\r\n",
+      ipAddrToString(ipAddr, NULL), size);
 
    //Length of the complete ICMP message including header and data
-   length = sizeof(IcmpEchoMessage) + PING_DATA_SIZE;
+   length = sizeof(IcmpEchoMessage) + size;
 
    //Allocate memory buffer to hold an ICMP message
    message = osAllocMem(length);
@@ -78,7 +88,7 @@ error_t ping(NetInterface *interface, const IpAddr *ipAddr, systime_t timeout, s
    //Identifier field is used to help matching requests and replies
    identifier = netGetRand();
    //Sequence Number field is increment each time an Echo Request is sent
-   sequenceNumber = osAtomicInc16(&pingSequenceNumber);
+   sequenceNumber = pingSequenceNumber++;
 
    //Format ICMP Echo Request message
    message->type = ICMP_TYPE_ECHO_REQUEST;
@@ -88,8 +98,8 @@ error_t ping(NetInterface *interface, const IpAddr *ipAddr, systime_t timeout, s
    message->sequenceNumber = sequenceNumber;
 
    //Copy data
-   for(i = 0; i < PING_DATA_SIZE; i++)
-      message->data[i] = i;
+   for(i = 0; i < size; i++)
+      message->data[i] = i & 0xFF;
 
 #if (IPV4_SUPPORT == ENABLED)
    //Target address is an IPv4 address?
@@ -173,6 +183,9 @@ error_t ping(NetInterface *interface, const IpAddr *ipAddr, systime_t timeout, s
       return ERROR_OPEN_FAILED;
    }
 
+   //Set the TTL value to be used
+   socket->ttl = ttl;
+
    //Associate the newly created socket with the relevant interface
    error = socketBindToInterface(socket, interface);
 
@@ -228,12 +241,12 @@ error_t ping(NetInterface *interface, const IpAddr *ipAddr, systime_t timeout, s
 
       //Wait for an incoming ICMP message
       error = socketReceive(socket, message,
-         sizeof(IcmpEchoMessage) + PING_DATA_SIZE, &length, 0);
+         sizeof(IcmpEchoMessage) + size, &length, 0);
       //Any error to report?
       if(error) break;
 
       //Check message length
-      if(length != (sizeof(IcmpEchoMessage) + PING_DATA_SIZE))
+      if(length != (sizeof(IcmpEchoMessage) + size))
          continue;
       //Verify message type
       if(ipAddr->length == sizeof(Ipv4Addr) && message->type != ICMP_TYPE_ECHO_REPLY)
@@ -248,14 +261,14 @@ error_t ping(NetInterface *interface, const IpAddr *ipAddr, systime_t timeout, s
          continue;
 
       //Loop through data field
-      for(i = 0; i < PING_DATA_SIZE; i++)
+      for(i = 0; i < size; i++)
       {
          //Compare received data against expected data
-         if(message->data[i] != i) break;
+         if(message->data[i] != (i & 0xFF)) break;
       }
 
       //Valid Echo Reply message received?
-      if(i == PING_DATA_SIZE)
+      if(i == size)
       {
          //Calculate round-trip time
          roundTripTime = osGetSystemTime() - startTime;
@@ -268,7 +281,8 @@ error_t ping(NetInterface *interface, const IpAddr *ipAddr, systime_t timeout, s
          socketClose(socket);
 
          //Return round-trip time
-         if(rtt) *rtt = roundTripTime;
+         if(rtt != NULL)
+            *rtt = roundTripTime;
 
          //No error to report
          return NO_ERROR;

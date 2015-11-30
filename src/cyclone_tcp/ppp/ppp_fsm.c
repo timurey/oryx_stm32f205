@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -456,7 +456,7 @@ void pppRcvConfigureReqEvent(PppContext *context, PppFsm *fsm, const PppCallback
    else if(code == PPP_CODE_CONFIGURE_REJ)
    {
       //If some configuration options received in the Configure-Request are not
-      //recognizable or not acceptable for negociation, then the implementation
+      //recognizable or not acceptable for negotiation, then the implementation
       //must transmit a Configure-Reject
       switch(fsm->state)
       {
@@ -922,7 +922,7 @@ void pppRcvEchoReqEvent(PppContext *context, PppFsm *fsm,
 void pppChangeState(PppFsm *fsm, PppState newState)
 {
 #if (PPP_TRACE_LEVEL >= TRACE_LEVEL_INFO)
-   ///PPP FSM states
+   //PPP FSM states
    static const char_t *stateLabel[] =
    {
       "INITIAL",  //0

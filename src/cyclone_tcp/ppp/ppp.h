@@ -23,14 +23,22 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _PPP_H
 #define _PPP_H
 
+//Forward declaration of structures
+struct _PppPacket;
+struct _PppContext;
+#define PppPacket struct _PppPacket
+#define PppContext struct _PppContext
+
 //Dependencies
 #include "core/net.h"
+#include "ppp/pap.h"
+#include "ppp/chap.h"
 
 //PPP support
 #ifndef PPP_SUPPORT
@@ -70,7 +78,7 @@
 //PPP tick interval
 #ifndef PPP_TICK_INTERVAL
    #define PPP_TICK_INTERVAL 500
-#elif (PPP_TICK_INTERVAL < 100)
+#elif (PPP_TICK_INTERVAL < 10)
    #error PPP_TICK_INTERVAL parameter is not valid
 #endif
 
@@ -126,6 +134,15 @@
 //Maximum acceptable value for MRU
 #define PPP_MAX_MRU 1500
 
+//Maximum size of Configure-Request packets
+#define PPP_MAX_CONF_REQ_SIZE 128
+
+//Maximum size of PPP frame header
+#define PPP_FRAME_HEADER_SIZE 4
+//PPP Address field
+#define PPP_ADDR_FIELD 0xFF
+///PPP Control field
+#define PPP_CTRL_FIELD 0x03
 //FCS field size
 #define PPP_FCS_SIZE 2
 
@@ -200,36 +217,36 @@ typedef enum
 } PppCode;
 
 
-//Win32 compiler?
-#if defined(_WIN32)
-   #pragma pack(push, 1)
-#endif
-
-
 /**
- * @brief PPP frame header
+ * @brief PPP authentication protocols
  **/
 
-typedef __start_packed struct
+typedef enum
 {
-   uint8_t address;   //0
-   uint8_t control;   //1
-   uint16_t protocol; //2-3
-   uint8_t data[];    //4
-} __end_packed PppFrame;
+   PPP_AUTH_PROTOCOL_PAP       = 0x01, //PAP
+   PPP_AUTH_PROTOCOL_CHAP_MD5  = 0x02, //CHAP with MD5
+   PPP_AUTH_PROTOCOL_MS_CHAP   = 0x04, //MS-CHAP
+   PPP_AUTH_PROTOCOL_MS_CHAP_2 = 0x08  //MS-CHAP-2
+} PppAuthProtocol;
+
+
+//CodeWarrior or Win32 compiler?
+#if defined(__CWCC__) || defined(_WIN32)
+   #pragma pack(push, 1)
+#endif
 
 
 /**
  * @brief LCP/NCP packet header
  **/
 
-typedef __start_packed struct
+__start_packed struct _PppPacket
 {
    uint8_t code;       //0
    uint8_t identifier; //1
    uint16_t length;    //2-3
    uint8_t data[];     //4
-} __end_packed PppPacket;
+} __end_packed;
 
 
 /**
@@ -325,10 +342,25 @@ typedef __start_packed struct
 } __end_packed PppOption;
 
 
-//Win32 compiler?
-#if defined(_WIN32)
+//CodeWarrior or Win32 compiler?
+#if defined(__CWCC__) || defined(_WIN32)
    #pragma pack(pop)
 #endif
+
+
+/**
+ * @brief PPP authentication callback function
+ **/
+
+typedef bool_t (*PppAuthCallback)(NetInterface *interface,
+   const char_t *username);
+
+
+/**
+ * @brief Random data generation callback function
+ **/
+
+typedef error_t (*PppRandCallback)(uint8_t *data, size_t length);
 
 
 /**
@@ -337,9 +369,12 @@ typedef __start_packed struct
 
 typedef struct
 {
-   NetInterface *interface; ///<Underlying network interface
-   uint16_t mru;            ///<Default MRU
-   uint32_t accm;           ///<default async control character map
+   NetInterface *interface;      ///<Underlying network interface
+   uint16_t mru;                 ///<Default MRU
+   uint32_t accm;                ///<Default async control character map
+   uint_t authProtocol;          ///<Allowed authentication protocols
+   PppAuthCallback authCallback; ///<PPP authentication callback function
+   PppRandCallback randCallback; ///<Random data generation callback function
 } PppSettings;
 
 
@@ -368,12 +403,21 @@ typedef struct
    uint32_t accm;
    bool_t accmRejected;
    uint16_t authProtocol;
+   uint8_t authAlgo;
    bool_t authProtocolRejected;
    uint32_t magicNumber;
    bool_t magicNumberRejected;
+   bool_t pfc;
+   bool_t pfcRejected;
+   bool_t acfc;
+   bool_t acfcRejected;
 #if (IPV4_SUPPORT == ENABLED)
    Ipv4Addr ipAddr;
    bool_t ipAddrRejected;
+   Ipv4Addr primaryDns;
+   bool_t primaryDnsRejected;
+   Ipv4Addr secondaryDns;
+   bool_t secondaryDnsRejected;
 #endif
 } PppConfig;
 
@@ -382,20 +426,28 @@ typedef struct
  * @brief PPP context
  **/
 
-typedef struct
+struct _PppContext
 {
    PppSettings settings;      ///PPP settings
    NetInterface *interface;   ///<Underlying network interface
-   OsMutex mutex;             ///<Mutex preventing simultaneous access to PPP context
    systime_t timeout;         ///<Timeout for blocking operations
 
    char_t username[PPP_MAX_USERNAME_LEN + 1]; ///<User name
    char_t password[PPP_MAX_PASSWORD_LEN + 1]; ///<Password
+   char_t peerName[PPP_MAX_USERNAME_LEN + 1]; ///<Peer's name
+
+   bool_t localAuthDone;
+   bool_t peerAuthDone;
 
    PppPhase pppPhase;         ///<PPP phase
    PppFsm lcpFsm;             ///<LCP finite state machine
    PppFsm ipcpFsm;            ///<IPCP finite state machine
-   PppFsm papFsm;             ///<PAP finite state machine
+#if (PAP_SUPPORT == ENABLED)
+   PapFsm papFsm;             ///<PAP finite state machine
+#endif
+#if (CHAP_SUPPORT == ENABLED)
+   ChapFsm chapFsm;           ///<CHAP finite state machine
+#endif
    PppConfig localConfig;     ///<Local configuration options
    PppConfig peerConfig;      ///<Peer configuration options
    bool_t ipRejected;         ///<IPv4 protocol is not supported by the peer
@@ -411,14 +463,22 @@ typedef struct
    uint_t rxWriteIndex;
    uint_t rxReadIndex;
    uint_t rxFrameCount;
-} PppContext;
+};
 
+
+//Tick counter to handle periodic operations
+extern systime_t pppTickCounter;
 
 //PPP related functions
 void pppGetDefaultSettings(PppSettings *settings);
 error_t pppInit(PppContext *context, const PppSettings *settings);
 
 error_t pppSetTimeout(NetInterface *interface, systime_t timeout);
+
+error_t pppSetAuthInfo(NetInterface *interface,
+   const char_t *username, const char_t *password);
+
+bool_t pppCheckPassword(NetInterface *interface, const char_t *password);
 
 error_t pppSendAtCommand(NetInterface *interface, const char_t *data);
 error_t pppReceiveAtCommand(NetInterface *interface, char_t *data, size_t size);
@@ -428,12 +488,14 @@ error_t pppClose(NetInterface *interface);
 
 void pppTick(NetInterface *interface);
 
-void pppProcessFrame(NetInterface *interface, PppFrame *frame, size_t length);
+void pppProcessFrame(NetInterface *interface, uint8_t *frame, size_t length);
 
 error_t pppSendFrame(NetInterface *interface,
    NetBuffer *buffer, size_t offset, uint16_t protocol);
 
-uint16_t pppCalcFcs(const void *data, size_t length);
+size_t pppParseFrameHeader(const uint8_t *frame, size_t length, uint16_t *protocol);
+
+uint16_t pppCalcFcs(const uint8_t *data, size_t length);
 uint16_t pppCalcFcsEx(const NetBuffer *buffer, size_t offset, size_t length);
 
 NetBuffer *pppAllocBuffer(size_t length, size_t *offset);

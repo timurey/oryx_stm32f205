@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _IP_H
@@ -86,6 +86,7 @@ typedef struct
 
 //IP related constants
 extern const IpAddr IP_ADDR_ANY;
+extern const IpAddr IP_ADDR_UNSPECIFIED;
 
 //IP related functions
 error_t ipSendDatagram(NetInterface *interface, IpPseudoHeader *pseudoHeader,

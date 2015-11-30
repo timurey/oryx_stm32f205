@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _IPV4_FRAG_H
@@ -43,7 +43,7 @@
 //Reassembly algorithm tick interval
 #ifndef IPV4_FRAG_TICK_INTERVAL
    #define IPV4_FRAG_TICK_INTERVAL 1000
-#elif (IPV4_FRAG_TICK_INTERVAL < 100)
+#elif (IPV4_FRAG_TICK_INTERVAL < 10)
    #error IPV4_FRAG_TICK_INTERVAL parameter is not valid
 #endif
 
@@ -73,8 +73,8 @@
 #define IPV4_INFINITY 0xFFFF
 
 
-//Win32 compiler?
-#if defined(_WIN32)
+//CodeWarrior or Win32 compiler?
+#if defined(__CWCC__) || defined(_WIN32)
    #pragma pack(push, 1)
 #endif
 
@@ -91,8 +91,8 @@ typedef __start_packed struct
 } __end_packed Ipv4HoleDesc;
 
 
-//Win32 compiler?
-#if defined(_WIN32)
+//CodeWarrior or Win32 compiler?
+#if defined(__CWCC__) || defined(_WIN32)
    #pragma pack(pop)
 #endif
 
@@ -122,6 +122,9 @@ typedef struct
    Ipv4ReassemblyBuffer buffer; ///<Buffer containing the reassembled datagram
 } Ipv4FragDesc;
 
+
+//Tick counter to handle periodic operations
+extern systime_t ipv4FragTickCounter;
 
 //IPv4 datagram fragmentation and reassembly
 error_t ipv4FragmentDatagram(NetInterface *interface, Ipv4PseudoHeader *pseudoHeader,

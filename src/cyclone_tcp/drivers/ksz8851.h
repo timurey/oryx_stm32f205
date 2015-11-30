@@ -23,14 +23,28 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _KSZ8851_H
 #define _KSZ8851_H
 
-//Enable internal loopback
-#define KSZ8851_LOOPBACK_MODE FALSE
+//SPI interface support
+#ifndef KSZ8851_SPI_SUPPORT
+   #define KSZ8851_SPI_SUPPORT ENABLED
+#elif (KSZ8851_SPI_SUPPORT != ENABLED && KSZ8851_SPI_SUPPORT != DISABLED)
+   #error KSZ8851_SPI_SUPPORT parameter is not valid
+#endif
+
+//KSZ8851 data register
+#ifndef KSZ8851_DATA_REG
+   #define KSZ8851_DATA_REG *((volatile uint16_t *) 0x60000000)
+#endif
+
+//KSZ8851 command register
+#ifndef KSZ8851_CMD_REG
+   #define KSZ8851_CMD_REG *((volatile uint16_t *) 0x60000004)
+#endif
 
 //Device ID
 #define KSZ8851_REV_A2_ID        0x8870
@@ -43,10 +57,17 @@
 #define KSZ8851_CMD_WR_FIFO      0xC0
 
 //Byte enable bits
-#define KSZ8851_CMD_B0           0x04
-#define KSZ8851_CMD_B1           0x08
-#define KSZ8851_CMD_B2           0x10
-#define KSZ8851_CMD_B3           0x20
+#if (KSZ8851_SPI_SUPPORT == ENABLED)
+   #define KSZ8851_CMD_B0        0x04
+   #define KSZ8851_CMD_B1        0x08
+   #define KSZ8851_CMD_B2        0x10
+   #define KSZ8851_CMD_B3        0x20
+#else
+   #define KSZ8851_CMD_B0        0x1000
+   #define KSZ8851_CMD_B1        0x2000
+   #define KSZ8851_CMD_B2        0x4000
+   #define KSZ8851_CMD_B3        0x8000
+#endif
 
 //KSZ8851 registers
 #define KSZ8851_REG_CCR          0x08
@@ -457,13 +478,13 @@ void ksz8851DisableIrq(NetInterface *interface);
 bool_t ksz8851IrqHandler(NetInterface *interface);
 void ksz8851EventHandler(NetInterface *interface);
 
-error_t ksz8851SetMacFilter(NetInterface *interface);
-
 error_t ksz8851SendPacket(NetInterface *interface,
    const NetBuffer *buffer, size_t offset);
 
 error_t ksz8851ReceivePacket(NetInterface *interface,
    uint8_t *buffer, size_t size, size_t *length);
+
+error_t ksz8851SetMulticastFilter(NetInterface *interface);
 
 void ksz8851WriteReg(NetInterface *interface, uint8_t address, uint16_t data);
 uint16_t ksz8851ReadReg(NetInterface *interface, uint8_t address);

@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _NIC_H
@@ -35,8 +35,15 @@
 //Tick interval to handle NIC periodic operations
 #ifndef NIC_TICK_INTERVAL
    #define NIC_TICK_INTERVAL 1000
-#elif (NIC_TICK_INTERVAL < 100)
+#elif (NIC_TICK_INTERVAL < 10)
    #error NIC_TICK_INTERVAL parameter is not valid
+#endif
+
+//Maximum duration a write operation may block
+#ifndef NIC_MAX_BLOCKING_TIME
+   #define NIC_MAX_BLOCKING_TIME INFINITE_DELAY
+#elif (NIC_MAX_BLOCKING_TIME < 0)
+   #error NIC_MAX_BLOCKING_TIME parameter is not valid
 #endif
 
 //Size of the NIC driver context
@@ -59,14 +66,40 @@ typedef enum
 } NicType;
 
 
+/**
+ * @brief Link speed
+ **/
+
+typedef enum
+{
+   NIC_LINK_SPEED_UNKNOWN = 0,
+   NIC_LINK_SPEED_10MBPS  = 10000000,
+   NIC_LINK_SPEED_100MBPS = 100000000,
+   NIC_LINK_SPEED_1GBPS   = 1000000000
+} NicLinkSpeed;
+
+
+/**
+ * @brief Duplex mode
+ **/
+
+typedef enum
+{
+   NIC_UNKNOWN_DUPLEX_MODE = 0,
+   NIC_HALF_DUPLEX_MODE    = 1,
+   NIC_FULL_DUPLEX_MODE    = 2
+} NicDuplexMode;
+
+
 //NIC abstraction layer
 typedef error_t (*NicInit)(NetInterface *interface);
 typedef void (*NicTick)(NetInterface *interface);
 typedef void (*NicEnableIrq)(NetInterface *interface);
 typedef void (*NicDisableIrq)(NetInterface *interface);
 typedef void (*NicEventHandler)(NetInterface *interface);
-typedef error_t (*NicSetMacFilter)(NetInterface *interface);
 typedef error_t (*NicSendPacket)(NetInterface *interface, const NetBuffer *buffer, size_t offset);
+typedef error_t (*NicSetMulticastFilter)(NetInterface *interface);
+typedef error_t (*NicUpdateMacConfig)(NetInterface *interface);
 typedef void (*NicWritePhyReg)(uint8_t phyAddr, uint8_t regAddr, uint16_t data);
 typedef uint16_t (*NicReadPhyReg)(uint8_t phyAddr, uint8_t regAddr);
 
@@ -75,7 +108,7 @@ typedef error_t (*PhyInit)(NetInterface *interface);
 typedef void (*PhyTick)(NetInterface *interface);
 typedef void (*PhyEnableIrq)(NetInterface *interface);
 typedef void (*PhyDisableIrq)(NetInterface *interface);
-typedef bool_t (*PhyEventHandler)(NetInterface *interface);
+typedef void (*PhyEventHandler)(NetInterface *interface);
 
 //SPI abstraction layer
 typedef error_t (*SpiInit)(void);
@@ -110,8 +143,9 @@ typedef struct
    NicEnableIrq enableIrq;
    NicDisableIrq disableIrq;
    NicEventHandler eventHandler;
-   NicSetMacFilter setMacFilter;
    NicSendPacket sendPacket;
+   NicSetMulticastFilter setMulticastFilter;
+   NicUpdateMacConfig updateMacConfig;
    NicWritePhyReg writePhyReg;
    NicReadPhyReg readPhyReg;
    bool_t autoPadding;
@@ -174,10 +208,15 @@ typedef struct
 } ExtIntDriver;
 
 
+//Tick counter to handle periodic operations
+extern systime_t nicTickCounter;
+
 //NIC abstraction layer
 void nicTick(NetInterface *interface);
-error_t nicSetMacFilter(NetInterface *interface);
+
 error_t nicSendPacket(NetInterface *interface, const NetBuffer *buffer, size_t offset);
+error_t nicSetMulticastFilter(NetInterface *interface);
+
 void nicProcessPacket(NetInterface *interface, void *packet, size_t length);
 void nicNotifyLinkChange(NetInterface *interface);
 

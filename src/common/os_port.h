@@ -21,7 +21,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _OS_PORT_H
@@ -34,13 +34,6 @@
 //Compilation flags used to enable/disable features
 #define ENABLED  1
 #define DISABLED 0
-
-//Deprecated API support
-#ifndef OS_DEPRECATED_API_SUPPORT
-   #define OS_DEPRECATED_API_SUPPORT DISABLED
-#elif (OS_DEPRECATED_API_SUPPORT != ENABLED && OS_DEPRECATED_API_SUPPORT != DISABLED)
-   #error OS_DEPRECATED_API_SUPPORT parameter is not valid
-#endif
 
 #define PTR_OFFSET(addr, offset) ((void *) ((uint8_t *) (addr) + (offset)))
 
@@ -75,14 +68,19 @@
    #define arraysize(a) (sizeof(a) / sizeof(a[0]))
 #endif
 
-//Inifinite delay
+//Infinite delay
 #define INFINITE_DELAY ((uint_t) -1)
+//Maximum delay
+#define MAX_DELAY (INFINITE_DELAY / 2)
 
 //Invalid handle value
 #define OS_INVALID_HANDLE NULL
 
+//No RTOS?
+#if defined(USE_NO_RTOS)
+   #include "os_port_none.h"
 //ChibiOS/RT port?
-#if defined(USE_CHIBIOS)
+#elif defined(USE_CHIBIOS)
    #include "os_port_chibios.h"
 //CMSIS-RTOS port?
 #elif defined(USE_CMSIS_RTOS)
@@ -99,50 +97,19 @@
 //Micrium uC/OS-III port?
 #elif defined(USE_UCOS3)
    #include "os_port_ucos3.h"
+//Segger embOS port?
+#elif defined(USE_EMBOS)
+   #include "os_port_embos.h"
+//TI SYS/BIOS port?
+#elif defined(USE_SYS_BIOS)
+   #include "os_port_sys_bios.h"
 //Windows port?
 #elif defined(_WIN32)
    #include "os_port_windows.h"
-//No RTOS defined?
-#else
-   #include "os_port_none.h"
 #endif
 
 //Delay routines
 #define usleep(delay) {volatile uint32_t n = delay * 4; while(n > 0) n--;}
 #define sleep(delay) {volatile uint32_t n = delay * 4000; while(n > 0) n--;}
-
-//Deprecated API (conflicts with CMSIS-RTOS API)
-#if (OS_DEPRECATED_API_SUPPORT == ENABLED)
-   #define osTaskCreate osCreateTask
-   #define osTaskCreateStatic osCreateStaticTask
-   #define osTaskDelete osDeleteTask
-   #define osTaskSuspendAll osSuspendAllTasks
-   #define osTaskResumeAll osResumeAllTasks
-   #define osTaskSwitch osSwitchTask
-   #define osTaskSwitchFromIrq osSwitchTaskFromIsr
-
-   #define osEventCreate osCreateEvent
-   #define osEventClose osDeleteEvent
-   #define osEventSet osSetEvent
-   #define osEventReset osResetEvent
-   #define osEventWait osWaitForEvent
-   #define osEventSetFromIrq osSetEventFromIsr
-
-   #define osSemaphoreCreate osCreateSemaphore
-   #define osSemaphoreClose osCloseSemaphore
-   #define osSemaphoreWait osWaitForSemaphore
-   #define osSemaphoreRelease osReleaseSemaphore
-
-   #define osMutexCreate osCreateMutex
-   #define osMutexClose osDeleteMutex
-   #define osMutexAcquire osAcquireMutex
-   #define osMutexRelease osReleaseMutex
-
-   #define osDelay osDelayTask
-   #define osGetTickCount osGetSystemTime
-
-   #define osMemAlloc osAllocMem
-   #define osMemFree osFreeMem
-#endif
 
 #endif

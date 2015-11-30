@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _BSD_SOCKET_H
@@ -37,14 +37,14 @@
 #endif
 
 //Keil RTX port?
-#if defined(USE_RTX)
+#if defined(USE_RTX) && !defined(RTX_CUSTOM_HEADER)
 
 //No support for BSD sockets
 #undef BSD_SOCKET_SUPPORT
 #define BSD_SOCKET_SUPPORT DISABLED
 
 //Windows port?
-#elif defined(_WIN32)
+#elif defined(__WIN32)
 
 //Undefine conflicting definitions
 #undef htons
@@ -120,6 +120,7 @@
 #define TCP_NODELAY      0x0001
 
 //IOCTL commands
+#define FIONREAD         0x400466FF
 #define FIONBIO          0x800466FE
 
 //FCNTL commands
@@ -133,12 +134,41 @@
 #define SOCKET_SUCCESS 0
 #define SOCKET_ERROR (-1)
 
+//Error codes
+#define EAGAIN       11
+#define EWOULDBLOCK  11
+#define EFAULT       14
+#define EINVAL       22
+#define ENOPROTOOPT  92
+#define ECONNRESET   104
+#define EISCONN      106
+#define ENOTCONN     107
+#define ESHUTDOWN    108
+#define ECONNREFUSED 111
+
+//Return codes
+#define INADDR_NONE ((in_addr_t) (-1))
+
 //Macros for manipulating and checking descriptor sets
 #define FD_SETSIZE 8
 #define FD_ZERO(fds) selectFdZero(fds)
 #define FD_SET(s, fds) selectFdSet(fds, s)
 #define FD_CLR(s, fds) selectFdClr(fds, s)
 #define FD_ISSET(s, fds) selectFdIsSet(fds, s)
+
+
+/**
+ * @brief Length type
+ **/
+
+typedef int_t socklen_t;
+
+
+/**
+ * @brief IPv4 address
+ **/
+
+typedef  uint32_t in_addr_t;
 
 
 /**
@@ -153,12 +183,12 @@ typedef struct sockaddr
 
 
 /**
- * @brief Single IPv4 address
+ * @brief Structure that represents an IPv4 address
  **/
 
 typedef struct in_addr
 {
-   uint32_t s_addr;
+   in_addr_t s_addr;
 } in_addr;
 
 
@@ -176,7 +206,7 @@ typedef struct sockaddr_in
 
 
 /**
- * @brief Single IPv6 address
+ * @brief Structure that represents an IPv6 address
  **/
 
 typedef struct in6_addr
@@ -237,25 +267,28 @@ extern const in6_addr in6addr_loopback;
 
 //BSD socket API
 int_t socket(int_t family, int_t type, int_t protocol);
-int_t bind(int_t s, const sockaddr *addr, int_t addrlen);
-int_t connect(int_t s, const sockaddr *addr, int_t addrlen);
+int_t bind(int_t s, const sockaddr *addr, socklen_t addrlen);
+int_t connect(int_t s, const sockaddr *addr, socklen_t addrlen);
 int_t listen(int_t s, int_t backlog);
-int_t accept(int_t s, sockaddr *addr, int_t *addrlen);
-int_t send(int_t s, const void *data, int_t length, int_t flags);
+int_t accept(int_t s, sockaddr *addr, socklen_t *addrlen);
+int_t send(int_t s, const void *data, size_t length, int_t flags);
 
-int_t sendto(int_t s, const void *data, int_t length,
-   int_t flags, const sockaddr *addr, int_t addrlen);
+int_t sendto(int_t s, const void *data, size_t length,
+   int_t flags, const sockaddr *addr, socklen_t addrlen);
 
-int_t recv(int_t s, void *data, int_t size, int_t flags);
+int_t recv(int_t s, void *data, size_t size, int_t flags);
 
-int_t recvfrom(int_t s, void *data, int_t size,
-   int_t flags, sockaddr *addr, int_t *addrlen);
+int_t recvfrom(int_t s, void *data, size_t size,
+   int_t flags, sockaddr *addr, socklen_t *addrlen);
 
-int_t getsockname(int_t s, sockaddr *addr, int_t *addrlen);
-int_t getpeername(int_t s, sockaddr *addr, int_t *addrlen);
+int_t getsockname(int_t s, sockaddr *addr, socklen_t *addrlen);
+int_t getpeername(int_t s, sockaddr *addr, socklen_t *addrlen);
 
-int_t setsockopt(int_t s, int_t level, int_t optname, const void *optval, int_t optlen);
-int_t getsockopt(int_t s, int_t level, int_t optname, void *optval, int_t *optlen);
+int_t setsockopt(int_t s, int_t level, int_t optname,
+   const void *optval, socklen_t optlen);
+
+int_t getsockopt(int_t s, int_t level, int_t optname,
+   void *optval, socklen_t *optlen);
 
 int_t ioctlsocket(int_t s, uint32_t cmd, void *arg);
 int_t fcntl(int_t s, int_t cmd, void *arg);
@@ -272,6 +305,14 @@ void selectFdClr(fd_set *fds, int_t s);
 int_t selectFdIsSet(fd_set *fds, int_t s);
 
 int_t gethostbyname(const char_t *name, hostent *info);
+
+in_addr_t inet_addr(const char_t *cp);
+
+int_t inet_aton(const char_t *cp, in_addr *inp);
+const char_t *inet_ntoa(in_addr in, char_t *cp);
+
+int_t inet_pton(int_t af, const char_t *src, void *dst);
+const char_t *inet_ntop(int_t af, const void *src, char_t *dst, socklen_t size);
 
 #endif
 

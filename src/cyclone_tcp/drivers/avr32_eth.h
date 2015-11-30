@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _AVR32_ETH_H
@@ -158,13 +158,14 @@ void avr32EthIrqWrapper(void);
 bool_t avr32EthIrqHandler(void);
 void avr32EthEventHandler(NetInterface *interface);
 
-error_t avr32EthSetMacFilter(NetInterface *interface);
-
 error_t avr32EthSendPacket(NetInterface *interface,
    const NetBuffer *buffer, size_t offset);
 
 uint_t avr32EthReceivePacket(NetInterface *interface,
    uint8_t *buffer, size_t size);
+
+error_t avr32EthSetMulticastFilter(NetInterface *interface);
+error_t avr32EthUpdateMacConfig(NetInterface *interface);
 
 void avr32EthWritePhyReg(uint8_t phyAddr, uint8_t regAddr, uint16_t data);
 uint16_t avr32EthReadPhyReg(uint8_t phyAddr, uint8_t regAddr);

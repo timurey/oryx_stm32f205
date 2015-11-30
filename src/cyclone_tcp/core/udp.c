@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -35,6 +35,7 @@
 #include "core/ip.h"
 #include "ipv4/ipv4.h"
 #include "ipv6/ipv6.h"
+#include "ipv6/ipv6_misc.h"
 #include "core/udp.h"
 #include "core/socket.h"
 #include "debug.h"
@@ -82,7 +83,7 @@ error_t udpInit(void)
 
 uint16_t udpGetDynamicPort(void)
 {
-   uint16_t port;
+   uint_t port;
 
    //Retrieve current port number
    port = udpDynamicPort;
@@ -167,9 +168,6 @@ error_t udpProcessDatagram(NetInterface *interface,
          return ERROR_WRONG_CHECKSUM;
       }
    }
-
-   //Enter critical section
-   osAcquireMutex(&socketMutex);
 
    //Loop through opened sockets
    for(i = 0; i < SOCKET_MAX_COUNT; i++)
@@ -261,8 +259,6 @@ error_t udpProcessDatagram(NetInterface *interface,
    //No matching socket found?
    if(i >= SOCKET_MAX_COUNT)
    {
-      //Leave critical section
-      osReleaseMutex(&socketMutex);
       //Invoke user callback, if any
       error = udpInvokeRxCallback(interface, pseudoHeader, header, buffer, offset);
       //Return status code
@@ -300,12 +296,7 @@ error_t udpProcessDatagram(NetInterface *interface,
 
       //Make sure the receive queue is not full
       if(i >= UDP_RX_QUEUE_SIZE)
-      {
-         //Leave critical section
-         osReleaseMutex(&socketMutex);
-         //Notify the calling function that the queue is full
          return ERROR_RECEIVE_QUEUE_FULL;
-      }
 
       //Allocate a memory buffer to hold the data and the associated descriptor
       p = netBufferAlloc(sizeof(SocketQueueItem) + length);
@@ -328,12 +319,7 @@ error_t udpProcessDatagram(NetInterface *interface,
 
    //Failed to allocate memory?
    if(!queueItem)
-   {
-      //Leave critical section
-      osReleaseMutex(&socketMutex);
-      //Return error code
       return ERROR_OUT_OF_MEMORY;
-   }
 
    //Initialize next field
    queueItem->next = NULL;
@@ -373,8 +359,6 @@ error_t udpProcessDatagram(NetInterface *interface,
    //Notify user that data is available
    udpUpdateEvents(socket);
 
-   //Leave critical section
-   osReleaseMutex(&socketMutex);
    //Successful processing
    return NO_ERROR;
 }
@@ -474,8 +458,23 @@ error_t udpSendDatagramEx(NetInterface *interface, uint16_t srcPort, const IpAdd
       //Select the source IPv4 address and the relevant network interface
       //to use when sending data to the specified destination host
       error = ipv4SelectSourceAddr(&interface, destIpAddr->ipv4Addr, &srcIpAddr);
-      //Any error to report?
-      if(error) return error;
+
+      //Check status code
+      if(error)
+      {
+         //Handle the special case where the destination address is the
+         //broadcast address
+         if(destIpAddr->ipv4Addr == IPV4_BROADCAST_ADDR)
+         {
+            //Use the unspecified address as source address
+            srcIpAddr = IPV4_UNSPECIFIED_ADDR;
+         }
+         else
+         {
+            //Source address selection failed
+            return error;
+         }
+      }
 
       //Format IPv4 pseudo header
       pseudoHeader.length = sizeof(Ipv4PseudoHeader);
@@ -527,7 +526,9 @@ error_t udpSendDatagramEx(NetInterface *interface, uint16_t srcPort, const IpAdd
    udpDumpHeader(header);
 
    //Send UDP datagram
-   return ipSendDatagram(interface, &pseudoHeader, buffer, offset, ttl);
+   error = ipSendDatagram(interface, &pseudoHeader, buffer, offset, ttl);
+   //Return status code
+   return error;
 }
 
 
@@ -559,12 +560,13 @@ error_t udpReceiveDatagram(Socket *socket, IpAddr *srcIpAddr, uint16_t *srcPort,
          socket->eventMask = SOCKET_EVENT_RX_READY;
          //Reset the event object
          osResetEvent(&socket->event);
-         //Leave critical section
-         osReleaseMutex(&socketMutex);
+
+         //Release exclusive access
+         osReleaseMutex(&netMutex);
          //Wait until an event is triggered
          osWaitForEvent(&socket->event, socket->timeout);
-         //Enter critical section
-         osAcquireMutex(&socketMutex);
+         //Get exclusive access
+         osAcquireMutex(&netMutex);
       }
    }
 

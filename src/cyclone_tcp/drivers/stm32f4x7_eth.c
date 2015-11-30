@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -43,6 +43,9 @@
 #include "core/net.h"
 #include "drivers/stm32f4x7_eth.h"
 #include "debug.h"
+
+//Underlying network interface
+static NetInterface *nicDriverInterface;
 
 //IAR EWARM compiler?
 #if defined(__ICCARM__)
@@ -97,8 +100,9 @@ const NicDriver stm32f4x7EthDriver =
    stm32f4x7EthEnableIrq,
    stm32f4x7EthDisableIrq,
    stm32f4x7EthEventHandler,
-   stm32f4x7EthSetMacFilter,
    stm32f4x7EthSendPacket,
+   stm32f4x7EthSetMulticastFilter,
+   stm32f4x7EthUpdateMacConfig,
    stm32f4x7EthWritePhyReg,
    stm32f4x7EthReadPhyReg,
    TRUE,
@@ -120,18 +124,21 @@ error_t stm32f4x7EthInit(NetInterface *interface)
    //Debug message
    TRACE_INFO("Initializing STM32F4x7 Ethernet MAC...\r\n");
 
+   //Save underlying network interface
+   nicDriverInterface = interface;
+
    //GPIO configuration
    stm32f4x7EthInitGpio(interface);
 
 #if defined(USE_HAL_DRIVER)
    //Enable Ethernet MAC clock
-   __ETHMAC_CLK_ENABLE();
-   __ETHMACTX_CLK_ENABLE();
-   __ETHMACRX_CLK_ENABLE();
+   __HAL_RCC_ETHMAC_CLK_ENABLE();
+   __HAL_RCC_ETHMACTX_CLK_ENABLE();
+   __HAL_RCC_ETHMACRX_CLK_ENABLE();
 
    //Reset Ethernet MAC peripheral
-   __ETHMAC_FORCE_RESET();
-   __ETHMAC_RELEASE_RESET();
+   __HAL_RCC_ETHMAC_FORCE_RESET();
+   __HAL_RCC_ETHMAC_RELEASE_RESET();
 #else
    //Enable Ethernet MAC clock
    RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_ETH_MAC |
@@ -197,9 +204,7 @@ error_t stm32f4x7EthInit(NetInterface *interface)
    //Enable DMA transmission and reception
    ETH->DMAOMR |= ETH_DMAOMR_ST | ETH_DMAOMR_SR;
 
-   //Force the TCP/IP stack to check the link state
-   osSetEvent(&interface->nicRxEvent);
-   //STM32F407/417/427/437 Ethernet MAC is now ready to send
+   //Accept any packets from the upper layer
    osSetEvent(&interface->nicTxEvent);
 
    //Successful initialization
@@ -207,9 +212,10 @@ error_t stm32f4x7EthInit(NetInterface *interface)
 }
 
 
-//STM3240G-EVAL, STM32F4-DISCOVERY, MCBSTM32F400 or STM-P407 evaluation board?
+//STM3240G-EVAL, STM32F4-DISCOVERY, MCBSTM32F400
+//STM32-E407 or STM-P407 evaluation board?
 #if defined(USE_STM324xG_EVAL) || defined(USE_STM32F4_DISCOVERY) || \
-   defined(USE_MCBSTM32F400) || defined(USE_STM32_P407)
+   defined(USE_MCBSTM32F400) || defined(USE_STM32_E407) || defined(USE_STM32_P407)
 
 /**
  * @brief GPIO configuration
@@ -221,7 +227,64 @@ void stm32f4x7EthInitGpio(NetInterface *interface)
    GPIO_InitTypeDef GPIO_InitStructure;
 
 //STM3240G-EVAL evaluation board?
-#if defined(USE_STM324xG_EVAL)
+#if defined(USE_STM324xG_EVAL) && defined(USE_HAL_DRIVER)
+   //Enable SYSCFG clock
+   __HAL_RCC_SYSCFG_CLK_ENABLE();
+
+   //Enable GPIO clocks
+   __HAL_RCC_GPIOA_CLK_ENABLE();
+   __HAL_RCC_GPIOB_CLK_ENABLE();
+   __HAL_RCC_GPIOC_CLK_ENABLE();
+   __HAL_RCC_GPIOG_CLK_ENABLE();
+   __HAL_RCC_GPIOH_CLK_ENABLE();
+   __HAL_RCC_GPIOI_CLK_ENABLE();
+
+   //Configure MCO1 (PA8) as an output
+   GPIO_InitStructure.Pin = GPIO_PIN_8;
+   GPIO_InitStructure.Mode = GPIO_MODE_AF_PP;
+   GPIO_InitStructure.Pull = GPIO_NOPULL;
+   GPIO_InitStructure.Speed = GPIO_SPEED_HIGH;
+   GPIO_InitStructure.Alternate = GPIO_AF0_MCO;
+   HAL_GPIO_Init(GPIOA, &GPIO_InitStructure);
+
+   //Configure MCO1 pin to output the HSE clock (25MHz)
+   HAL_RCC_MCOConfig(RCC_MCO1, RCC_MCO1SOURCE_HSE, RCC_MCODIV_1);
+
+   //Select MII interface mode
+   SYSCFG->PMC &= ~SYSCFG_PMC_MII_RMII_SEL;
+
+   //Configure MII pins
+   GPIO_InitStructure.Mode = GPIO_MODE_AF_PP;
+   GPIO_InitStructure.Pull = GPIO_NOPULL;
+   GPIO_InitStructure.Speed = GPIO_SPEED_HIGH;
+   GPIO_InitStructure.Alternate = GPIO_AF11_ETH;
+
+   //Configure ETH_MII_RX_CLK (PA1), ETH_MDIO (PA2) and ETH_MII_RX_DV (PA7)
+   GPIO_InitStructure.Pin = GPIO_PIN_1 | GPIO_PIN_2 | GPIO_PIN_7;
+   HAL_GPIO_Init(GPIOA, &GPIO_InitStructure);
+
+   //Configure ETH_PPS_OUT (PB5) and ETH_MII_TXD3 (PB8)
+   GPIO_InitStructure.Pin = GPIO_PIN_5 | GPIO_PIN_8;
+   HAL_GPIO_Init(GPIOB, &GPIO_InitStructure);
+
+   //Configure ETH_MDC (PC1), ETH_MII_TXD2 (PC2), ETH_MII_TX_CLK (PC3),
+   //ETH_MII_RXD0 (PC4) and ETH_MII_RXD1 (PC5)
+   GPIO_InitStructure.Pin = GPIO_PIN_1 | GPIO_PIN_2 | GPIO_PIN_3 | GPIO_PIN_4 | GPIO_PIN_5;
+   HAL_GPIO_Init(GPIOC, &GPIO_InitStructure);
+
+   //Configure ETH_MII_TX_EN (PG11), ETH_MII_TXD0 (PG13) and ETH_MII_TXD1 (PG14)
+   GPIO_InitStructure.Pin = GPIO_PIN_11 | GPIO_PIN_13 | GPIO_PIN_14;
+   HAL_GPIO_Init(GPIOG, &GPIO_InitStructure);
+
+   //Configure ETH_MII_CRS (PH2), ETH_MII_COL (PH3), ETH_MII_RXD2 (PH6) and ETH_MII_RXD3 (PH7)
+   GPIO_InitStructure.Pin = GPIO_PIN_2 | GPIO_PIN_3 | GPIO_PIN_6 | GPIO_PIN_7;
+   HAL_GPIO_Init(GPIOH, &GPIO_InitStructure);
+
+   //Configure ETH_MII_RX_ER (PI10)
+   GPIO_InitStructure.Pin = GPIO_PIN_10;
+   HAL_GPIO_Init(GPIOI, &GPIO_InitStructure);
+
+#elif defined(USE_STM324xG_EVAL)
    //Enable SYSCFG clock
    RCC_APB2PeriphClockCmd(RCC_APB2Periph_SYSCFG, ENABLE);
 
@@ -327,12 +390,12 @@ void stm32f4x7EthInitGpio(NetInterface *interface)
 //MCBSTM32F400 evaluation board?
 #elif defined(USE_MCBSTM32F400) && defined(USE_HAL_DRIVER)
    //Enable SYSCFG clock
-   __SYSCFG_CLK_ENABLE();
+   __HAL_RCC_SYSCFG_CLK_ENABLE();
 
    //Enable GPIO clocks
-   __GPIOA_CLK_ENABLE();
-   __GPIOC_CLK_ENABLE();
-   __GPIOG_CLK_ENABLE();
+   __HAL_RCC_GPIOA_CLK_ENABLE();
+   __HAL_RCC_GPIOC_CLK_ENABLE();
+   __HAL_RCC_GPIOG_CLK_ENABLE();
 
    //Select RMII interface mode
    SYSCFG->PMC |= SYSCFG_PMC_MII_RMII_SEL;
@@ -390,6 +453,59 @@ void stm32f4x7EthInitGpio(NetInterface *interface)
    GPIO_PinAFConfig(GPIOG, GPIO_PinSource11, GPIO_AF_ETH);
    GPIO_PinAFConfig(GPIOG, GPIO_PinSource13, GPIO_AF_ETH);
    GPIO_PinAFConfig(GPIOG, GPIO_PinSource14, GPIO_AF_ETH);
+
+//STM32-E407 evaluation board?
+#elif defined(USE_STM32_E407)
+   //Enable SYSCFG clock
+   RCC_APB2PeriphClockCmd(RCC_APB2Periph_SYSCFG, ENABLE);
+
+   //Enable GPIO clocks
+   RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOA |
+      RCC_AHB1Periph_GPIOC | RCC_AHB1Periph_GPIOG, ENABLE);
+
+   //Select RMII interface mode
+   SYSCFG_ETH_MediaInterfaceConfig(SYSCFG_ETH_MediaInterface_RMII);
+
+   //Configure ETH_RMII_REF_CLK (PA1), ETH_MDIO (PA2) and ETH_RMII_CRS_DV (PA7)
+   GPIO_InitStructure.GPIO_Pin = GPIO_Pin_1 | GPIO_Pin_2 | GPIO_Pin_7;
+   GPIO_InitStructure.GPIO_Speed = GPIO_Speed_100MHz;
+   GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF;
+   GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
+   GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_NOPULL;
+   GPIO_Init(GPIOA, &GPIO_InitStructure);
+   GPIO_PinAFConfig(GPIOA, GPIO_PinSource1, GPIO_AF_ETH);
+   GPIO_PinAFConfig(GPIOA, GPIO_PinSource2, GPIO_AF_ETH);
+   GPIO_PinAFConfig(GPIOA, GPIO_PinSource7, GPIO_AF_ETH);
+
+   //Configure ETH_MDC (PC1), ETH_RMII_RXD0 (PC4) and ETH_RMII_RXD1 (PC5)
+   GPIO_InitStructure.GPIO_Pin = GPIO_Pin_1 | GPIO_Pin_4 | GPIO_Pin_5;
+   GPIO_Init(GPIOC, &GPIO_InitStructure);
+   GPIO_PinAFConfig(GPIOC, GPIO_PinSource1, GPIO_AF_ETH);
+   GPIO_PinAFConfig(GPIOC, GPIO_PinSource4, GPIO_AF_ETH);
+   GPIO_PinAFConfig(GPIOC, GPIO_PinSource5, GPIO_AF_ETH);
+
+   //Configure ETH_RMII_TX_EN (PG11), ETH_RMII_TXD0 (PG13) and ETH_RMII_TXD1 (PG14)
+   GPIO_InitStructure.GPIO_Pin = GPIO_Pin_11 | GPIO_Pin_13 | GPIO_Pin_14;
+   GPIO_Init(GPIOG, &GPIO_InitStructure);
+   GPIO_PinAFConfig(GPIOG, GPIO_PinSource11, GPIO_AF_ETH);
+   GPIO_PinAFConfig(GPIOG, GPIO_PinSource13, GPIO_AF_ETH);
+   GPIO_PinAFConfig(GPIOG, GPIO_PinSource14, GPIO_AF_ETH);
+
+   //Configure PHY_RST (PG6)
+   GPIO_InitStructure.GPIO_Pin = GPIO_Pin_6;
+   GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
+   GPIO_InitStructure.GPIO_Mode = GPIO_Mode_OUT;
+   GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
+   GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_NOPULL;
+   GPIO_Init(GPIOG, &GPIO_InitStructure);
+
+   //Reset PHY transceiver
+   GPIO_ResetBits(GPIOG, GPIO_Pin_6);
+   sleep(10);
+
+   //Take the PHY transceiver out of reset
+   GPIO_SetBits(GPIOG, GPIO_Pin_6);
+   sleep(10);
 
 //STM32-P407 evaluation board?
 #elif defined(USE_STM32_P407)
@@ -554,13 +670,10 @@ void ETH_IRQHandler(void)
 {
    bool_t flag;
    uint32_t status;
-   NetInterface *interface;
 
    //Enter interrupt service routine
    osEnterIsr();
 
-   //Point to the structure describing the network interface
-   interface = &netInterface[0];
    //This flag will be set if a higher priority task must be woken
    flag = FALSE;
 
@@ -576,18 +689,21 @@ void ETH_IRQHandler(void)
       //Check whether the TX buffer is available for writing
       if(!(txCurDmaDesc->tdes0 & ETH_TDES0_OWN))
       {
-         //Notify the user that the transmitter is ready to send
-         flag |= osSetEventFromIsr(&interface->nicTxEvent);
+         //Notify the TCP/IP stack that the transmitter is ready to send
+         flag |= osSetEventFromIsr(&nicDriverInterface->nicTxEvent);
       }
    }
+
    //A packet has been received?
    if(status & ETH_DMASR_RS)
    {
       //Disable RIE interrupt
       ETH->DMAIER &= ~ETH_DMAIER_RIE;
 
-      //Notify the user that a packet has been received
-      flag |= osSetEventFromIsr(&interface->nicRxEvent);
+      //Set event flag
+      nicDriverInterface->nicEvent = TRUE;
+      //Notify the TCP/IP stack of the event
+      flag |= osSetEventFromIsr(&netEvent);
    }
 
    //Clear NIS interrupt flag
@@ -607,45 +723,6 @@ void stm32f4x7EthEventHandler(NetInterface *interface)
 {
    error_t error;
    size_t length;
-   bool_t linkStateChange;
-
-   //PHY event is pending?
-   if(interface->phyEvent)
-   {
-      //Acknowledge the event by clearing the flag
-      interface->phyEvent = FALSE;
-      //Handle PHY specific events
-      linkStateChange = interface->phyDriver->eventHandler(interface);
-
-      //Check whether the link state has changed?
-      if(linkStateChange)
-      {
-         //Set speed and duplex mode for proper operation
-         if(interface->linkState)
-         {
-            //Read current MAC configuration
-            uint32_t config = ETH->MACCR;
-
-            //10BASE-T or 100BASE-TX operation mode?
-            if(interface->speed100)
-               config |= ETH_MACCR_FES;
-            else
-               config &= ~ETH_MACCR_FES;
-
-            //Half-duplex or full-duplex mode?
-            if(interface->fullDuplex)
-               config |= ETH_MACCR_DM;
-            else
-               config &= ~ETH_MACCR_DM;
-
-            //Update MAC configuration register
-            ETH->MACCR = config;
-         }
-
-         //Process link state change event
-         nicNotifyLinkChange(interface);
-      }
-   }
 
    //Packet received?
    if(ETH->DMASR & ETH_DMASR_RS)
@@ -673,51 +750,6 @@ void stm32f4x7EthEventHandler(NetInterface *interface)
 
    //Re-enable DMA interrupts
    ETH->DMAIER |= ETH_DMAIER_NISE | ETH_DMAIER_RIE | ETH_DMAIER_TIE;
-}
-
-
-/**
- * @brief Configure multicast MAC address filtering
- * @param[in] interface Underlying network interface
- * @return Error code
- **/
-
-error_t stm32f4x7EthSetMacFilter(NetInterface *interface)
-{
-   uint_t i;
-   uint_t k;
-   uint32_t crc;
-   uint32_t hashTable[2];
-
-   //Debug message
-   TRACE_INFO("Updating STM32F4x7 hash table...\r\n");
-
-   //Clear hash table
-   hashTable[0] = 0;
-   hashTable[1] = 0;
-
-   //The MAC filter table contains the multicast MAC addresses
-   //to accept when receiving an Ethernet frame
-   for(i = 0; i < interface->macFilterSize; i++)
-   {
-      //Compute CRC over the current MAC address
-      crc = stm32f4x7EthCalcCrc(&interface->macFilter[i].addr, sizeof(MacAddr));
-      //The upper 6 bits in the CRC register are used to index the contents of the hash table
-      k = (crc >> 26) & 0x3F;
-      //Update hash table contents
-      hashTable[k / 32] |= (1 << (k % 32));
-   }
-
-   //Write the hash table
-   ETH->MACHTLR = hashTable[0];
-   ETH->MACHTHR = hashTable[1];
-
-   //Debug message
-   TRACE_INFO("  MACHTLR = %08" PRIX32 "\r\n", ETH->MACHTLR);
-   TRACE_INFO("  MACHTHR = %08" PRIX32 "\r\n", ETH->MACHTHR);
-
-   //Successful processing
-   return NO_ERROR;
 }
 
 
@@ -853,6 +885,95 @@ error_t stm32f4x7EthReceivePacket(NetInterface *interface,
 
    //Return status code
    return error;
+}
+
+
+/**
+ * @brief Configure multicast MAC address filtering
+ * @param[in] interface Underlying network interface
+ * @return Error code
+ **/
+
+error_t stm32f4x7EthSetMulticastFilter(NetInterface *interface)
+{
+   uint_t i;
+   uint_t k;
+   uint32_t crc;
+   uint32_t hashTable[2];
+   MacFilterEntry *entry;
+
+   //Debug message
+   TRACE_DEBUG("Updating STM32F4x7 hash table...\r\n");
+
+   //Clear hash table
+   hashTable[0] = 0;
+   hashTable[1] = 0;
+
+   //The MAC filter table contains the multicast MAC addresses
+   //to accept when receiving an Ethernet frame
+   for(i = 0; i < MAC_MULTICAST_FILTER_SIZE; i++)
+   {
+      //Point to the current entry
+      entry = &interface->macMulticastFilter[i];
+
+      //Valid entry?
+      if(entry->refCount > 0)
+      {
+         //Compute CRC over the current MAC address
+         crc = stm32f4x7EthCalcCrc(&entry->addr, sizeof(MacAddr));
+
+         //The upper 6 bits in the CRC register are used to index the
+         //contents of the hash table
+         k = (crc >> 26) & 0x3F;
+
+         //Update hash table contents
+         hashTable[k / 32] |= (1 << (k % 32));
+      }
+   }
+
+   //Write the hash table
+   ETH->MACHTLR = hashTable[0];
+   ETH->MACHTHR = hashTable[1];
+
+   //Debug message
+   TRACE_DEBUG("  MACHTLR = %08" PRIX32 "\r\n", ETH->MACHTLR);
+   TRACE_DEBUG("  MACHTHR = %08" PRIX32 "\r\n", ETH->MACHTHR);
+
+   //Successful processing
+   return NO_ERROR;
+}
+
+
+/**
+ * @brief Adjust MAC configuration parameters for proper operation
+ * @param[in] interface Underlying network interface
+ * @return Error code
+ **/
+
+error_t stm32f4x7EthUpdateMacConfig(NetInterface *interface)
+{
+   uint32_t config;
+
+   //Read current MAC configuration
+   config = ETH->MACCR;
+
+   //10BASE-T or 100BASE-TX operation mode?
+   if(interface->linkSpeed == NIC_LINK_SPEED_100MBPS)
+      config |= ETH_MACCR_FES;
+   else
+      config &= ~ETH_MACCR_FES;
+
+   //Half-duplex or full-duplex mode?
+   if(interface->duplexMode == NIC_FULL_DUPLEX_MODE)
+      config |= ETH_MACCR_DM;
+   else
+      config &= ~ETH_MACCR_DM;
+
+   //Update MAC configuration register
+   ETH->MACCR = config;
+
+   //Successful processing
+   return NO_ERROR;
 }
 
 

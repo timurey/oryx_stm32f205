@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _DP83620_H
@@ -521,7 +521,7 @@ void dp83620Tick(NetInterface *interface);
 void dp83620EnableIrq(NetInterface *interface);
 void dp83620DisableIrq(NetInterface *interface);
 
-bool_t dp83620EventHandler(NetInterface *interface);
+void dp83620EventHandler(NetInterface *interface);
 
 void dp83620WritePhyReg(NetInterface *interface, uint8_t address, uint16_t data);
 uint16_t dp83620ReadPhyReg(NetInterface *interface, uint8_t address);

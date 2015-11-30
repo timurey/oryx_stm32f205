@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _STM32F4X9_ETH_H
@@ -202,13 +202,14 @@ void stm32f4x9EthEnableIrq(NetInterface *interface);
 void stm32f4x9EthDisableIrq(NetInterface *interface);
 void stm32f4x9EthEventHandler(NetInterface *interface);
 
-error_t stm32f4x9EthSetMacFilter(NetInterface *interface);
-
 error_t stm32f4x9EthSendPacket(NetInterface *interface,
    const NetBuffer *buffer, size_t offset);
 
 error_t stm32f4x9EthReceivePacket(NetInterface *interface,
    uint8_t *buffer, size_t size, size_t *length);
+
+error_t stm32f4x9EthSetMulticastFilter(NetInterface *interface);
+error_t stm32f4x9EthUpdateMacConfig(NetInterface *interface);
 
 void stm32f4x9EthWritePhyReg(uint8_t phyAddr, uint8_t regAddr, uint16_t data);
 uint16_t stm32f4x9EthReadPhyReg(uint8_t phyAddr, uint8_t regAddr);

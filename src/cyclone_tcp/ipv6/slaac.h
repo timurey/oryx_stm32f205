@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _SLAAC_H
@@ -40,27 +40,28 @@
    #error SLAAC_SUPPORT parameter is not valid
 #endif
 
-//SLAAC tick interval
-#ifndef SLAAC_TICK_INTERVAL
-   #define SLAAC_TICK_INTERVAL 200
-#elif (SLAAC_TICK_INTERVAL < 100)
-   #error SLAAC_TICK_INTERVAL parameter is not valid
-#endif
+//Time constant
+#define SLAAC_LIFETIME_2_HOURS (2 * 3600 * 1000)
+
+//Forward declaration of SlaacContext structure
+struct _SlaacContext;
+#define SlaacContext struct _SlaacContext
 
 
 /**
- * @brief SLAAC FSM states
+ * @brief Link state change callback
  **/
 
-typedef enum
-{
-   SLAAC_STATE_INIT,
-   SLAAC_STATE_LINK_LOCAL_ADDR_DAD,
-   SLAAC_STATE_ROUTER_SOLICIT,
-   SLAAC_STATE_GLOBAL_ADDR_DAD,
-   SLAAC_STATE_CONFIGURED,
-   SLAAC_STATE_ERROR
-} SlaacState;
+typedef void (*SlaacLinkChangeCallback)(SlaacContext *context,
+   NetInterface *interface, bool_t linkState);
+
+
+/**
+ * @brief Router Advertisement parsing callback
+ **/
+
+typedef void (*SlaacParseRouterAdvCallback)(SlaacContext *context,
+   NdpRouterAdvMessage *message, size_t length);
 
 
 /**
@@ -69,8 +70,10 @@ typedef enum
 
 typedef struct
 {
-   NetInterface *interface; ///<Network interface to configure
-   bool_t manualDnsConfig;  ///<Force manual DNS configuration
+   NetInterface *interface;                            ///<Network interface to configure
+   bool_t manualDnsConfig;                             ///<Force manual DNS configuration
+   SlaacLinkChangeCallback linkChangeEvent;            ///<Link state change event
+   SlaacParseRouterAdvCallback parseRouterAdvCallback; ///<Router Advertisement parsing callback
 } SlaacSettings;
 
 
@@ -78,44 +81,12 @@ typedef struct
  * @brief SLAAC context
  **/
 
-typedef struct
+struct _SlaacContext
 {
-   NetInterface *interface; ///<Underlying network interface
-   bool_t manualDnsConfig;  ///<Force manual DNS configuration
-   OsMutex mutex;           ///<Mutex preventing simultaneous access to SLAAC functions
-   bool_t running;          ///<SLAAC is currently running
-   SlaacState state;        ///<Current state of the FSM
-   systime_t timestamp;     ///<Timestamp to manage retransmissions
-   systime_t timeout;       ///<Timeout value
-   uint_t retransmitCount;  ///<Retransmission counter
-} SlaacContext;
-
-
-//Win32 compiler?
-#if defined(_WIN32)
-   #pragma pack(push, 1)
-#endif
-
-
-/**
- * @brief IPv6 modified EUI-64 identifier
- **/
-
-typedef __start_packed struct
-{
-   __start_packed union
-   {
-      uint8_t b[8];
-      uint16_t w[4];
-      uint32_t dw[2];
-   };
-} __end_packed Eui64;
-
-
-//Win32 compiler?
-#if defined(_WIN32)
-   #pragma pack(pop)
-#endif
+   SlaacSettings settings; ///<SLAAC settings
+   bool_t running;         ///<SLAAC is currently running
+   bool_t configUpdated;   ///<This flag is set when IPv6 configuration has been updated
+};
 
 
 //SLAAC related functions
@@ -123,16 +94,17 @@ void slaacGetDefaultSettings(SlaacSettings *settings);
 error_t slaacInit(SlaacContext *context, const SlaacSettings *settings);
 error_t slaacStart(SlaacContext *context);
 error_t slaacStop(SlaacContext *context);
-SlaacState slaacGetState(SlaacContext *context);
 
-void slaacTick(SlaacContext *context);
 void slaacLinkChangeEvent(SlaacContext *context);
 
-void slaacProcessRouterAdv(SlaacContext *context,
-   const Ipv6Addr *srcAddr, NdpRouterAdvMessage *message, size_t length);
+void slaacParseRouterAdv(SlaacContext *context,
+   NdpRouterAdvMessage *message, size_t length);
+
+void slaacParsePrefixInfoOption(SlaacContext *context,
+   NdpPrefixInfoOption *option);
+
+error_t slaacGenerateLinkLocalAddr(SlaacContext *context);
 
 void slaacDumpConfig(SlaacContext *context);
-
-void macAddrToEui64(const MacAddr *macAddr, Eui64 *interfaceId);
 
 #endif

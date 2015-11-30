@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -40,6 +40,9 @@
 
 //Check TCP/IP stack configuration
 #if (TCP_SUPPORT == ENABLED)
+
+//Tick counter to handle periodic operations
+systime_t tcpTickCounter;
 
 //Ephemeral ports are used for dynamic port assignment
 static uint16_t tcpDynamicPort;
@@ -67,7 +70,7 @@ error_t tcpInit(void)
 
 uint16_t tcpGetDynamicPort(void)
 {
-   uint16_t port;
+   uint_t port;
 
    //Retrieve current port number
    port = tcpDynamicPort;
@@ -217,8 +220,8 @@ Socket *tcpAccept(Socket *socket, IpAddr *clientIpAddr, uint16_t *clientPort)
    if(tcpGetState(socket) != TCP_STATE_LISTEN)
       return NULL;
 
-   //Enter critical section
-   osAcquireMutex(&socketMutex);
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
 
    //Wait for an connection attempt
    while(1)
@@ -230,12 +233,13 @@ Socket *tcpAccept(Socket *socket, IpAddr *clientIpAddr, uint16_t *clientPort)
          socket->eventMask = SOCKET_EVENT_RX_READY;
          //Reset the event object
          osResetEvent(&socket->event);
-         //Leave critical section
-         osReleaseMutex(&socketMutex);
+
+         //Release exclusive access
+         osReleaseMutex(&netMutex);
          //Wait until a SYN message is received from a client
          osWaitForEvent(&socket->event, socket->timeout);
-         //Enter critical section
-         osAcquireMutex(&socketMutex);
+         //Get exclusive access
+         osAcquireMutex(&netMutex);
       }
 
       //Check whether the queue is still empty
@@ -256,12 +260,12 @@ Socket *tcpAccept(Socket *socket, IpAddr *clientIpAddr, uint16_t *clientPort)
       if(clientPort)
          *clientPort = queueItem->srcPort;
 
-      //Leave critical section
-      osReleaseMutex(&socketMutex);
+      //Release exclusive access
+      osReleaseMutex(&netMutex);
       //Create a new socket to handle the incoming connection request
       newSocket = socketOpen(SOCKET_TYPE_STREAM, SOCKET_IP_PROTO_TCP);
-      //Enter critical section
-      osAcquireMutex(&socketMutex);
+      //Get exclusive access
+      osAcquireMutex(&netMutex);
 
       //Socket successfully created?
       if(newSocket != NULL)
@@ -312,10 +316,13 @@ Socket *tcpAccept(Socket *socket, IpAddr *clientIpAddr, uint16_t *clientPort)
 
             //Default retransmission timeout
             newSocket->rto = TCP_INITIAL_RTO;
+
+#if (TCP_CONGESTION_CONTROL_SUPPORT == ENABLED)
             //Initial congestion window
             newSocket->cwnd = MIN(TCP_INITIAL_WINDOW * newSocket->mss, newSocket->txBufferSize);
             //Slow start threshold should be set arbitrarily high
             newSocket->ssthresh = UINT16_MAX;
+#endif
 
             //Send a SYN ACK control segment
             error = tcpSendSegment(newSocket, TCP_FLAG_SYN | TCP_FLAG_ACK,
@@ -354,8 +361,8 @@ Socket *tcpAccept(Socket *socket, IpAddr *clientIpAddr, uint16_t *clientPort)
       //Wait for the next connection attempt
    }
 
-   //Leave critical section
-   osReleaseMutex(&socketMutex);
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //Return a handle to the newly created socket
    return newSocket;
@@ -727,8 +734,20 @@ error_t tcpShutdown(Socket *socket, uint_t how)
          //Continue processing...
          break;
 
-      //SYN-SENT, FIN-WAIT-1, FIN-WAIT-2, CLOSING,
-      //TIME-WAIT or LAST-ACK state?
+      //FIN-WAIT-1, CLOSING or LAST-ACK state?
+      case TCP_STATE_FIN_WAIT_1:
+      case TCP_STATE_CLOSING:
+      case TCP_STATE_LAST_ACK:
+         //Wait for the FIN to be acknowledged
+         event = tcpWaitForEvents(socket, SOCKET_EVENT_TX_SHUTDOWN, socket->timeout);
+         //Timeout interval elapsed?
+         if(event != SOCKET_EVENT_TX_SHUTDOWN)
+            return ERROR_TIMEOUT;
+
+         //Continue processing...
+         break;
+
+      //SYN-SENT, FIN-WAIT-2 or TIME-WAIT state?
       default:
          //Continue processing...
          break;
@@ -847,12 +866,14 @@ TcpState tcpGetState(Socket *socket)
 {
    TcpState state;
 
-   //Enter critical section
-   osAcquireMutex(&socketMutex);
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
+
    //Get TCP FSM current state
    state = socket->state;
-   //Leave critical section
-   osReleaseMutex(&socketMutex);
+
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //Return current state
    return state;
@@ -861,7 +882,7 @@ TcpState tcpGetState(Socket *socket)
 
 /**
  * @brief Kill the oldest socket in the TIME-WAIT state
- * @return Handle identyfying the oldest TCP connection in the TIME-WAIT state.
+ * @return Handle identifying the oldest TCP connection in the TIME-WAIT state.
  *   NULL is returned if no socket is currently in the TIME-WAIT state
  **/
 

@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -130,7 +130,7 @@ error_t snmpParseVarBinding(const uint8_t *p,
 
    //Point to the next item
    p += tag.totalLength;
-   length += tag.totalLength;
+   length -= tag.totalLength;
 
    //Read object value
    error = asn1ReadTag(p, length, &tag);
@@ -256,7 +256,7 @@ error_t snmpWriteVarBinding(SnmpAgentContext *context, const SnmpVarBind *var)
 
    //Update the length of the list
    context->response.varBindListLen += tag.totalLength;
-   //Number of bytes available in the reponse buffer
+   //Number of bytes available in the response buffer
    context->response.bytesAvailable -= tag.totalLength;
 
    //Successful processing
@@ -274,7 +274,7 @@ error_t snmpCopyVarBindingList(SnmpAgentContext *context)
 {
    size_t n;
 
-   //Number of bytes available in the reponse buffer
+   //Number of bytes available in the response buffer
    n = SNMP_MSG_MAX_SIZE - SNMP_MSG_HEADER_OVERHEAD -
       context->response.communityLen;
 
@@ -375,11 +375,12 @@ error_t snmpTranslateStatusCode(SnmpAgentContext *context, error_t status, uint_
          break;
       case ERROR_READ_FAILED:
       case ERROR_WRITE_FAILED:
+      case ERROR_NOT_WRITABLE:
          //Return genError status code
          context->response.errorStatus = SNMP_ERROR_GENERIC;
          context->response.errorIndex = index;
          break;
-      case SNMP_ERROR_TOO_BIG:
+      case ERROR_BUFFER_OVERFLOW:
          //Return tooBig status code
          context->response.errorStatus = SNMP_ERROR_TOO_BIG;
          context->response.errorIndex = 0;
@@ -412,10 +413,12 @@ error_t snmpTranslateStatusCode(SnmpAgentContext *context, error_t status, uint_
          //Return wrongType status code
          context->response.errorStatus = SNMP_ERROR_WRONG_TYPE;
          context->response.errorIndex = index;
+         break;
       case ERROR_WRONG_LENGTH:
          //Return wrongLength status code
          context->response.errorStatus = SNMP_ERROR_WRONG_LENGTH;
          context->response.errorIndex = index;
+         break;
       case ERROR_WRONG_ENCODING:
          //Return wrongEncoding status code
          context->response.errorStatus = SNMP_ERROR_WRONG_ENCODING;
@@ -432,7 +435,12 @@ error_t snmpTranslateStatusCode(SnmpAgentContext *context, error_t status, uint_
          context->response.errorStatus = SNMP_ERROR_GENERIC;
          context->response.errorIndex = index;
          break;
-      case SNMP_ERROR_TOO_BIG:
+      case ERROR_NOT_WRITABLE:
+         //Return notWritable status code
+         context->response.errorStatus = SNMP_ERROR_NOT_WRITABLE;
+         context->response.errorIndex = index;
+         break;
+      case ERROR_BUFFER_OVERFLOW:
          //Return tooBig status code
          context->response.errorStatus = SNMP_ERROR_TOO_BIG;
          context->response.errorIndex = 0;
@@ -466,18 +474,16 @@ error_t snmpSetObjectValue(SnmpAgentContext *context, SnmpVarBind *var, bool_t c
    const MibObject *object;
 
    //Search the MIB for the specified object
-   object = snmpFindMibObject(context, var->oid, var->oidLen);
-
+   error = snmpFindMibObject(context, var->oid, var->oidLen, &object);
    //Cannot found the specified object?
-   if(object == NULL)
-      return ERROR_OBJECT_NOT_FOUND;
+   if(error) return error;
 
    //Debug message
    TRACE_INFO("  %s\r\n", object->name);
 
    //Make sure the specified object is available for set operations
    if(object->access != MIB_ACCESS_READ_WRITE)
-      return ERROR_ACCESS_DENIED;
+      return ERROR_NOT_WRITABLE;
 
    //Check class
    if(var->class != object->class)
@@ -619,11 +625,9 @@ error_t snmpGetObjectValue(SnmpAgentContext *context, SnmpVarBind *var)
    const MibObject *object;
 
    //Search the MIB for the specified object
-   object = snmpFindMibObject(context, var->oid, var->oidLen);
-
+   error = snmpFindMibObject(context, var->oid, var->oidLen, &object);
    //Cannot found the specified object?
-   if(object == NULL)
-      return ERROR_OBJECT_NOT_FOUND;
+   if(error) return error;
 
    //Debug message
    TRACE_INFO("  %s\r\n", object->name);
@@ -857,64 +861,120 @@ error_t snmpGetNextObject(SnmpAgentContext *context, SnmpVarBind *var)
  * @param[in] context Pointer to the SNMP agent context
  * @param[in] oid Object identifier
  * @param[in] oidLen Length of the OID
- * @return Pointer the MIB object descriptor
+ * @param[out] object Pointer the MIB object descriptor
+ * @return Error code
  **/
 
-const MibObject *snmpFindMibObject(SnmpAgentContext *context,
-   const uint8_t *oid, size_t oidLen)
+error_t snmpFindMibObject(SnmpAgentContext *context,
+   const uint8_t *oid, size_t oidLen, const MibObject **object)
 {
+   error_t error;
    uint_t i;
    uint_t j;
-   const MibObject *object;
+   const MibObject *p;
+
+   //Initialize status code
+   error = ERROR_OBJECT_NOT_FOUND;
 
    //Loop through MIBs
    for(i = 0; i < context->mibModuleCount; i++)
    {
       //Point the first object of the MIB
-      object = context->mibModule[i]->objects;
+      p = context->mibModule[i]->objects;
 
       //Loop through objects
       for(j = 0; j < context->mibModule[i]->numObjects; j++)
       {
-         //Scalar or tabular object?
-         if(object->getNext == NULL)
+         //Check the length of the OID
+         if(oidLen > p->oidLen)
          {
-            //Check the length of the OID
-            if(oidLen == (object->oidLen + 1))
+            //Compare object names
+            if(!memcmp(oid, p->oid, p->oidLen))
             {
-               //Compare object names
-               if(!memcmp(oid, object->oid, object->oidLen))
+               //Scalar object?
+               if(p->getNext == NULL)
                {
                   //The instance sub-identifier shall be 0 for scalar objects
-                  if(oid[oidLen - 1] == 0)
+                  if(oidLen == (p->oidLen + 1) && oid[oidLen - 1] == 0)
                   {
                      //Return a pointer to the matching object
-                     return object;
+                     *object = p;
+                     //No error to report
+                     error = NO_ERROR;
+                  }
+                  else
+                  {
+                     //No such instance...
+                     error = ERROR_INSTANCE_NOT_FOUND;
                   }
                }
-            }
-         }
-         else
-         {
-            //Check the length of the OID
-            if(oidLen > object->oidLen)
-            {
-               //Compare object identifiers
-               if(!memcmp(oid, object->oid, object->oidLen))
+               //Tabular object?
+               else
                {
                   //Return a pointer to the matching object
-                  return object;
+                  *object = p;
+                  //No error to report
+                  error = NO_ERROR;
                }
+
+               //Exit immediately
+               break;
             }
          }
 
          //Point to the next object in the MIB
-         object++;
+         p++;
       }
    }
 
-   //No matching object in MIBs...
-   return NULL;
+   //Return status code
+   return error;
+}
+
+
+/**
+* @brief Check whether the specified object identifier is valid
+* @param[in] oid Pointer to the object identifier
+* @param[in] length Length of the OID, in bytes
+* @return Error code
+**/
+
+error_t snmpCheckOid(const uint8_t *oid, size_t length)
+{
+   size_t i;
+   size_t n;
+
+   //Check parameters
+   if(oid == NULL)
+      return ERROR_INVALID_PARAMETER;
+
+   //Check the length of the OID
+   if(length == 0)
+   {
+      //Report an error
+      return ERROR_INVALID_SYNTAX;
+   }
+   else if(length > 1)
+   {
+      //Parse the object identifier
+      for(i = 1, n = 2; i < length; i++)
+      {
+         //Retrieve the total number of sub-identifiers
+         if(!(oid[i] & OID_MORE_FLAG))
+            n++;
+
+         //SNMP limits object identifier values to a maximum of 128 sub-identifiers
+         if(n > 128)
+            return ERROR_INVALID_SYNTAX;
+      }
+
+      //Ensure that the last sub-identifier is valid
+      if(oid[length - 1] & OID_MORE_FLAG)
+         return ERROR_INVALID_SYNTAX;
+   }
+
+   //The specified OID is valid
+   return NO_ERROR;
 }
 
 #endif

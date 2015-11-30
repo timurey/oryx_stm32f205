@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -36,6 +36,9 @@
 #include "core/net.h"
 #include "drivers/stm32f2x7_eth.h"
 #include "debug.h"
+
+//Underlying network interface
+static NetInterface *nicDriverInterface;
 
 //IAR EWARM compiler?
 #if defined(__ICCARM__)
@@ -90,8 +93,9 @@ const NicDriver stm32f2x7EthDriver =
    stm32f2x7EthEnableIrq,
    stm32f2x7EthDisableIrq,
    stm32f2x7EthEventHandler,
-   stm32f2x7EthSetMacFilter,
    stm32f2x7EthSendPacket,
+   stm32f2x7EthSetMulticastFilter,
+   stm32f2x7EthUpdateMacConfig,
    stm32f2x7EthWritePhyReg,
    stm32f2x7EthReadPhyReg,
    TRUE,
@@ -112,6 +116,9 @@ error_t stm32f2x7EthInit(NetInterface *interface)
 
    //Debug message
    TRACE_INFO("Initializing STM32F2x7 Ethernet MAC...\r\n");
+
+   //Save underlying network interface
+   nicDriverInterface = interface;
 
    //GPIO configuration
    stm32f2x7EthInitGpio(interface);
@@ -179,9 +186,7 @@ error_t stm32f2x7EthInit(NetInterface *interface)
    //Enable DMA transmission and reception
    ETH->DMAOMR |= ETH_DMAOMR_ST | ETH_DMAOMR_SR;
 
-   //Force the TCP/IP stack to check the link state
-   osSetEvent(&interface->nicRxEvent);
-   //STM32F207/217 Ethernet MAC is now ready to send
+   //Accept any packets from the upper layer
    osSetEvent(&interface->nicTxEvent);
 
    //Successful initialization
@@ -387,13 +392,10 @@ void ETH_IRQHandler(void)
 {
    bool_t flag;
    uint32_t status;
-   NetInterface *interface;
 
    //Enter interrupt service routine
    osEnterIsr();
 
-   //Point to the structure describing the network interface
-   interface = &netInterface[0];
    //This flag will be set if a higher priority task must be woken
    flag = FALSE;
 
@@ -409,18 +411,21 @@ void ETH_IRQHandler(void)
       //Check whether the TX buffer is available for writing
       if(!(txCurDmaDesc->tdes0 & ETH_TDES0_OWN))
       {
-         //Notify the user that the transmitter is ready to send
-         flag |= osSetEventFromIsr(&interface->nicTxEvent);
+         //Notify the TCP/IP stack that the transmitter is ready to send
+         flag |= osSetEventFromIsr(&nicDriverInterface->nicTxEvent);
       }
    }
+
    //A packet has been received?
    if(status & ETH_DMASR_RS)
    {
       //Disable RIE interrupt
       ETH->DMAIER &= ~ETH_DMAIER_RIE;
 
-      //Notify the user that a packet has been received
-      flag |= osSetEventFromIsr(&interface->nicRxEvent);
+      //Set event flag
+      nicDriverInterface->nicEvent = TRUE;
+      //Notify the TCP/IP stack of the event
+      flag |= osSetEventFromIsr(&netEvent);
    }
 
    //Clear NIS interrupt flag
@@ -440,45 +445,6 @@ void stm32f2x7EthEventHandler(NetInterface *interface)
 {
    error_t error;
    size_t length;
-   bool_t linkStateChange;
-
-   //PHY event is pending?
-   if(interface->phyEvent)
-   {
-      //Acknowledge the event by clearing the flag
-      interface->phyEvent = FALSE;
-      //Handle PHY specific events
-      linkStateChange = interface->phyDriver->eventHandler(interface);
-
-      //Check whether the link state has changed?
-      if(linkStateChange)
-      {
-         //Set speed and duplex mode for proper operation
-         if(interface->linkState)
-         {
-            //Read current MAC configuration
-            uint32_t config = ETH->MACCR;
-
-            //10BASE-T or 100BASE-TX operation mode?
-            if(interface->speed100)
-               config |= ETH_MACCR_FES;
-            else
-               config &= ~ETH_MACCR_FES;
-
-            //Half-duplex or full-duplex mode?
-            if(interface->fullDuplex)
-               config |= ETH_MACCR_DM;
-            else
-               config &= ~ETH_MACCR_DM;
-
-            //Update MAC configuration register
-            ETH->MACCR = config;
-         }
-
-         //Process link state change event
-         nicNotifyLinkChange(interface);
-      }
-   }
 
    //Packet received?
    if(ETH->DMASR & ETH_DMASR_RS)
@@ -506,51 +472,6 @@ void stm32f2x7EthEventHandler(NetInterface *interface)
 
    //Re-enable DMA interrupts
    ETH->DMAIER |= ETH_DMAIER_NISE | ETH_DMAIER_RIE | ETH_DMAIER_TIE;
-}
-
-
-/**
- * @brief Configure multicast MAC address filtering
- * @param[in] interface Underlying network interface
- * @return Error code
- **/
-
-error_t stm32f2x7EthSetMacFilter(NetInterface *interface)
-{
-   uint_t i;
-   uint_t k;
-   uint32_t crc;
-   uint32_t hashTable[2];
-
-   //Debug message
-   TRACE_INFO("Updating STM32F2x7 hash table...\r\n");
-
-   //Clear hash table
-   hashTable[0] = 0;
-   hashTable[1] = 0;
-
-   //The MAC filter table contains the multicast MAC addresses
-   //to accept when receiving an Ethernet frame
-   for(i = 0; i < interface->macFilterSize; i++)
-   {
-      //Compute CRC over the current MAC address
-      crc = stm32f2x7EthCalcCrc(&interface->macFilter[i].addr, sizeof(MacAddr));
-      //The upper 6 bits in the CRC register are used to index the contents of the hash table
-      k = (crc >> 26) & 0x3F;
-      //Update hash table contents
-      hashTable[k / 32] |= (1 << (k % 32));
-   }
-
-   //Write the hash table
-   ETH->MACHTLR = hashTable[0];
-   ETH->MACHTHR = hashTable[1];
-
-   //Debug message
-   TRACE_INFO("  MACHTLR = %08" PRIX32 "\r\n", ETH->MACHTLR);
-   TRACE_INFO("  MACHTHR = %08" PRIX32 "\r\n", ETH->MACHTHR);
-
-   //Successful processing
-   return NO_ERROR;
 }
 
 
@@ -686,6 +607,95 @@ error_t stm32f2x7EthReceivePacket(NetInterface *interface,
 
    //Return status code
    return error;
+}
+
+
+/**
+ * @brief Configure multicast MAC address filtering
+ * @param[in] interface Underlying network interface
+ * @return Error code
+ **/
+
+error_t stm32f2x7EthSetMulticastFilter(NetInterface *interface)
+{
+   uint_t i;
+   uint_t k;
+   uint32_t crc;
+   uint32_t hashTable[2];
+   MacFilterEntry *entry;
+
+   //Debug message
+   TRACE_DEBUG("Updating STM32F2x7 hash table...\r\n");
+
+   //Clear hash table
+   hashTable[0] = 0;
+   hashTable[1] = 0;
+
+   //The MAC filter table contains the multicast MAC addresses
+   //to accept when receiving an Ethernet frame
+   for(i = 0; i < MAC_MULTICAST_FILTER_SIZE; i++)
+   {
+      //Point to the current entry
+      entry = &interface->macMulticastFilter[i];
+
+      //Valid entry?
+      if(entry->refCount > 0)
+      {
+         //Compute CRC over the current MAC address
+         crc = stm32f2x7EthCalcCrc(&entry->addr, sizeof(MacAddr));
+
+         //The upper 6 bits in the CRC register are used to index the
+         //contents of the hash table
+         k = (crc >> 26) & 0x3F;
+
+         //Update hash table contents
+         hashTable[k / 32] |= (1 << (k % 32));
+      }
+   }
+
+   //Write the hash table
+   ETH->MACHTLR = hashTable[0];
+   ETH->MACHTHR = hashTable[1];
+
+   //Debug message
+   TRACE_DEBUG("  MACHTLR = %08" PRIX32 "\r\n", ETH->MACHTLR);
+   TRACE_DEBUG("  MACHTHR = %08" PRIX32 "\r\n", ETH->MACHTHR);
+
+   //Successful processing
+   return NO_ERROR;
+}
+
+
+/**
+ * @brief Adjust MAC configuration parameters for proper operation
+ * @param[in] interface Underlying network interface
+ * @return Error code
+ **/
+
+error_t stm32f2x7EthUpdateMacConfig(NetInterface *interface)
+{
+   uint32_t config;
+
+   //Read current MAC configuration
+   config = ETH->MACCR;
+
+   //10BASE-T or 100BASE-TX operation mode?
+   if(interface->linkSpeed == NIC_LINK_SPEED_100MBPS)
+      config |= ETH_MACCR_FES;
+   else
+      config &= ~ETH_MACCR_FES;
+
+   //Half-duplex or full-duplex mode?
+   if(interface->duplexMode == NIC_FULL_DUPLEX_MODE)
+      config |= ETH_MACCR_DM;
+   else
+      config &= ~ETH_MACCR_DM;
+
+   //Update MAC configuration register
+   ETH->MACCR = config;
+
+   //Successful processing
+   return NO_ERROR;
 }
 
 

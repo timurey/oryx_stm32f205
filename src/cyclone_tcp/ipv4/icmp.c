@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -162,34 +162,30 @@ void icmpProcessEchoRequest(NetInterface *interface,
 
    //Copy data
    error = netBufferConcat(reply, request, requestOffset, requestLength);
-   //Any error to report?
-   if(error)
+
+   //Check status code
+   if(!error)
    {
-      //Clean up side effects
-      netBufferFree(reply);
-      //Exit immediately
-      return;
+      //Get the length of the resulting message
+      replyLength = netBufferGetLength(reply) - replyOffset;
+      //Calculate ICMP header checksum
+      replyHeader->checksum = ipCalcChecksumEx(reply, replyOffset, replyLength);
+
+      //Format IPv4 pseudo header
+      pseudoHeader.srcAddr = interface->ipv4Context.addr;
+      pseudoHeader.destAddr = srcIpAddr;
+      pseudoHeader.reserved = 0;
+      pseudoHeader.protocol = IPV4_PROTOCOL_ICMP;
+      pseudoHeader.length = htons(replyLength);
+
+      //Debug message
+      TRACE_INFO("Sending ICMP Echo Reply message (%" PRIuSIZE " bytes)...\r\n", replyLength);
+      //Dump message contents for debugging purpose
+      icmpDumpEchoMessage(replyHeader);
+
+      //Send Echo Reply message
+      ipv4SendDatagram(interface, &pseudoHeader, reply, replyOffset, IPV4_DEFAULT_TTL);
    }
-
-   //Get the length of the resulting message
-   replyLength = netBufferGetLength(reply) - replyOffset;
-   //Calculate ICMP header checksum
-   replyHeader->checksum = ipCalcChecksumEx(reply, replyOffset, replyLength);
-
-   //Format IPv4 pseudo header
-   pseudoHeader.srcAddr = interface->ipv4Config.addr;
-   pseudoHeader.destAddr = srcIpAddr;
-   pseudoHeader.reserved = 0;
-   pseudoHeader.protocol = IPV4_PROTOCOL_ICMP;
-   pseudoHeader.length = htons(replyLength);
-
-   //Debug message
-   TRACE_INFO("Sending ICMP Echo Reply message (%" PRIuSIZE " bytes)...\r\n", replyLength);
-   //Dump message contents for debugging purpose
-   icmpDumpEchoMessage(replyHeader);
-
-   //Send Echo Reply message
-   ipv4SendDatagram(interface, &pseudoHeader, reply, replyOffset, IPV4_DEFAULT_TTL);
 
    //Free previously allocated memory block
    netBufferFree(reply);
@@ -203,11 +199,12 @@ void icmpProcessEchoRequest(NetInterface *interface,
  * @param[in] code Specific message code
  * @param[in] parameter Specific message parameter
  * @param[in] ipPacket Multi-part buffer that holds the invoking IPv4 packet
+ * @param[in] ipPacketOffset Offset to the first byte of the IPv4 packet
  * @return Error code
  **/
 
-error_t icmpSendErrorMessage(NetInterface *interface, uint8_t type,
-   uint8_t code, uint8_t parameter, const NetBuffer *ipPacket)
+error_t icmpSendErrorMessage(NetInterface *interface, uint8_t type, uint8_t code,
+   uint8_t parameter, const NetBuffer *ipPacket, size_t ipPacketOffset)
 {
    error_t error;
    size_t offset;
@@ -218,14 +215,14 @@ error_t icmpSendErrorMessage(NetInterface *interface, uint8_t type,
    Ipv4PseudoHeader pseudoHeader;
 
    //Retrieve the length of the invoking IPv4 packet
-   length = netBufferGetLength(ipPacket);
+   length = netBufferGetLength(ipPacket) - ipPacketOffset;
 
    //Check the length of the IPv4 packet
    if(length < sizeof(Ipv4Header))
       return ERROR_INVALID_LENGTH;
 
    //Point to the header of the invoking packet
-   ipHeader = netBufferAt(ipPacket, 0);
+   ipHeader = netBufferAt(ipPacket, ipPacketOffset);
    //Sanity check
    if(!ipHeader) return ERROR_FAILURE;
 
@@ -256,39 +253,36 @@ error_t icmpSendErrorMessage(NetInterface *interface, uint8_t type,
    icmpHeader->unused = 0;
 
    //Copy the IP header and the first 8 bytes of the original datagram data
-   error = netBufferConcat(icmpMessage, ipPacket, 0, length);
-   //Any error to report?
-   if(error)
+   error = netBufferConcat(icmpMessage, ipPacket, ipPacketOffset, length);
+
+   //Check status code
+   if(!error)
    {
-      //Clean up side effects
-      netBufferFree(icmpMessage);
-      //Exit immediately
-      return error;
+      //Get the length of the resulting message
+      length = netBufferGetLength(icmpMessage) - offset;
+      //Message checksum calculation
+      icmpHeader->checksum = ipCalcChecksumEx(icmpMessage, offset, length);
+
+      //Format IPv4 pseudo header
+      pseudoHeader.srcAddr = ipHeader->destAddr;
+      pseudoHeader.destAddr = ipHeader->srcAddr;
+      pseudoHeader.reserved = 0;
+      pseudoHeader.protocol = IPV4_PROTOCOL_ICMP;
+      pseudoHeader.length = htons(length);
+
+      //Debug message
+      TRACE_INFO("Sending ICMP Error message (%" PRIuSIZE " bytes)...\r\n", length);
+      //Dump message contents for debugging purpose
+      icmpDumpErrorMessage(icmpHeader);
+
+      //Send ICMP Error message
+      error = ipv4SendDatagram(interface, &pseudoHeader,
+         icmpMessage, offset, IPV4_DEFAULT_TTL);
    }
-
-   //Get the length of the resulting message
-   length = netBufferGetLength(icmpMessage) - offset;
-   //Message checksum calculation
-   icmpHeader->checksum = ipCalcChecksumEx(icmpMessage, offset, length);
-
-   //Format IPv4 pseudo header
-   pseudoHeader.srcAddr = ipHeader->destAddr;
-   pseudoHeader.destAddr = ipHeader->srcAddr;
-   pseudoHeader.reserved = 0;
-   pseudoHeader.protocol = IPV4_PROTOCOL_ICMP;
-   pseudoHeader.length = htons(length);
-
-   //Debug message
-   TRACE_INFO("Sending ICMP Error message (%" PRIuSIZE " bytes)...\r\n", length);
-   //Dump message contents for debugging purpose
-   icmpDumpErrorMessage(icmpHeader);
-
-   //Send ICMP Error message
-   error = ipv4SendDatagram(interface, &pseudoHeader,
-      icmpMessage, offset, IPV4_DEFAULT_TTL);
 
    //Free previously allocated memory
    netBufferFree(icmpMessage);
+
    //Return status code
    return error;
 }
@@ -309,7 +303,7 @@ void icmpDumpMessage(const IcmpHeader *message)
 
 
 /**
- * @brief Dump ICMP Echo Request of Echo Reply message
+ * @brief Dump ICMP Echo Request or Echo Reply message
  * @param[in] message Pointer to the ICMP message
  **/
 

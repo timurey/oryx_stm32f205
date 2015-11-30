@@ -28,7 +28,7 @@
  * underlying transport provider
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -37,6 +37,9 @@
 //Dependencies
 #include <string.h>
 #include "core/net.h"
+#include "ipv4/ipv4.h"
+#include "ipv6/ipv6.h"
+#include "ipv6/ipv6_misc.h"
 #include "core/raw_socket.h"
 #include "core/socket.h"
 #include "core/ethernet.h"
@@ -66,9 +69,6 @@ error_t rawSocketProcessIpPacket(NetInterface *interface,
 
    //Retrieve the length of the raw IP packet
    length = netBufferGetLength(buffer) - offset;
-
-   //Enter critical section
-   osAcquireMutex(&socketMutex);
 
    //Loop through opened sockets
    for(i = 0; i < SOCKET_MAX_COUNT; i++)
@@ -155,12 +155,7 @@ error_t rawSocketProcessIpPacket(NetInterface *interface,
 
    //Drop incoming packet if no matching socket was found
    if(i >= SOCKET_MAX_COUNT)
-   {
-      //Leave critical section
-      osReleaseMutex(&socketMutex);
-      //Unreachable protocol...
       return ERROR_PROTOCOL_UNREACHABLE;
-   }
 
    //Empty receive queue?
    if(!socket->receiveQueue)
@@ -193,12 +188,7 @@ error_t rawSocketProcessIpPacket(NetInterface *interface,
 
       //Make sure the receive queue is not full
       if(i >= RAW_SOCKET_RX_QUEUE_SIZE)
-      {
-         //Leave critical section
-         osReleaseMutex(&socketMutex);
-         //Notify the calling function that the queue is full
          return ERROR_RECEIVE_QUEUE_FULL;
-      }
 
       //Allocate a memory buffer to hold the data and the associated descriptor
       p = netBufferAlloc(sizeof(SocketQueueItem) + length);
@@ -221,12 +211,7 @@ error_t rawSocketProcessIpPacket(NetInterface *interface,
 
    //Failed to allocate memory?
    if(!queueItem)
-   {
-      //Leave critical section
-      osReleaseMutex(&socketMutex);
-      //Return error code
       return ERROR_OUT_OF_MEMORY;
-   }
 
    //Initialize next field
    queueItem->next = NULL;
@@ -266,8 +251,6 @@ error_t rawSocketProcessIpPacket(NetInterface *interface,
    //Notify user that data is available
    rawSocketUpdateEvents(socket);
 
-   //Leave critical section
-   osReleaseMutex(&socketMutex);
    //Successful processing
    return NO_ERROR;
 }
@@ -287,9 +270,6 @@ void rawSocketProcessEthPacket(NetInterface *interface,
    Socket *socket;
    SocketQueueItem *queueItem;
    NetBuffer *p;
-
-   //Enter critical section
-   osAcquireMutex(&socketMutex);
 
    //Loop through opened sockets
    for(i = 0; i < SOCKET_MAX_COUNT; i++)
@@ -313,12 +293,7 @@ void rawSocketProcessEthPacket(NetInterface *interface,
 
    //Drop incoming packet if no matching socket was found
    if(i >= SOCKET_MAX_COUNT)
-   {
-      //Leave critical section
-      osReleaseMutex(&socketMutex);
-      //Return immediately
       return;
-   }
 
    //Empty receive queue?
    if(!socket->receiveQueue)
@@ -351,12 +326,7 @@ void rawSocketProcessEthPacket(NetInterface *interface,
 
       //Make sure the receive queue is not full
       if(i >= RAW_SOCKET_RX_QUEUE_SIZE)
-      {
-         //Leave critical section
-         osReleaseMutex(&socketMutex);
-         //Return immediately
          return;
-      }
 
       //Allocate a memory buffer to hold the data and the associated descriptor
       p = netBufferAlloc(sizeof(SocketQueueItem) + length);
@@ -379,12 +349,7 @@ void rawSocketProcessEthPacket(NetInterface *interface,
 
    //Failed to allocate memory?
    if(!queueItem)
-   {
-      //Leave critical section
-      osReleaseMutex(&socketMutex);
-      //Return immediately
       return;
-   }
 
    //Initialize next field
    queueItem->next = NULL;
@@ -400,9 +365,6 @@ void rawSocketProcessEthPacket(NetInterface *interface,
 
    //Notify user that data is available
    rawSocketUpdateEvents(socket);
-
-   //Leave critical section
-   osReleaseMutex(&socketMutex);
 }
 
 
@@ -421,7 +383,6 @@ error_t rawSocketSendIpPacket(Socket *socket, const IpAddr *destIpAddr,
 {
    error_t error;
    size_t offset;
-   uint_t timeToLive;
    NetBuffer *buffer;
    NetInterface *interface;
    IpPseudoHeader pseudoHeader;
@@ -461,9 +422,6 @@ error_t rawSocketSendIpPacket(Socket *socket, const IpAddr *destIpAddr,
          pseudoHeader.ipv4Data.reserved = 0;
          pseudoHeader.ipv4Data.protocol = socket->protocol;
          pseudoHeader.ipv4Data.length = htons(length);
-
-         //Set TTL value
-         timeToLive = IPV4_DEFAULT_TTL;
       }
       else
 #endif
@@ -485,9 +443,6 @@ error_t rawSocketSendIpPacket(Socket *socket, const IpAddr *destIpAddr,
          pseudoHeader.ipv6Data.length = htonl(length);
          pseudoHeader.ipv6Data.reserved = 0;
          pseudoHeader.ipv6Data.nextHeader = socket->protocol;
-
-         //Set Hop Limit value
-         timeToLive = IPV6_DEFAULT_HOP_LIMIT;
       }
       else
 #endif
@@ -500,7 +455,7 @@ error_t rawSocketSendIpPacket(Socket *socket, const IpAddr *destIpAddr,
       }
 
       //Send raw IP datagram
-      error = ipSendDatagram(interface, &pseudoHeader, buffer, offset, timeToLive);
+      error = ipSendDatagram(interface, &pseudoHeader, buffer, offset, socket->ttl);
       //Failed to send data?
       if(error) break;
 
@@ -531,6 +486,8 @@ error_t rawSocketSendEthPacket(Socket *socket,
    const void *data, size_t length, size_t *written)
 {
    error_t error;
+
+#if (ETH_SUPPORT == ENABLED)
    uint32_t crc;
    NetBuffer *buffer;
    NetInterface *interface;
@@ -541,58 +498,73 @@ error_t rawSocketSendEthPacket(Socket *socket,
    else
       interface = socket->interface;
 
-   //Allocate a buffer memory to hold the raw Ethernet packet
-   buffer = netBufferAlloc(0);
-   //Failed to allocate buffer?
-   if(!buffer) return ERROR_OUT_OF_MEMORY;
-
-   //Copy the raw data
-   error = netBufferAppend(buffer, data, length);
-
-   //Successful processing?
-   if(!error)
+   //Ethernet interface?
+   if(interface->nicDriver->type == NIC_TYPE_ETHERNET)
    {
-      //Automatic padding not supported by hardware?
-      if(!interface->nicDriver->autoPadding)
-      {
-         //The host controller should manually add padding
-         //to the packet before transmitting it
-         if(length < (ETH_MIN_FRAME_SIZE - ETH_CRC_SIZE))
-         {
-            //Add padding as necessary
-            size_t n = (ETH_MIN_FRAME_SIZE - ETH_CRC_SIZE) - length;
+      //Allocate a buffer memory to hold the raw Ethernet packet
+      buffer = netBufferAlloc(0);
+      //Failed to allocate buffer?
+      if(!buffer) return ERROR_OUT_OF_MEMORY;
 
-            //Append padding bytes
-            error = netBufferAppend(buffer, ethPadding, n);
+      //Copy the raw data
+      error = netBufferAppend(buffer, data, length);
+
+      //Successful processing?
+      if(!error)
+      {
+         //Automatic padding not supported by hardware?
+         if(!interface->nicDriver->autoPadding)
+         {
+            //The host controller should manually add padding
+            //to the packet before transmitting it
+            if(length < (ETH_MIN_FRAME_SIZE - ETH_CRC_SIZE))
+            {
+               //Add padding as necessary
+               size_t n = (ETH_MIN_FRAME_SIZE - ETH_CRC_SIZE) - length;
+
+               //Append padding bytes
+               error = netBufferAppend(buffer, ethPadding, n);
+               //Any error to report?
+               if(error) return error;
+
+               //Adjust frame length
+               length += n;
+            }
+         }
+
+         //CRC generation not supported by hardware?
+         if(!interface->nicDriver->autoCrcGen)
+         {
+            //Compute CRC over the header and payload
+            crc = ethCalcCrcEx(buffer, 0, length);
+            //Convert from host byte order to little-endian byte order
+            crc = htole32(crc);
+
+            //Append the calculated CRC value
+            error = netBufferAppend(buffer, &crc, sizeof(crc));
             //Any error to report?
             if(error) return error;
 
             //Adjust frame length
-            length += n;
+            length += sizeof(crc);
          }
-      }
-      //CRC generation not supported by hardware?
-      if(!interface->nicDriver->autoCrcGen)
-      {
-         //Compute CRC over the header and payload
-         crc = ethCalcCrcEx(buffer, 0, length);
-         //Convert from host byte order to little-endian byte order
-         crc = htole32(crc);
 
-         //Append the calculated CRC value
-         error = netBufferAppend(buffer, &crc, sizeof(crc));
-         //Any error to report?
-         if(error) return error;
+         //Debug message
+         TRACE_DEBUG("Sending raw Ethernet frame (%" PRIuSIZE " bytes)...\r\n", length);
 
-         //Adjust frame length
-         length += sizeof(crc);
+         //Send the resulting packet over the specified link
+         error = nicSendPacket(interface, buffer, 0);
       }
 
-      //Debug message
-      TRACE_DEBUG("Sending raw Ethernet frame (%" PRIuSIZE " bytes)...\r\n", length);
-
-      //Send the resulting packet over the specified link
-      error = nicSendPacket(interface, buffer, 0);
+      //Free previously allocated memory block
+      netBufferFree(buffer);
+   }
+   else
+#endif
+   //Unknown interface type?
+   {
+      //Report an error
+      error = ERROR_INVALID_INTERFACE;
    }
 
    //Successful processing?
@@ -603,8 +575,6 @@ error_t rawSocketSendEthPacket(Socket *socket,
          *written = length;
    }
 
-   //Free previously allocated memory block
-   netBufferFree(buffer);
    //Return status code
    return error;
 }
@@ -637,12 +607,13 @@ error_t rawSocketReceiveIpPacket(Socket *socket, IpAddr *srcIpAddr,
          socket->eventMask = SOCKET_EVENT_RX_READY;
          //Reset the event object
          osResetEvent(&socket->event);
-         //Leave critical section
-         osReleaseMutex(&socketMutex);
+
+         //Release exclusive access
+         osReleaseMutex(&netMutex);
          //Wait until an event is triggered
          osWaitForEvent(&socket->event, socket->timeout);
-         //Enter critical section
-         osAcquireMutex(&socketMutex);
+         //Get exclusive access
+         osAcquireMutex(&netMutex);
       }
    }
 
@@ -710,12 +681,13 @@ error_t rawSocketReceiveEthPacket(Socket *socket,
          socket->eventMask = SOCKET_EVENT_RX_READY;
          //Reset the event object
          osResetEvent(&socket->event);
-         //Leave critical section
-         osReleaseMutex(&socketMutex);
+
+         //Release exclusive access
+         osReleaseMutex(&netMutex);
          //Wait until an event is triggered
          osWaitForEvent(&socket->event, socket->timeout);
-         //Enter critical section
-         osAcquireMutex(&socketMutex);
+         //Get exclusive access
+         osAcquireMutex(&netMutex);
       }
    }
 

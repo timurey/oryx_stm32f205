@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _SNMP_COMMON_H
@@ -52,7 +52,7 @@
 #define SNMP_TRAP_PORT 162
 
 //SNMP message header overhead
-#define SNMP_MSG_HEADER_OVERHEAD 37
+#define SNMP_MSG_HEADER_OVERHEAD 48
 
 
 /**
@@ -86,7 +86,7 @@ typedef enum
 
 
 /**
- * @brief SNMP generic traps
+ * @brief SNMP generic trap types
  **/
 
 typedef enum
@@ -98,7 +98,7 @@ typedef enum
    SNMP_TRAP_AUTH_FAILURE        = 4,
    SNMP_TRAP_EGP_NEIGHBOR_LOSS   = 5,
    SNMP_TRAP_ENTERPRISE_SPECIFIC = 6
-} SnmpTrap;
+} SnmpGenericTrapType;
 
 
 /**

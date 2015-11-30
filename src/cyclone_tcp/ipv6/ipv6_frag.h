@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _IPV6_FRAG_H
@@ -43,7 +43,7 @@
 //Reassembly algorithm tick interval
 #ifndef IPV6_FRAG_TICK_INTERVAL
    #define IPV6_FRAG_TICK_INTERVAL 1000
-#elif (IPV6_FRAG_TICK_INTERVAL < 100)
+#elif (IPV6_FRAG_TICK_INTERVAL < 10)
    #error IPV6_FRAG_TICK_INTERVAL parameter is not valid
 #endif
 
@@ -73,8 +73,8 @@
 #define IPV6_INFINITY 0xFFFF
 
 
-//Win32 compiler?
-#if defined(_WIN32)
+//CodeWarrior or Win32 compiler?
+#if defined(__CWCC__) || defined(_WIN32)
    #pragma pack(push, 1)
 #endif
 
@@ -91,8 +91,8 @@ typedef __start_packed struct
 } __end_packed Ipv6HoleDesc;
 
 
-//Win32 compiler?
-#if defined(_WIN32)
+//CodeWarrior or Win32 compiler?
+#if defined(__CWCC__) || defined(_WIN32)
    #pragma pack(pop)
 #endif
 
@@ -124,12 +124,15 @@ typedef struct
 } Ipv6FragDesc;
 
 
+//Tick counter to handle periodic operations
+extern systime_t ipv6FragTickCounter;
+
 //IPv6 datagram fragmentation and reassembly
 error_t ipv6FragmentDatagram(NetInterface *interface, Ipv6PseudoHeader *pseudoHeader,
-   const NetBuffer *payload, size_t payloadOffset, uint8_t hopLimit);
+   const NetBuffer *payload, size_t payloadOffset, size_t pathMtu, uint8_t hopLimit);
 
-void ipv6ParseFragmentHeader(NetInterface *interface, const NetBuffer *buffer,
-   size_t fragHeaderOffset, size_t nextHeaderOffset);
+void ipv6ParseFragmentHeader(NetInterface *interface, const NetBuffer *ipPacket,
+   size_t ipPacketOffset, size_t fragHeaderOffset, size_t nextHeaderOffset);
 
 void ipv6FragTick(NetInterface *interface);
 

@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _MIB_COMMON_H
@@ -53,6 +53,7 @@ typedef enum
    MIB_TYPE_IP_ADDRESS        = 0,
    MIB_TYPE_COUNTER32         = 1,
    MIB_TYPE_GAUGE32           = 2,
+   MIB_TYPE_UNSIGNED32        = 2,
    MIB_TYPE_TIME_TICKS        = 3,
    MIB_TYPE_OPAQUE            = 4,
    MIB_TYPE_COUNTER64         = 6
@@ -71,8 +72,8 @@ typedef enum
 } MibAccess;
 
 
-//Win32 compiler?
-#if defined(_WIN32)
+//CodeWarrior or Win32 compiler?
+#if defined(__CWCC__) || defined(_WIN32)
    #pragma pack(push, 1)
 #endif
 
@@ -97,8 +98,8 @@ typedef __start_packed struct
 } __end_packed MibVariant;
 
 
-//Win32 compiler?
-#if defined(_WIN32)
+//CodeWarrior or Win32 compiler?
+#if defined(__CWCC__) || defined(_WIN32)
    #pragma pack(pop)
 #endif
 

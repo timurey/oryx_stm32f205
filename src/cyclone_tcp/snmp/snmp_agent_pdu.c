@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -56,18 +56,6 @@ error_t snmpParseMessage(SnmpAgentContext *context, const uint8_t *p, size_t len
    error_t error;
    int32_t version;
    Asn1Tag tag;
-
-   //Debug message
-   TRACE_INFO("SNMP message received from %s port %" PRIu16 " (%" PRIuSIZE " bytes)...\r\n",
-      ipAddrToString(&context->remoteIpAddr, NULL), context->remotePort, length);
-
-   //Display the contents of the SNMP message
-   TRACE_DEBUG_ARRAY("  ", p, length);
-
-   //Dump ASN.1 structure
-   error = asn1DumpObject(p, length, 0);
-   //Any error to report?
-   if(error) return error;
 
    //The SNMP message is encapsulated within a sequence
    error = asn1ReadTag(p, length, &tag);
@@ -158,22 +146,6 @@ error_t snmpParseMessage(SnmpAgentContext *context, const uint8_t *p, size_t len
 
    //Format response PDU header
    error = snmpWritePduHeader(context);
-   //Any error to report?
-   if(error) return error;
-
-   //Debug message
-   TRACE_INFO("SNMP message sent (%" PRIuSIZE " bytes)...\r\n", context->response.messageLen);
-   //Display the contents of the SNMP message
-   TRACE_DEBUG_ARRAY("  ", context->response.message, context->response.messageLen);
-
-   //Display ASN.1 structure
-   error = asn1DumpObject(context->response.message, context->response.messageLen, 0);
-   //Any error to report?
-   if(error) return error;
-
-   //Send SNMP response message
-   error = socketSendTo(context->socket, &context->remoteIpAddr, context->remotePort,
-      context->response.message, context->response.messageLen, NULL, 0);
 
    //Return status code
    return error;
@@ -228,6 +200,11 @@ error_t snmpParseGetRequestPdu(SnmpAgentContext *context, const uint8_t *p, size
       //Parse variable binding
       error = snmpParseVarBinding(p, length, &var, &n);
       //Failed to parse variable binding?
+      if(error) break;
+
+      //Make sure that the object identifier is valid
+      error = snmpCheckOid(var.oid, var.oidLen);
+      //Invalid object identifier?
       if(error) break;
 
       //GetRequest-PDU?
@@ -320,7 +297,7 @@ error_t snmpParseGetRequestPdu(SnmpAgentContext *context, const uint8_t *p, size
          }
       }
 
-      //Write variable binding in the response message
+      //Append variable binding to the the list
       error = snmpWriteVarBinding(context, &var);
       //Any error to report?
       if(error) break;
@@ -341,11 +318,23 @@ error_t snmpParseGetRequestPdu(SnmpAgentContext *context, const uint8_t *p, size
       //If the parsing of the request fails, the SNMP agent discards the message
       if(error) return error;
 
-      //The Response-PDU is re-formatted with the same values in its request-id
-      //and variable-bindings fields as the received GetRequest-PDU
-      error = snmpCopyVarBindingList(context);
-      //Any error to report?
-      if(error) return error;
+      //Check whether an alternate Response-PDU should be sent
+      if(context->version == SNMP_VERSION_2 &&
+         context->response.errorStatus == SNMP_ERROR_TOO_BIG)
+      {
+         //The alternate Response-PDU is formatted with the same value in its
+         //request-id field as the received GetRequest-PDU and an empty
+         //variable-bindings field
+         context->response.varBindListLen = 0;
+      }
+      else
+      {
+         //The Response-PDU is re-formatted with the same values in its request-id
+         //and variable-bindings fields as the received GetRequest-PDU
+         error = snmpCopyVarBindingList(context);
+         //Any error to report?
+         if(error) return error;
+      }
    }
 
    //Format PDU header
@@ -420,6 +409,11 @@ error_t snmpParseGetBulkRequestPdu(SnmpAgentContext *context, const uint8_t *p, 
       //Parse variable binding
       error = snmpParseVarBinding(p, length, &var, &n);
       //Failed to parse variable binding?
+      if(error) break;
+
+      //Make sure that the object identifier is valid
+      error = snmpCheckOid(var.oid, var.oidLen);
+      //Invalid object identifier?
       if(error) break;
 
       //Search the MIB for the next object
@@ -503,7 +497,7 @@ error_t snmpParseGetBulkRequestPdu(SnmpAgentContext *context, const uint8_t *p, 
          }
       }
 
-      //Write variable binding in the response message
+      //Append variable binding to the the list
       error = snmpWriteVarBinding(context, &var);
       //Any error to report?
       if(error) break;
@@ -620,7 +614,7 @@ error_t snmpParseSetRequestPdu(SnmpAgentContext *context, const uint8_t *p, size
    //the second phase
    if(!error)
    {
-      //The changes are commited to the MIB base during the second phase
+      //The changes are committed to the MIB base during the second phase
       p = context->request.varBindList;
       length = context->request.varBindListLen;
 
@@ -773,7 +767,7 @@ error_t snmpParsePduHeader(SnmpAgentContext *context, const uint8_t *p, size_t l
    context->response.varBindList = context->response.buffer +
       context->response.communityLen + SNMP_MSG_HEADER_OVERHEAD;
 
-   //Number of bytes available in the reponse buffer
+   //Number of bytes available in the response buffer
    context->response.bytesAvailable = SNMP_MSG_MAX_SIZE -
       SNMP_MSG_HEADER_OVERHEAD - context->response.communityLen;
 
@@ -799,6 +793,9 @@ error_t snmpWritePduHeader(SnmpAgentContext *context)
    size_t length;
    uint8_t *p;
    Asn1Tag tag;
+#if (IPV4_SUPPORT == ENABLED)
+   NetInterface *interface;
+#endif
 
    //The PDU header will be encoded in reverse order...
    p = context->response.varBindList;
@@ -822,35 +819,133 @@ error_t snmpWritePduHeader(SnmpAgentContext *context)
    //Update the length of the message
    length += n;
 
-   //Write error index
-   error = asn1WriteInt32(context->response.errorIndex, TRUE, p, &n);
-   //Any error to report?
-   if(error) return error;
+   //GetResponse-PDU or SNMPv2-Trap-PDU?
+   if(context->response.pduType == SNMP_PDU_GET_RESPONSE ||
+      context->response.pduType == SNMP_PDU_TRAP_V2)
+   {
+      //Write error index
+      error = asn1WriteInt32(context->response.errorIndex, TRUE, p, &n);
+      //Any error to report?
+      if(error) return error;
 
-   //Move backward
-   p -= n;
-   //Update the length of the message
-   length += n;
+      //Move backward
+      p -= n;
+      //Update the length of the message
+      length += n;
 
-   //Write error status
-   error = asn1WriteInt32(context->response.errorStatus, TRUE, p, &n);
-   //Any error to report?
-   if(error) return error;
+      //Write error status
+      error = asn1WriteInt32(context->response.errorStatus, TRUE, p, &n);
+      //Any error to report?
+      if(error) return error;
 
-   //Move backward
-   p -= n;
-   //Update the length of the message
-   length += n;
+      //Move backward
+      p -= n;
+      //Update the length of the message
+      length += n;
 
-   //Write request identifier
-   error = asn1WriteInt32(context->response.requestId, TRUE, p, &n);
-   //Any error to report?
-   if(error) return error;
+      //Write request identifier
+      error = asn1WriteInt32(context->response.requestId, TRUE, p, &n);
+      //Any error to report?
+      if(error) return error;
 
-   //Move backward
-   p -= n;
-   //Update the length of the message
-   length += n;
+      //Move backward
+      p -= n;
+      //Update the length of the message
+      length += n;
+   }
+   //Trap-PDU?
+   else if(context->response.pduType == SNMP_PDU_TRAP)
+   {
+      systime_t time;
+      Ipv4Addr ipv4Addr;
+
+      //Get current time
+      time = osGetSystemTime() / 10;
+
+      //Encode the value object using ASN.1 rules
+      error = snmpEncodeUnsignedInt32(time, context->response.buffer, &n);
+
+      //The time stamp is encoded in ASN.1 format
+      tag.constructed = FALSE;
+      tag.class = ASN1_CLASS_APPLICATION;
+      tag.type = MIB_TYPE_TIME_TICKS;
+      tag.length = n;
+      tag.value = context->response.buffer;
+
+      //Write the corresponding ASN.1 tag
+      error = asn1WriteTag(&tag, TRUE, p, &n);
+      //Any error to report?
+      if(error) return error;
+
+      //Move backward
+      p -= n;
+      //Update the length of the message
+      length += n;
+
+      //Write specific trap code
+      error = asn1WriteInt32(context->response.specificTrapCode, TRUE, p, &n);
+      //Any error to report?
+      if(error) return error;
+
+      //Move backward
+      p -= n;
+      //Update the length of the message
+      length += n;
+
+      //Write generic trap type
+      error = asn1WriteInt32(context->response.genericTrapType, TRUE, p, &n);
+      //Any error to report?
+      if(error) return error;
+
+      //Move backward
+      p -= n;
+      //Update the length of the message
+      length += n;
+
+#if (IPV4_SUPPORT == ENABLED)
+      //Point to the underlying network interface
+      interface = context->interface;
+      //Retrieve agent IP address
+      ipv4Addr = interface->ipv4Context.addr;
+#else
+      //The agent address is defined as an IPv4 address...
+      ipv4Addr = IPV4_UNSPECIFIED_ADDR;
+#endif
+
+      //The agent address is encoded in ASN.1 format
+      tag.constructed = FALSE;
+      tag.class = ASN1_CLASS_APPLICATION;
+      tag.type = MIB_TYPE_IP_ADDRESS;
+      tag.length = sizeof(Ipv4Addr);
+      tag.value = (uint8_t *) &ipv4Addr;
+
+      //Write the corresponding ASN.1 tag
+      error = asn1WriteTag(&tag, TRUE, p, &n);
+      //Any error to report?
+      if(error) return error;
+
+      //Move backward
+      p -= n;
+      //Update the length of the message
+      length += n;
+
+      //The enterprise OID is encoded in ASN.1 format
+      tag.constructed = FALSE;
+      tag.class = ASN1_CLASS_UNIVERSAL;
+      tag.type = ASN1_TYPE_OBJECT_IDENTIFIER;
+      tag.length = context->enterpriseOidLen;
+      tag.value = context->enterpriseOid;
+
+      //Write the corresponding ASN.1 tag
+      error = asn1WriteTag(&tag, TRUE, p, &n);
+      //Any error to report?
+      if(error) return error;
+
+      //Move backward
+      p -= n;
+      //Update the length of the message
+      length += n;
+   }
 
    //The PDU is encapsulated within a sequence
    tag.constructed = TRUE;
@@ -869,7 +964,7 @@ error_t snmpWritePduHeader(SnmpAgentContext *context)
    //Update the length of the message
    length += n;
 
-   //The commmunity string is encoded in ASN.1 format
+   //The community string is encoded in ASN.1 format
    tag.constructed = FALSE;
    tag.class = ASN1_CLASS_UNIVERSAL;
    tag.type = ASN1_TYPE_OCTET_STRING;

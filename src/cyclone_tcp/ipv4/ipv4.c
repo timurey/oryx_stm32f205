@@ -29,7 +29,7 @@
  * networks. Refer to RFC 791 for complete details
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -40,14 +40,17 @@
 #include <ctype.h>
 #include "core/net.h"
 #include "core/ethernet.h"
-#include "ipv4/arp.h"
 #include "core/ip.h"
-#include "ipv4/ipv4.h"
-#include "ipv4/icmp.h"
-#include "ipv4/igmp.h"
 #include "core/udp.h"
 #include "core/tcp_fsm.h"
 #include "core/raw_socket.h"
+#include "ipv4/arp.h"
+#include "ipv4/ipv4.h"
+#include "ipv4/icmp.h"
+#include "ipv4/igmp.h"
+#include "ipv4/auto_ip.h"
+#include "dhcp/dhcp_client.h"
+#include "mdns/mdns_responder.h"
 #include "debug.h"
 
 //Check TCP/IP stack configuration
@@ -62,119 +65,32 @@
 
 error_t ipv4Init(NetInterface *interface)
 {
+   Ipv4Context *context;
+
+   //Point to the IPv4 context
+   context = &interface->ipv4Context;
+
+   //Clear the IPv4 context
+   memset(context, 0, sizeof(Ipv4Context));
+
    //Use default MTU
-   interface->ipv4Config.mtu = interface->nicDriver->mtu;
+   context->linkMtu = interface->nicDriver->mtu;
 
    //Identification field is primarily used to identify
    //fragments of an original IP datagram
-   interface->ipv4Identification = 0;
+   context->identification = 0;
 
-   //Create a mutex to prevent simultaneous access to the IPv4 filter table
-   if(!osCreateMutex(&interface->ipv4FilterMutex))
-   {
-      //Failed to create mutex
-      return ERROR_OUT_OF_RESOURCES;
-   }
-
-   //Clear IPv4 filter table contents
-   memset(interface->ipv4Filter, 0, sizeof(interface->ipv4Filter));
-   //No entry in the filter table
-   interface->ipv4FilterSize = 0;
+   //Initialize the list of DNS servers
+   memset(context->dnsServerList, 0, sizeof(context->dnsServerList));
+   //Initialize the multicast filter table
+   memset(context->multicastFilter, 0, sizeof(context->multicastFilter));
 
 #if (IPV4_FRAG_SUPPORT == ENABLED)
-   //Create a mutex to prevent simultaneous access to the reassembly queue
-   if(!osCreateMutex(&interface->ipv4FragQueueMutex))
-   {
-      //Clean up side effects
-      osDeleteMutex(&interface->ipv4FilterMutex);
-      //Report an error
-      return ERROR_OUT_OF_RESOURCES;
-   }
-
-   //Clear the reassembly queue
-   memset(interface->ipv4FragQueue, 0, sizeof(interface->ipv4FragQueue));
+   //Initialize the reassembly queue
+   memset(context->fragQueue, 0, sizeof(context->fragQueue));
 #endif
 
    //Successful initialization
-   return NO_ERROR;
-}
-
-
-/**
- * @brief Specify the MTU to use on the interface
- * @param[in] interface Pointer to the desired network interface
- * @param[in] mtu Maximum transmit unit
- * @return Error code
- **/
-
-error_t ipv4SetMtu(NetInterface *interface, size_t mtu)
-{
-   //Check parameters
-   if(interface == NULL)
-      return ERROR_INVALID_PARAMETER;
-
-   //Make sure the MTU is acceptable
-   if(mtu <= sizeof(Ipv4Header))
-      return ERROR_INVALID_VALUE;
-   if(mtu > interface->nicDriver->mtu)
-      return ERROR_INVALID_VALUE;
-
-   //Set the MTU to use on the interface
-   interface->ipv4Config.mtu = mtu;
-
-   //Successful processing
-   return NO_ERROR;
-}
-
-
-/**
- * @brief Retrieve the MTU for the specified interface
- * @param[in] interface Pointer to the desired network interface
- * @param[out] mtu Maximum transmit unit
- * @return Error code
- **/
-
-error_t ipv4GetMtu(NetInterface *interface, size_t *mtu)
-{
-   //Check parameters
-   if(interface == NULL || mtu == NULL)
-      return ERROR_INVALID_PARAMETER;
-
-   //Return the MTU to use on the interface
-   *mtu = interface->ipv4Config.mtu;
-
-   //Successful processing
-   return NO_ERROR;
-}
-
-
-/**
- * @brief Set host address and address state
- * @param[in] interface Pointer to the desired network interface
- * @param[in] addr IPv4 host address
- * @param[in] state State of the host address
- * @return Error code
- **/
-
-error_t ipv4SetHostAddrEx(NetInterface *interface, Ipv4Addr addr, Ipv4AddrState state)
-{
-   //Check parameters
-   if(interface == NULL)
-      return ERROR_INVALID_PARAMETER;
-   if(ipv4IsMulticastAddr(addr))
-      return ERROR_INVALID_ADDRESS;
-
-   //The address is no more valid
-   interface->ipv4Config.addrState = IPV4_ADDR_STATE_INVALID;
-   //Clear conflict flag
-   interface->ipv4Config.addrConflict = FALSE;
-
-   //Set up host address
-   interface->ipv4Config.addr = addr;
-   //Set the desired state
-   interface->ipv4Config.addrState = state;
-
-   //Successful processing
    return NO_ERROR;
 }
 
@@ -188,8 +104,44 @@ error_t ipv4SetHostAddrEx(NetInterface *interface, Ipv4Addr addr, Ipv4AddrState 
 
 error_t ipv4SetHostAddr(NetInterface *interface, Ipv4Addr addr)
 {
-   //Assign the given address to the interface
-   return ipv4SetHostAddrEx(interface, addr, IPV4_ADDR_STATE_VALID);
+   //Check parameters
+   if(interface == NULL)
+      return ERROR_INVALID_PARAMETER;
+
+   //The IPv4 address must be a valid unicast address
+   if(ipv4IsMulticastAddr(addr))
+      return ERROR_INVALID_ADDRESS;
+
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
+
+   //Set up host address
+   interface->ipv4Context.addr = addr;
+   //Clear conflict flag
+   interface->ipv4Context.addrConflict = FALSE;
+
+   //Check whether the new host address is valid
+   if(addr != IPV4_UNSPECIFIED_ADDR)
+   {
+      //The use of the IPv4 address is now unrestricted
+      interface->ipv4Context.addrState = IPV4_ADDR_STATE_VALID;
+   }
+   else
+   {
+      //The IPv4 address is no longer valid
+      interface->ipv4Context.addrState = IPV4_ADDR_STATE_INVALID;
+   }
+
+#if (MDNS_RESPONDER_SUPPORT == ENABLED)
+   //Restart mDNS probing process
+   mdnsResponderStartProbing(interface->mdnsResponderContext);
+#endif
+
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
+
+   //Successful processing
+   return NO_ERROR;
 }
 
 
@@ -206,8 +158,23 @@ error_t ipv4GetHostAddr(NetInterface *interface, Ipv4Addr *addr)
    if(interface == NULL || addr == NULL)
       return ERROR_INVALID_PARAMETER;
 
-   //Get IPv4 host address
-   *addr = interface->ipv4Config.addr;
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
+
+   //Check whether the host address is valid
+   if(interface->ipv4Context.addrState == IPV4_ADDR_STATE_VALID)
+   {
+      //Get IPv4 address
+      *addr = interface->ipv4Context.addr;
+   }
+   else
+   {
+      //Return the unspecified address when no address has been assigned
+      *addr = IPV4_UNSPECIFIED_ADDR;
+   }
+
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //Successful processing
    return NO_ERROR;
@@ -227,8 +194,12 @@ error_t ipv4SetSubnetMask(NetInterface *interface, Ipv4Addr mask)
    if(interface == NULL)
       return ERROR_INVALID_PARAMETER;
 
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
    //Set up subnet mask
-   interface->ipv4Config.subnetMask = mask;
+   interface->ipv4Context.subnetMask = mask;
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //Successful processing
    return NO_ERROR;
@@ -248,8 +219,12 @@ error_t ipv4GetSubnetMask(NetInterface *interface, Ipv4Addr *mask)
    if(interface == NULL || mask == NULL)
       return ERROR_INVALID_PARAMETER;
 
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
    //Get subnet mask
-   *mask = interface->ipv4Config.subnetMask;
+   *mask = interface->ipv4Context.subnetMask;
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //Successful processing
    return NO_ERROR;
@@ -268,11 +243,17 @@ error_t ipv4SetDefaultGateway(NetInterface *interface, Ipv4Addr addr)
    //Check parameters
    if(interface == NULL)
       return ERROR_INVALID_PARAMETER;
+
+   //The IPv4 address must be a valid unicast address
    if(ipv4IsMulticastAddr(addr))
       return ERROR_INVALID_ADDRESS;
 
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
    //Set up default gateway address
-   interface->ipv4Config.defaultGateway = addr;
+   interface->ipv4Context.defaultGateway = addr;
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //Successful processing
    return NO_ERROR;
@@ -292,8 +273,12 @@ error_t ipv4GetDefaultGateway(NetInterface *interface, Ipv4Addr *addr)
    if(interface == NULL || addr == NULL)
       return ERROR_INVALID_PARAMETER;
 
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
    //Get default gateway address
-   *addr = interface->ipv4Config.defaultGateway;
+   *addr = interface->ipv4Context.defaultGateway;
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //Successful processing
    return NO_ERROR;
@@ -303,22 +288,31 @@ error_t ipv4GetDefaultGateway(NetInterface *interface, Ipv4Addr *addr)
 /**
  * @brief Configure DNS server
  * @param[in] interface Pointer to the desired network interface
- * @param[in] num This parameter selects between the primary and secondary DNS server
+ * @param[in] index This parameter selects between the primary and secondary DNS server
  * @param[in] addr DNS server address
  * @return Error code
  **/
 
-error_t ipv4SetDnsServer(NetInterface *interface, uint_t num, Ipv4Addr addr)
+error_t ipv4SetDnsServer(NetInterface *interface, uint_t index, Ipv4Addr addr)
 {
    //Check parameters
    if(interface == NULL)
       return ERROR_INVALID_PARAMETER;
+
+   //Make sure that the index is valid
+   if(index >= IPV4_DNS_SERVER_LIST_SIZE)
+      return ERROR_OUT_OF_RANGE;
+
+   //The IPv4 address must be a valid unicast address
    if(ipv4IsMulticastAddr(addr))
       return ERROR_INVALID_ADDRESS;
 
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
    //Set up DNS server address
-   if(num < IPV4_MAX_DNS_SERVERS)
-      interface->ipv4Config.dnsServer[num] = addr;
+   interface->ipv4Context.dnsServerList[index] = addr;
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //Successful processing
    return NO_ERROR;
@@ -328,22 +322,32 @@ error_t ipv4SetDnsServer(NetInterface *interface, uint_t num, Ipv4Addr addr)
 /**
  * @brief Retrieve DNS server
  * @param[in] interface Pointer to the desired network interface
- * @param[in] num This parameter selects between the primary and secondary DNS server
+ * @param[in] index This parameter selects between the primary and secondary DNS server
  * @param[out] addr DNS server address
  * @return Error code
  **/
 
-error_t ipv4GetDnsServer(NetInterface *interface, uint_t num, Ipv4Addr *addr)
+error_t ipv4GetDnsServer(NetInterface *interface, uint_t index, Ipv4Addr *addr)
 {
    //Check parameters
    if(interface == NULL || addr == NULL)
       return ERROR_INVALID_PARAMETER;
 
-   //Get DNS server address
-   if(num < IPV4_MAX_DNS_SERVERS)
-      *addr = interface->ipv4Config.dnsServer[num];
-   else
+   //Make sure that the index is valid
+   if(index >= IPV4_DNS_SERVER_LIST_SIZE)
+   {
+      //Return the unspecified address when the index is out of range
       *addr = IPV4_UNSPECIFIED_ADDR;
+      //Report an error
+      return ERROR_OUT_OF_RANGE;
+   }
+
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
+   //Get DNS server address
+   *addr = interface->ipv4Context.dnsServerList[index];
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //Successful processing
    return NO_ERROR;
@@ -364,11 +368,53 @@ error_t ipv4GetBroadcastAddr(NetInterface *interface, Ipv4Addr *addr)
 
    //The broadcast address is obtained by performing a bitwise OR operation
    //between the bit complement of the subnet mask and the host IP address
-   *addr = interface->ipv4Config.addr;
-   *addr |= ~interface->ipv4Config.subnetMask;
+   *addr = interface->ipv4Context.addr;
+   *addr |= ~interface->ipv4Context.subnetMask;
 
    //Successful processing
    return NO_ERROR;
+}
+
+
+/**
+ * @brief Callback function for link change event
+ * @param[in] interface Underlying network interface
+ **/
+
+void ipv4LinkChangeEvent(NetInterface *interface)
+{
+   Ipv4Context *context;
+
+   //Point to the IPv4 context
+   context = &interface->ipv4Context;
+
+   //Restore default MTU
+   context->linkMtu = interface->nicDriver->mtu;
+
+#if (ETH_SUPPORT == ENABLED)
+   //Flush ARP cache contents
+   arpFlushCache(interface);
+#endif
+
+#if (IPV4_FRAG_SUPPORT == ENABLED)
+   //Flush the reassembly queue
+   ipv4FlushFragQueue(interface);
+#endif
+
+#if (IGMP_SUPPORT == ENABLED)
+   //Notify IGMP of link state changes
+   igmpLinkChangeEvent(interface);
+#endif
+
+#if (AUTO_IP_SUPPORT == ENABLED)
+   //Notify Auto-IP of link state changes
+   autoIpLinkChangeEvent(interface->autoIpContext);
+#endif
+
+#if (DHCP_CLIENT_SUPPORT == ENABLED)
+   //Notify the DHCP client of link state changes
+   dhcpClientLinkChangeEvent(interface->dhcpClientContext);
+#endif
 }
 
 
@@ -404,9 +450,15 @@ void ipv4ProcessPacket(NetInterface *interface, Ipv4Header *packet, size_t lengt
    //Source address filtering
    if(ipv4CheckSourceAddr(interface, packet->srcAddr))
       return;
+
+#if defined(IPV4_PACKET_FORWARD_HOOK)
+   IPV4_PACKET_FORWARD_HOOK(interface, packet, length);
+#else
    //Destination address filtering
    if(ipv4CheckDestAddr(interface, packet->destAddr))
       return;
+#endif
+
    //Packets addressed to a tentative address should be silently discarded
    if(ipv4IsTentativeAddr(interface, packet->destAddr))
       return;
@@ -429,12 +481,8 @@ void ipv4ProcessPacket(NetInterface *interface, Ipv4Header *packet, size_t lengt
    if(ntohs(packet->fragmentOffset) & (IPV4_FLAG_MF | IPV4_OFFSET_MASK))
    {
 #if (IPV4_FRAG_SUPPORT == ENABLED)
-      //Acquire exclusive access to the reassembly queue
-      osAcquireMutex(&interface->ipv4FragQueueMutex);
       //Reassemble the original datagram
       ipv4ReassembleDatagram(interface, packet, length);
-      //Release exclusive access to the reassembly queue
-      osReleaseMutex(&interface->ipv4FragQueueMutex);
 #endif
    }
    else
@@ -492,6 +540,10 @@ void ipv4ProcessDatagram(NetInterface *interface, const NetBuffer *buffer)
    pseudoHeader.ipv4Data.reserved = 0;
    pseudoHeader.ipv4Data.protocol = header->protocol;
    pseudoHeader.ipv4Data.length = htons(length);
+
+#if defined(IPV4_DATAGRAM_FORWARD_HOOK)
+   IPV4_DATAGRAM_FORWARD_HOOK(interface, &pseudoHeader, buffer, offset);
+#endif
 
    //Check the protocol field
    switch(header->protocol)
@@ -562,14 +614,14 @@ void ipv4ProcessDatagram(NetInterface *interface, const NetBuffer *buffer)
    {
       //Send a Destination Unreachable message
       icmpSendErrorMessage(interface, ICMP_TYPE_DEST_UNREACHABLE,
-         ICMP_CODE_PROTOCOL_UNREACHABLE, 0, buffer);
+         ICMP_CODE_PROTOCOL_UNREACHABLE, 0, buffer, 0);
    }
    //Unreachable port?
    else if(error == ERROR_PORT_UNREACHABLE)
    {
       //Send a Destination Unreachable message
       icmpSendErrorMessage(interface, ICMP_TYPE_DEST_UNREACHABLE,
-         ICMP_CODE_PORT_UNREACHABLE, 0, buffer);
+         ICMP_CODE_PORT_UNREACHABLE, 0, buffer, 0);
    }
 }
 
@@ -594,16 +646,20 @@ error_t ipv4SendDatagram(NetInterface *interface, Ipv4PseudoHeader *pseudoHeader
    //Retrieve the length of payload
    length = netBufferGetLength(buffer) - offset;
 
-   //Use default Time-To-Live value?
-   if(!ttl) ttl = IPV4_DEFAULT_TTL;
+   //Check whether the TTL value is zero
+   if(ttl == 0)
+   {
+      //Use default Time-To-Live value
+      ttl = IPV4_DEFAULT_TTL;
+   }
 
    //Identification field is primarily used to identify
    //fragments of an original IP datagram
-   id = osAtomicInc16(&interface->ipv4Identification);
+   id = interface->ipv4Context.identification++;
 
    //If the payload length is smaller than the network
    //interface MTU then no fragmentation is needed
-   if((length + sizeof(Ipv4Header)) <= interface->ipv4Config.mtu)
+   if((length + sizeof(Ipv4Header)) <= interface->ipv4Context.linkMtu)
    {
       //Send data as is
       error = ipv4SendPacket(interface,
@@ -705,7 +761,7 @@ error_t ipv4SendPacket(NetInterface *interface, Ipv4PseudoHeader *pseudoHeader,
       {
          //Destination IPv4 address
          destIpAddr = pseudoHeader->destAddr;
-         //Make use of the broadcast MAC address
+         //Use of the broadcast MAC address to send the packet
          destMacAddr = MAC_BROADCAST_ADDR;
          //No error to report
          error = NO_ERROR;
@@ -718,24 +774,34 @@ error_t ipv4SendPacket(NetInterface *interface, Ipv4PseudoHeader *pseudoHeader,
          //Map IPv4 multicast address to MAC-layer multicast address
          error = ipv4MapMulticastAddrToMac(pseudoHeader->destAddr, &destMacAddr);
       }
-      //Destination host is in the local subnet?
-      else if(ipv4IsInLocalSubnet(interface, pseudoHeader->destAddr))
+      //Source or destination address is a link-local address?
+      else if(ipv4IsLinkLocalAddr(pseudoHeader->srcAddr) ||
+         ipv4IsLinkLocalAddr(pseudoHeader->destAddr))
+      {
+         //Packets with a link-local source or destination address are not
+         //routable off the link
+         destIpAddr = pseudoHeader->destAddr;
+         ///Resolve destination address before sending the packet
+         error = arpResolve(interface, pseudoHeader->destAddr, &destMacAddr);
+      }
+      //Destination host is on the local subnet?
+      else if(ipv4IsOnLocalSubnet(interface, pseudoHeader->destAddr))
       {
          //Destination IPv4 address
          destIpAddr = pseudoHeader->destAddr;
-         //Resolve host address before sending the packet
+         //Resolve destination address before sending the packet
          error = arpResolve(interface, pseudoHeader->destAddr, &destMacAddr);
       }
       //Destination host is outside the local subnet?
       else
       {
          //Make sure the default gateway is properly set
-         if(interface->ipv4Config.defaultGateway != IPV4_UNSPECIFIED_ADDR)
+         if(interface->ipv4Context.defaultGateway != IPV4_UNSPECIFIED_ADDR)
          {
             //Use the default gateway to forward the packet
-            destIpAddr = interface->ipv4Config.defaultGateway;
+            destIpAddr = interface->ipv4Context.defaultGateway;
             //Perform address resolution
-            error = arpResolve(interface, interface->ipv4Config.defaultGateway, &destMacAddr);
+            error = arpResolve(interface, interface->ipv4Context.defaultGateway, &destMacAddr);
          }
          else
          {
@@ -833,10 +899,12 @@ error_t ipv4CheckSourceAddr(NetInterface *interface, Ipv4Addr ipAddr)
 
 error_t ipv4CheckDestAddr(NetInterface *interface, Ipv4Addr ipAddr)
 {
+   error_t error;
    uint_t i;
+   Ipv4FilterEntry *entry;
 
    //Filter out any invalid addresses
-   error_t error = ERROR_INVALID_ADDRESS;
+   error = ERROR_INVALID_ADDRESS;
 
    //Broadcast address?
    if(ipv4IsBroadcastAddr(interface, ipAddr))
@@ -847,35 +915,39 @@ error_t ipv4CheckDestAddr(NetInterface *interface, Ipv4Addr ipAddr)
    //Multicast address?
    else if(ipv4IsMulticastAddr(ipAddr))
    {
-      //Acquire exclusive access to the IPv4 filter table
-      osAcquireMutex(&interface->ipv4FilterMutex);
-
-      //Loop through the IPv4 filter table
-      for(i = 0; i < interface->ipv4FilterSize; i++)
+      //Go through the multicast filter table
+      for(i = 0; i < IPV4_MULTICAST_FILTER_SIZE; i++)
       {
-         //Check whether the destination IPv4 address matches
-         //a relevant multicast address
-         if(interface->ipv4Filter[i].addr == ipAddr)
+         //Point to the current entry
+         entry = &interface->ipv4Context.multicastFilter[i];
+
+         //Valid entry?
+         if(entry->refCount > 0)
          {
-            //The multicast address is acceptable
-            error = NO_ERROR;
-            //Stop immediately
-            break;
+            //Check whether the destination IPv4 address matches
+            //a relevant multicast address
+            if(entry->addr == ipAddr)
+            {
+               //The multicast address is acceptable
+               error = NO_ERROR;
+               //Stop immediately
+               break;
+            }
          }
       }
-
-      //Release exclusive access to the IPv4 filter table
-      osReleaseMutex(&interface->ipv4FilterMutex);
    }
    //Unicast address?
    else
    {
-      //The destination address matches the host address?
-      if(interface->ipv4Config.addrState != IPV4_ADDR_STATE_INVALID &&
-         interface->ipv4Config.addr == ipAddr)
+      //Valid host address?
+      if(interface->ipv4Context.addrState != IPV4_ADDR_STATE_INVALID)
       {
-         //The destination address is acceptable
-         error = NO_ERROR;
+         //Check whether the destination address matches the host address
+         if(interface->ipv4Context.addr == ipAddr)
+         {
+            //The destination address is acceptable
+            error = NO_ERROR;
+         }
       }
    }
 
@@ -890,7 +962,7 @@ error_t ipv4CheckDestAddr(NetInterface *interface, Ipv4Addr ipAddr)
  * This function selects the source address and the relevant network interface
  * to be used in order to join the specified destination address
  *
- * @param[in,out] interface A pointer to a valid network interface may provided as
+ * @param[in,out] interface A pointer to a valid network interface may be provided as
  *   a hint. The function returns a pointer identifying the interface to be used
  * @param[in] destAddr Destination IPv4 address
  * @param[out] srcAddr Local IPv4 address to be used
@@ -900,15 +972,176 @@ error_t ipv4CheckDestAddr(NetInterface *interface, Ipv4Addr ipAddr)
 error_t ipv4SelectSourceAddr(NetInterface **interface,
    Ipv4Addr destAddr, Ipv4Addr *srcAddr)
 {
-   //Use default network interface?
-   if(*interface == NULL)
-      *interface = netGetDefaultInterface();
+   uint_t i;
+   NetInterface *currentInterface;
+   NetInterface *bestInterface;
 
-   //Select the most appropriate source address
-   *srcAddr = (*interface)->ipv4Config.addr;
+   //Initialize variables
+   bestInterface = NULL;
 
-   //Successful processing
+   //Loop through network interfaces
+   for(i = 0; i < NET_INTERFACE_COUNT; i++)
+   {
+      //Point to the current interface
+      currentInterface = &netInterface[i];
+
+      //A network interface may be provided as a hint...
+      if(*interface != currentInterface && *interface != NULL)
+      {
+         //Select the next interface in the list
+         continue;
+      }
+
+      //Check the state of the address
+      if(currentInterface->ipv4Context.addrState != IPV4_ADDR_STATE_VALID)
+      {
+         //Select the next interface in the list
+         continue;
+      }
+
+      //Select the first interface as default
+      if(bestInterface == NULL)
+      {
+         //Give the current interface the higher precedence
+         bestInterface = currentInterface;
+         //Select the next interface in the list
+         continue;
+      }
+
+      //Prefer same address
+      if(bestInterface->ipv4Context.addr == destAddr)
+      {
+         //Select the next interface in the list
+         continue;
+      }
+      else if(currentInterface->ipv4Context.addr == destAddr)
+      {
+         //Give the current interface the higher precedence
+         bestInterface = currentInterface;
+         //Select the next interface in the list
+         continue;
+      }
+
+      //Prefer appropriate scope
+      if(ipv4GetAddrScope(currentInterface->ipv4Context.addr) <
+         ipv4GetAddrScope(bestInterface->ipv4Context.addr))
+      {
+         if(ipv4GetAddrScope(currentInterface->ipv4Context.addr) >=
+            ipv4GetAddrScope(destAddr))
+         {
+            //Give the current interface the higher precedence
+            bestInterface = currentInterface;
+         }
+
+         //Select the next interface in the list
+         continue;
+      }
+      else if(ipv4GetAddrScope(bestInterface->ipv4Context.addr) <
+         ipv4GetAddrScope(currentInterface->ipv4Context.addr))
+      {
+         if(ipv4GetAddrScope(bestInterface->ipv4Context.addr) <
+            ipv4GetAddrScope(destAddr))
+         {
+            //Give the current interface the higher precedence
+            bestInterface = currentInterface;
+         }
+
+         //Select the next interface in the list
+         continue;
+      }
+
+      //Prefer appropriate subnet mask
+      if(ipv4IsOnLocalSubnet(bestInterface, destAddr))
+      {
+         //Select the next interface in the list
+         continue;
+      }
+      else if(ipv4IsOnLocalSubnet(currentInterface, destAddr))
+      {
+         //Give the current interface the higher precedence
+         bestInterface = currentInterface;
+         //Select the next interface in the list
+         continue;
+      }
+   }
+
+   //Source address selection failed?
+   if(bestInterface == NULL)
+   {
+      //Report an error
+      return ERROR_NO_ADDRESS;
+   }
+
+   //Return the out-going interface and the source address to be used
+   *interface = bestInterface;
+   *srcAddr = bestInterface->ipv4Context.addr;
+
+   //Successful source address selection
    return NO_ERROR;
+}
+
+
+/**
+ * @brief Retrieve the scope of an IPv4 address
+ * @param[in] ipAddr IPv4 address
+ * @return IPv4 address scope
+ **/
+
+uint_t ipv4GetAddrScope(Ipv4Addr ipAddr)
+{
+   uint_t scope;
+
+   //Broadcast address?
+   if(ipAddr == IPV4_BROADCAST_ADDR)
+   {
+      //The broadcast address is never forwarded by the routers connecting
+      //the local network to other networks
+      scope = IPV4_ADDR_SCOPE_LINK_LOCAL;
+   }
+   //Multicast address?
+   else if(ipv4IsMulticastAddr(ipAddr))
+   {
+      //Local Network Control Block?
+      if((ipAddr & IPV4_MULTICAST_LNCB_MASK) == IPV4_MULTICAST_LNCB_PREFIX)
+      {
+         //Addresses in the Local Network Control Block are used for protocol
+         //control traffic that is not forwarded off link
+         scope = IPV4_ADDR_SCOPE_LINK_LOCAL;
+      }
+      //Any other multicast address?
+      else
+      {
+         //Other addresses are assigned global scope
+         scope = IPV4_ADDR_SCOPE_GLOBAL;
+      }
+   }
+   //Unicast address?
+   else
+   {
+      //Loopback address?
+      if((ipAddr & IPV4_LOOPBACK_ADDR_MASK) == IPV4_LOOPBACK_ADDR_PREFIX)
+      {
+         //IPv4 loopback addresses, which have the prefix 127.0.0.0/8,
+         //are assigned interface-local scope
+         scope = IPV4_ADDR_SCOPE_INTERFACE_LOCAL;
+      }
+      //Link-local address?
+      else if((ipAddr & IPV4_LINK_LOCAL_MASK) == IPV4_LINK_LOCAL_PREFIX)
+      {
+         //IPv4 auto-configuration addresses, which have the prefix
+         //169.254.0.0/16, are assigned link-local scope
+         scope = IPV4_ADDR_SCOPE_LINK_LOCAL;
+      }
+      //Any other unicast address?
+      else
+      {
+         //Other addresses are assigned global scope
+         scope = IPV4_ADDR_SCOPE_GLOBAL;
+      }
+   }
+
+   //Return the scope of the specified IPv4 address
+   return scope;
 }
 
 
@@ -923,62 +1156,75 @@ error_t ipv4JoinMulticastGroup(NetInterface *interface, Ipv4Addr groupAddr)
 {
    error_t error;
    uint_t i;
+   Ipv4FilterEntry *entry;
+   Ipv4FilterEntry *firstFreeEntry;
+#if (ETH_SUPPORT == ENABLED)
    MacAddr macAddr;
+#endif
 
-   //Ensure the specified IPv4 address is a multicast address
+   //The IPv4 address must be a valid multicast address
    if(!ipv4IsMulticastAddr(groupAddr))
       return ERROR_INVALID_ADDRESS;
 
-   //Acquire exclusive access to the IPv4 filter table
-   osAcquireMutex(&interface->ipv4FilterMutex);
+   //Initialize error code
+   error = NO_ERROR;
+   //Keep track of the first free entry
+   firstFreeEntry = NULL;
 
-   //Loop through filter table entries
-   for(i = 0; i < interface->ipv4FilterSize; i++)
+   //Go through the multicast filter table
+   for(i = 0; i < IPV4_MULTICAST_FILTER_SIZE; i++)
    {
-      //Check whether the table already contains the specified IPv4 address
-      if(interface->ipv4Filter[i].addr == groupAddr)
+      //Point to the current entry
+      entry = &interface->ipv4Context.multicastFilter[i];
+
+      //Valid entry?
+      if(entry->refCount > 0)
       {
-         //Increment the reference count
-         interface->ipv4Filter[i].refCount++;
-         //Release exclusive access to the IPv4 filter table
-         osReleaseMutex(&interface->ipv4FilterMutex);
-         //No error to report
-         return NO_ERROR;
+         //Check whether the table already contains the specified IPv4 address
+         if(entry->addr == groupAddr)
+         {
+            //Increment the reference count
+            entry->refCount++;
+            //Successful processing
+            return NO_ERROR;
+         }
+      }
+      else
+      {
+         //Keep track of the first free entry
+         if(firstFreeEntry == NULL)
+            firstFreeEntry = entry;
       }
    }
 
-   //The IPv4 filter table is full ?
-   if(i >= IPV4_FILTER_MAX_SIZE)
+   //Check whether the multicast filter table is full
+   if(firstFreeEntry == NULL)
    {
-      //Release exclusive access to the IPv4 filter table
-      osReleaseMutex(&interface->ipv4FilterMutex);
       //A new entry cannot be added
       return ERROR_FAILURE;
    }
 
-   //Map the multicast IPv4 address to a MAC-layer address
+#if (ETH_SUPPORT == ENABLED)
+   //Map the IPv4 multicast address to a MAC-layer address
    ipv4MapMulticastAddrToMac(groupAddr, &macAddr);
    //Add the corresponding address to the MAC filter table
    error = ethAcceptMulticastAddr(interface, &macAddr);
+#endif
 
-   //Ensure the MAC filter table was successfully updated
+   //MAC filter table successfully updated?
    if(!error)
    {
       //Now we can safely add a new entry to the table
-      interface->ipv4Filter[i].addr = groupAddr;
+      firstFreeEntry->addr = groupAddr;
       //Initialize the reference count
-      interface->ipv4Filter[i].refCount = 1;
-      //Adjust the size of the IPv4 filter table
-      interface->ipv4FilterSize++;
+      firstFreeEntry->refCount = 1;
 
 #if (IGMP_SUPPORT == ENABLED)
       //Report multicast group membership to the router
-      igmpJoinGroup(interface, &interface->ipv4Filter[i]);
+      igmpJoinGroup(interface, firstFreeEntry);
 #endif
    }
 
-   //Release exclusive access to the IPv4 filter table
-   osReleaseMutex(&interface->ipv4FilterMutex);
    //Return status code
    return error;
 }
@@ -994,56 +1240,55 @@ error_t ipv4JoinMulticastGroup(NetInterface *interface, Ipv4Addr groupAddr)
 error_t ipv4LeaveMulticastGroup(NetInterface *interface, Ipv4Addr groupAddr)
 {
    uint_t i;
-   uint_t j;
+   Ipv4FilterEntry *entry;
+#if (ETH_SUPPORT == ENABLED)
    MacAddr macAddr;
+#endif
 
-   //Ensure the specified IPv4 address is a multicast address
+   //The IPv4 address must be a valid multicast address
    if(!ipv4IsMulticastAddr(groupAddr))
       return ERROR_INVALID_ADDRESS;
 
-   //Acquire exclusive access to the IPv4 filter table
-   osAcquireMutex(&interface->ipv4FilterMutex);
-
-   //Loop through filter table entries
-   for(i = 0; i < interface->ipv4FilterSize; i++)
+   //Go through the multicast filter table
+   for(i = 0; i < IPV4_MULTICAST_FILTER_SIZE; i++)
    {
-      //Specified IPv4 address found?
-      if(interface->ipv4Filter[i].addr == groupAddr)
+      //Point to the current entry
+      entry = &interface->ipv4Context.multicastFilter[i];
+
+      //Valid entry?
+      if(entry->refCount > 0)
       {
-         //Decrement the reference count
-         interface->ipv4Filter[i].refCount--;
-
-         //Remove the entry if the reference count drops to zero
-         if(interface->ipv4Filter[i].refCount < 1)
+         //Specified IPv4 address found?
+         if(entry->addr == groupAddr)
          {
+            //Decrement the reference count
+            entry->refCount--;
+
+            //Remove the entry if the reference count drops to zero
+            if(entry->refCount == 0)
+            {
 #if (IGMP_SUPPORT == ENABLED)
-            //Report group membership termination
-            igmpLeaveGroup(interface, &interface->ipv4Filter[i]);
+               //Report group membership termination
+               igmpLeaveGroup(interface, entry);
 #endif
-            //Map the multicast IPv4 address to a MAC-layer address
-            ipv4MapMulticastAddrToMac(groupAddr, &macAddr);
-            //Drop the corresponding address from the MAC filter table
-            ethDropMulticastAddr(interface, &macAddr);
+#if (ETH_SUPPORT == ENABLED)
+               //Map the IPv4 multicast address to a MAC-layer address
+               ipv4MapMulticastAddrToMac(groupAddr, &macAddr);
+               //Drop the corresponding address from the MAC filter table
+               ethDropMulticastAddr(interface, &macAddr);
+#endif
+               //Remove the multicast address from the list
+               entry->addr = IPV4_UNSPECIFIED_ADDR;
+            }
 
-            //Adjust the size of the IPv4 filter table
-            interface->ipv4FilterSize--;
-
-            //Remove the corresponding entry
-            for(j = i; j < interface->ipv4FilterSize; j++)
-               interface->ipv4Filter[j] = interface->ipv4Filter[j + 1];
+            //Successful processing
+            return NO_ERROR;
          }
-
-         //Release exclusive access to the IPv4 filter table
-         osReleaseMutex(&interface->ipv4FilterMutex);
-         //No error to report
-         return NO_ERROR;
       }
    }
 
-   //Release exclusive access to the IPv4 filter table
-   osReleaseMutex(&interface->ipv4FilterMutex);
    //The specified IPv4 address does not exist
-   return ERROR_FAILURE;
+   return ERROR_ADDRESS_NOT_FOUND;
 }
 
 

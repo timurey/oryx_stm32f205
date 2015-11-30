@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -35,6 +35,9 @@
 #include "core/net.h"
 #include "drivers/sam4e_eth.h"
 #include "debug.h"
+
+//Underlying network interface
+static NetInterface *nicDriverInterface;
 
 //TX buffer
 static uint8_t txBuffer[SAM4E_ETH_TX_BUFFER_COUNT][SAM4E_ETH_TX_BUFFER_SIZE]
@@ -68,8 +71,9 @@ const NicDriver sam4eEthDriver =
    sam4eEthEnableIrq,
    sam4eEthDisableIrq,
    sam4eEthEventHandler,
-   sam4eEthSetMacFilter,
    sam4eEthSendPacket,
+   sam4eEthSetMulticastFilter,
+   sam4eEthUpdateMacConfig,
    sam4eEthWritePhyReg,
    sam4eEthReadPhyReg,
    TRUE,
@@ -91,6 +95,9 @@ error_t sam4eEthInit(NetInterface *interface)
 
    //Debug message
    TRACE_INFO("Initializing SAM4E Ethernet MAC...\r\n");
+
+   //Save underlying network interface
+   nicDriverInterface = interface;
 
    //Enable GMAC peripheral clock
    PMC->PMC_PCER1 = (1 << (ID_GMAC - 32));
@@ -147,9 +154,7 @@ error_t sam4eEthInit(NetInterface *interface)
    //Enable the GMAC to transmit and receive data
    GMAC->GMAC_NCR |= GMAC_NCR_TXEN | GMAC_NCR_RXEN;
 
-   //Force the TCP/IP stack to check the link state
-   osSetEvent(&interface->nicRxEvent);
-   //SAM4E Ethernet MAC is now ready to send
+   //Accept any packets from the upper layer
    osSetEvent(&interface->nicTxEvent);
 
    //Successful initialization
@@ -290,13 +295,10 @@ void GMAC_Handler(void)
    volatile uint32_t isr;
    volatile uint32_t tsr;
    volatile uint32_t rsr;
-   NetInterface *interface;
 
    //Enter interrupt service routine
    osEnterIsr();
 
-   //Point to the structure describing the network interface
-   interface = &netInterface[0];
    //This flag will be set if a higher priority task must be woken
    flag = FALSE;
 
@@ -316,15 +318,18 @@ void GMAC_Handler(void)
       //Check whether the TX buffer is available for writing
       if(txBufferDesc[txBufferIndex].status & GMAC_TX_USED)
       {
-         //Notify the user that the transmitter is ready to send
-         flag |= osSetEventFromIsr(&interface->nicTxEvent);
+         //Notify the TCP/IP stack that the transmitter is ready to send
+         flag |= osSetEventFromIsr(&nicDriverInterface->nicTxEvent);
       }
    }
+
    //A packet has been received?
    if(rsr & (GMAC_RSR_HNO | GMAC_RSR_RXOVR | GMAC_RSR_REC | GMAC_RSR_BNA))
    {
-      //Notify the user that a packet has been received
-      flag |= osSetEventFromIsr(&interface->nicRxEvent);
+      //Set event flag
+      nicDriverInterface->nicEvent = TRUE;
+      //Notify the TCP/IP stack of the event
+      flag |= osSetEventFromIsr(&netEvent);
    }
 
    //Leave interrupt service routine
@@ -340,49 +345,10 @@ void GMAC_Handler(void)
 void sam4eEthEventHandler(NetInterface *interface)
 {
    uint32_t rsr;
-   uint_t length;
-   bool_t linkStateChange;
+   size_t length;
 
    //Read receive status
    rsr = GMAC->GMAC_RSR;
-
-   //PHY event is pending?
-   if(interface->phyEvent)
-   {
-      //Acknowledge the event by clearing the flag
-      interface->phyEvent = FALSE;
-      //Handle PHY specific events
-      linkStateChange = interface->phyDriver->eventHandler(interface);
-
-      //Check whether the link state has changed?
-      if(linkStateChange)
-      {
-         //Set speed and duplex mode for proper operation
-         if(interface->linkState)
-         {
-            //Read network configuration register
-            uint32_t config = GMAC->GMAC_NCFGR;
-
-            //10BASE-T or 100BASE-TX operation mode?
-            if(interface->speed100)
-               config |= GMAC_NCFGR_SPD;
-            else
-               config &= ~GMAC_NCFGR_SPD;
-
-            //Half-duplex or full-duplex mode?
-            if(interface->fullDuplex)
-               config |= GMAC_NCFGR_FD;
-            else
-               config &= ~GMAC_NCFGR_FD;
-
-            //Write configuration value back to NCFGR register
-            GMAC->GMAC_NCFGR = config;
-         }
-
-         //Process link state change event
-         nicNotifyLinkChange(interface);
-      }
-   }
 
    //Packet received?
    if(rsr & (GMAC_RSR_HNO | GMAC_RSR_RXOVR | GMAC_RSR_REC | GMAC_RSR_BNA))
@@ -401,67 +367,6 @@ void sam4eEthEventHandler(NetInterface *interface)
          nicProcessPacket(interface, interface->ethFrame, length);
       }
    }
-}
-
-
-/**
- * @brief Configure multicast MAC address filtering
- * @param[in] interface Underlying network interface
- * @return Error code
- **/
-
-error_t sam4eEthSetMacFilter(NetInterface *interface)
-{
-   uint_t i;
-   uint_t j;
-   uint32_t hashTable[2];
-
-   //Debug message
-   TRACE_INFO("Updating SAM4E hash table...\r\n");
-
-   //Clear hash table
-   hashTable[0] = 0;
-   hashTable[1] = 0;
-
-   //The MAC filter table contains the multicast MAC addresses
-   //to accept when receiving an Ethernet frame
-   for(i = 0; i < interface->macFilterSize; i++)
-   {
-      //Point to the current address
-      MacAddr *addr = &interface->macFilter[i].addr;
-      //Reset hash value
-      uint_t hashIndex = 0;
-
-      //Apply the hash function
-      for(j = 0; j < 48; j += 6)
-      {
-         //Calculate the shift count
-         uint_t n = j / 8;
-         uint_t m = j % 8;
-
-         //Update hash value
-         if(!m)
-            hashIndex ^= addr->b[n];
-         else
-            hashIndex ^= (addr->b[n] >> m) | (addr->b[n + 1] << (8 - m));
-      }
-
-      //The hash value is reduced to a 6-bit index
-      hashIndex &= 0x3F;
-      //Update hash table contents
-      hashTable[hashIndex / 32] |= (1 << (hashIndex % 32));
-   }
-
-   //Write the hash table
-   GMAC->GMAC_HRB = hashTable[0];
-   GMAC->GMAC_HRT = hashTable[1];
-
-   //Debug message
-   TRACE_INFO("  HRB = %08" PRIX32 "\r\n", GMAC->GMAC_HRB);
-   TRACE_INFO("  HRT = %08" PRIX32 "\r\n", GMAC->GMAC_HRT);
-
-   //Successful processing
-   return NO_ERROR;
 }
 
 
@@ -624,6 +529,109 @@ uint_t sam4eEthReceivePacket(NetInterface *interface,
 
    //Return the number of bytes that have been received
    return length;
+}
+
+
+/**
+ * @brief Configure multicast MAC address filtering
+ * @param[in] interface Underlying network interface
+ * @return Error code
+ **/
+
+error_t sam4eEthSetMulticastFilter(NetInterface *interface)
+{
+   uint_t i;
+   uint_t j;
+   uint_t k;
+   uint_t m;
+   uint_t n;
+   uint32_t hashTable[2];
+   MacFilterEntry *entry;
+
+   //Debug message
+   TRACE_DEBUG("Updating SAM4E hash table...\r\n");
+
+   //Clear hash table
+   hashTable[0] = 0;
+   hashTable[1] = 0;
+
+   //The MAC filter table contains the multicast MAC addresses
+   //to accept when receiving an Ethernet frame
+   for(i = 0; i < MAC_MULTICAST_FILTER_SIZE; i++)
+   {
+      //Point to the current entry
+      entry = &interface->macMulticastFilter[i];
+
+      //Valid entry?
+      if(entry->refCount > 0)
+      {
+         //Reset hash value
+         k = 0;
+
+         //Apply the hash function
+         for(j = 0; j < 48; j += 6)
+         {
+            //Calculate the shift count
+            n = j / 8;
+            m = j % 8;
+
+            //Update hash value
+            if(!m)
+               k ^= entry->addr.b[n];
+            else
+               k ^= (entry->addr.b[n] >> m) | (entry->addr.b[n + 1] << (8 - m));
+         }
+
+         //The hash value is reduced to a 6-bit index
+         k &= 0x3F;
+         //Update hash table contents
+         hashTable[k / 32] |= (1 << (k % 32));
+      }
+   }
+
+   //Write the hash table
+   GMAC->GMAC_HRB = hashTable[0];
+   GMAC->GMAC_HRT = hashTable[1];
+
+   //Debug message
+   TRACE_DEBUG("  HRB = %08" PRIX32 "\r\n", GMAC->GMAC_HRB);
+   TRACE_DEBUG("  HRT = %08" PRIX32 "\r\n", GMAC->GMAC_HRT);
+
+   //Successful processing
+   return NO_ERROR;
+}
+
+
+/**
+ * @brief Adjust MAC configuration parameters for proper operation
+ * @param[in] interface Underlying network interface
+ * @return Error code
+ **/
+
+error_t sam4eEthUpdateMacConfig(NetInterface *interface)
+{
+   uint32_t config;
+
+   //Read network configuration register
+   config = GMAC->GMAC_NCFGR;
+
+   //10BASE-T or 100BASE-TX operation mode?
+   if(interface->linkSpeed == NIC_LINK_SPEED_100MBPS)
+      config |= GMAC_NCFGR_SPD;
+   else
+      config &= ~GMAC_NCFGR_SPD;
+
+   //Half-duplex or full-duplex mode?
+   if(interface->duplexMode == NIC_FULL_DUPLEX_MODE)
+      config |= GMAC_NCFGR_FD;
+   else
+      config &= ~GMAC_NCFGR_FD;
+
+   //Write configuration value back to NCFGR register
+   GMAC->GMAC_NCFGR = config;
+
+   //Successful processing
+   return NO_ERROR;
 }
 
 

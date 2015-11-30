@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -58,7 +58,7 @@ bool_t httpCheckPassword(HttpConnection *connection,
    bool_t status = FALSE;
 
    //Debug message
-   TRACE_DEBUG("Password verification...\r\n");
+   TRACE_DEBUG("HTTP password verification...\r\n");
 
 #if (HTTP_SERVER_BASIC_AUTH_SUPPORT == ENABLED)
    //Basic authentication scheme?
@@ -91,8 +91,8 @@ bool_t httpCheckPassword(HttpConnection *connection,
       if(auth->found && auth->mode == HTTP_AUTH_MODE_DIGEST)
       {
          //Sanity check
-         if(auth->realm != NULL && auth->realm != NULL &&
-            auth->nonce != NULL && auth->qop != NULL &&
+         if(auth->realm != NULL && auth->nonce != NULL &&
+            auth->uri != NULL && auth->qop != NULL &&
             auth->nc != NULL && auth->cnonce != NULL &&
             auth->response != NULL)
          {

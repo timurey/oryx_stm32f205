@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _DHCPV6_CLIENT_H
@@ -33,44 +33,198 @@
 #include "dhcpv6/dhcpv6_common.h"
 #include "core/socket.h"
 
-//Stack size required to run the DHCPv6 client
-#ifndef DHCPV6_CLIENT_STACK_SIZE
-   #define DHCPV6_CLIENT_STACK_SIZE 550
-#elif (DHCPV6_CLIENT_STACK_SIZE < 1)
-   #error DHCPV6_CLIENT_STACK_SIZE parameter is not valid
+//DHCPv6 client support
+#ifndef DHCPV6_CLIENT_SUPPORT
+   #define DHCPV6_CLIENT_SUPPORT DISABLED
+#elif (DHCPV6_CLIENT_SUPPORT != ENABLED && DHCPV6_CLIENT_SUPPORT != DISABLED)
+   #error DHCPV6_CLIENT_SUPPORT parameter is not valid
 #endif
 
-//Priority at which the DHCPv6 client should run
-#ifndef DHCPV6_CLIENT_PRIORITY
-   #define DHCPV6_CLIENT_PRIORITY 1
-#elif (DHCPV6_CLIENT_PRIORITY < 0)
-   #error DHCPV6_CLIENT_PRIORITY parameter is not valid
+//DHCPv6 client tick interval
+#ifndef DHCPV6_CLIENT_TICK_INTERVAL
+   #define DHCPV6_CLIENT_TICK_INTERVAL 200
+#elif (DHCPV6_CLIENT_TICK_INTERVAL < 10)
+   #error DHCPV6_CLIENT_TICK_INTERVAL parameter is not valid
 #endif
 
-//Retransmission parameters
-#define DHCPV6_SOL_MAX_DELAY 1000
-#define DHCPV6_SOL_TIMEOUT   1000
-#define DHCPV6_SOL_MAX_RT    10000 //120000 in RFC 3315
-#define DHCPV6_REQ_TIMEOUT   1000
-#define DHCPV6_REQ_MAX_RT    10000 //30000 in RFC 3315
-#define DHCPV6_REQ_MAX_RC    10
-#define DHCPV6_CNF_MAX_DELAY 1000
-#define DHCPV6_CNF_TIMEOUT   1000
-#define DHCPV6_CNF_MAX_RT    4000
-#define DHCPV6_CNF_MAX_RD    10000
-#define DHCPV6_REN_TIMEOUT   1000  //10000 in RFC 3315
-#define DHCPV6_REN_MAX_RT    10000 //600000 in RFC 3315
-#define DHCPV6_REB_TIMEOUT   1000  //10000 in RFC 3315
-#define DHCPV6_REB_MAX_RT    10000 //600000 in RFC 3315
-#define DHCPV6_INF_MAX_DELAY 1000
-#define DHCPV6_INF_TIMEOUT   1000
-#define DHCPV6_INF_MAX_RT    120000
-#define DHCPV6_REL_TIMEOUT   1000
-#define DHCPV6_REL_MAX_RC    5
-#define DHCPV6_DEC_TIMEOUT   1000
-#define DHCPV6_DEC_MAX_RC    5
-#define DHCPV6_REC_TIMEOUT   2000
-#define DHCPV6_REC_MAX_RC    8
+//Maximum number of IPv6 addresses in the client's IA
+#ifndef DHCPV6_CLIENT_ADDR_LIST_SIZE
+   #define DHCPV6_CLIENT_ADDR_LIST_SIZE 2
+#elif (DHCPV6_CLIENT_ADDR_LIST_SIZE < 1)
+   #error DHCPV6_CLIENT_ADDR_LIST_SIZE parameter is not valid
+#endif
+
+//Maximum size of the client's FQDN
+#ifndef DHCPV6_CLIENT_MAX_FQDN_SIZE
+   #define DHCPV6_CLIENT_MAX_FQDN_SIZE 16
+#elif (DHCPV6_CLIENT_MAX_FQDN_SIZE < 1)
+   #error DHCPV6_CLIENT_MAX_FQDN_SIZE parameter is not valid
+#endif
+
+//Max delay of first Solicit
+#ifndef DHCPV6_CLIENT_SOL_MAX_DELAY
+   #define DHCPV6_CLIENT_SOL_MAX_DELAY 1000
+#elif (DHCPV6_CLIENT_SOL_MAX_DELAY < 100)
+   #error DHCPV6_CLIENT_SOL_MAX_DELAY parameter is not valid
+#endif
+
+//Initial Solicit timeout
+#ifndef DHCPV6_CLIENT_SOL_TIMEOUT
+   #define DHCPV6_CLIENT_SOL_TIMEOUT 1000
+#elif (DHCPV6_CLIENT_SOL_TIMEOUT < 100)
+   #error DHCPV6_CLIENT_SOL_TIMEOUT parameter is not valid
+#endif
+
+//Max Solicit timeout value
+#ifndef DHCPV6_CLIENT_SOL_MAX_RT
+   #define DHCPV6_CLIENT_SOL_MAX_RT 120000
+#elif (DHCPV6_CLIENT_SOL_MAX_RT < 100)
+   #error DHCPV6_CLIENT_SOL_MAX_RT parameter is not valid
+#endif
+
+//Initial Request timeout
+#ifndef DHCPV6_CLIENT_REQ_TIMEOUT
+   #define DHCPV6_CLIENT_REQ_TIMEOUT 1000
+#elif (DHCPV6_CLIENT_REQ_TIMEOUT < 100)
+   #error DHCPV6_CLIENT_REQ_TIMEOUT parameter is not valid
+#endif
+
+//Max Request timeout value
+#ifndef DHCPV6_CLIENT_REQ_MAX_RT
+   #define DHCPV6_CLIENT_REQ_MAX_RT 30000
+#elif (DHCPV6_CLIENT_REQ_MAX_RT < 100)
+   #error DHCPV6_CLIENT_REQ_MAX_RT parameter is not valid
+#endif
+
+//Max Request retry attempts
+#ifndef DHCPV6_CLIENT_REQ_MAX_RC
+   #define DHCPV6_CLIENT_REQ_MAX_RC 10
+#elif (DHCPV6_CLIENT_REQ_MAX_RC < 1)
+   #error DHCPV6_CLIENT_REQ_MAX_RC parameter is not valid
+#endif
+
+//Max delay of first Confirm
+#ifndef DHCPV6_CLIENT_CNF_MAX_DELAY
+   #define DHCPV6_CLIENT_CNF_MAX_DELAY 1000
+#elif (DHCPV6_CLIENT_CNF_MAX_DELAY < 100)
+   #error DHCPV6_CLIENT_CNF_MAX_DELAY parameter is not valid
+#endif
+
+//Initial Confirm timeout
+#ifndef DHCPV6_CLIENT_CNF_TIMEOUT
+   #define DHCPV6_CLIENT_CNF_TIMEOUT 1000
+#elif (DHCPV6_CLIENT_CNF_TIMEOUT < 100)
+   #error DHCPV6_CLIENT_CNF_TIMEOUT parameter is not valid
+#endif
+
+//Max Confirm timeout
+#ifndef DHCPV6_CLIENT_CNF_MAX_RT
+   #define DHCPV6_CLIENT_CNF_MAX_RT 4000
+#elif (DHCPV6_CLIENT_CNF_MAX_RT < 100)
+   #error DHCPV6_CLIENT_CNF_MAX_RT parameter is not valid
+#endif
+
+//Max Confirm duration
+#ifndef DHCPV6_CLIENT_CNF_MAX_RD
+   #define DHCPV6_CLIENT_CNF_MAX_RD 10000
+#elif (DHCPV6_CLIENT_CNF_MAX_RD < 100)
+   #error DHCPV6_CLIENT_CNF_MAX_RD parameter is not valid
+#endif
+
+//Initial Renew timeout
+#ifndef DHCPV6_CLIENT_REN_TIMEOUT
+   #define DHCPV6_CLIENT_REN_TIMEOUT 10000
+#elif (DHCPV6_CLIENT_REN_TIMEOUT < 100)
+   #error DHCPV6_CLIENT_REN_TIMEOUT parameter is not valid
+#endif
+
+//Max Renew timeout value
+#ifndef DHCPV6_CLIENT_REN_MAX_RT
+   #define DHCPV6_CLIENT_REN_MAX_RT 600000
+#elif (DHCPV6_CLIENT_REN_MAX_RT < 100)
+   #error DHCPV6_CLIENT_REN_MAX_RT parameter is not valid
+#endif
+
+//Initial Rebind timeout
+#ifndef DHCPV6_CLIENT_REB_TIMEOUT
+   #define DHCPV6_CLIENT_REB_TIMEOUT 10000
+#elif (DHCPV6_CLIENT_REB_TIMEOUT < 100)
+   #error DHCPV6_CLIENT_REB_TIMEOUT parameter is not valid
+#endif
+
+//Max Rebind timeout value
+#ifndef DHCPV6_CLIENT_REB_MAX_RT
+   #define DHCPV6_CLIENT_REB_MAX_RT 600000
+#elif (DHCPV6_CLIENT_REB_MAX_RT < 100)
+   #error DHCPV6_CLIENT_REB_MAX_RT parameter is not valid
+#endif
+
+//Max delay of first Information-request
+#ifndef DHCPV6_CLIENT_INF_MAX_DELAY
+   #define DHCPV6_CLIENT_INF_MAX_DELAY 1000
+#elif (DHCPV6_CLIENT_INF_MAX_DELAY < 100)
+   #error DHCPV6_CLIENT_INF_MAX_DELAY parameter is not valid
+#endif
+
+//Initial Information-request timeout
+#ifndef DHCPV6_CLIENT_INF_TIMEOUT
+   #define DHCPV6_CLIENT_INF_TIMEOUT 1000
+#elif (DHCPV6_CLIENT_INF_TIMEOUT < 100)
+   #error DHCPV6_CLIENT_INF_TIMEOUT parameter is not valid
+#endif
+
+//Max Information-request timeout value
+#ifndef DHCPV6_CLIENT_INF_MAX_RT
+   #define DHCPV6_CLIENT_INF_MAX_RT 120000
+#elif (DHCPV6_CLIENT_INF_MAX_RT < 1000)
+   #error DHCPV6_CLIENT_INF_MAX_RT parameter is not valid
+#endif
+
+//Initial Release timeout
+#ifndef DHCPV6_CLIENT_REL_TIMEOUT
+   #define DHCPV6_CLIENT_REL_TIMEOUT 1000
+#elif (DHCPV6_CLIENT_REL_TIMEOUT < 100)
+   #error DHCPV6_CLIENT_REL_TIMEOUT parameter is not valid
+#endif
+
+//Max Release attempts
+#ifndef DHCPV6_CLIENT_REL_MAX_RC
+   #define DHCPV6_CLIENT_REL_MAX_RC 5
+#elif (DHCPV6_CLIENT_REL_MAX_RC < 1)
+   #error DHCPV6_CLIENT_REL_MAX_RC parameter is not valid
+#endif
+
+//Initial Decline timeout
+#ifndef DHCPV6_CLIENT_DEC_TIMEOUT
+   #define DHCPV6_CLIENT_DEC_TIMEOUT 1000
+#elif (DHCPV6_CLIENT_DEC_TIMEOUT < 100)
+   #error DHCPV6_CLIENT_DEC_TIMEOUT parameter is not valid
+#endif
+
+//Max Decline attempts
+#ifndef DHCPV6_CLIENT_DEC_MAX_RC
+   #define DHCPV6_CLIENT_DEC_MAX_RC 5
+#elif (DHCPV6_CLIENT_DEC_MAX_RC < 1)
+   #error DHCPV6_CLIENT_DEC_MAX_RC parameter is not valid
+#endif
+
+//Initial Reconfigure timeout
+#ifndef DHCPV6_CLIENT_REC_TIMEOUT
+   #define DHCPV6_CLIENT_REC_TIMEOUT 2000
+#elif (DHCPV6_CLIENT_REC_TIMEOUT < 100)
+   #error DHCPV6_CLIENT_REC_TIMEOUT parameter is not valid
+#endif
+
+//Max Reconfigure attempts
+#ifndef DHCPV6_CLIENT_REC_MAX_RC
+   #define DHCPV6_CLIENT_REC_MAX_RC 8
+#elif (DHCPV6_CLIENT_REC_MAX_RC < 1)
+   #error DHCPV6_CLIENT_REC_MAX_RC parameter is not valid
+#endif
+
+//Forward declaration of Dhcpv6ClientCtx structure
+struct _Dhcpv6ClientCtx;
+#define Dhcpv6ClientCtx struct _Dhcpv6ClientCtx
 
 
 /**
@@ -79,14 +233,42 @@
 
 typedef enum
 {
-   DHCPV6_STATE_SOLICIT = 0,
-   DHCPV6_STATE_REQUEST = 1,
-   DHCPV6_STATE_CONFIRM = 2,
-   DHCPV6_STATE_BOUND   = 3,
-   DHCPV6_STATE_RENEW   = 4,
-   DHCPV6_STATE_REBIND  = 5,
-   DHCPV6_STATE_DECLINE = 6
+   DHCPV6_STATE_INIT         = 0,
+   DHCPV6_STATE_SOLICIT      = 1,
+   DHCPV6_STATE_REQUEST      = 2,
+   DHCPV6_STATE_INIT_CONFIRM = 3,
+   DHCPV6_STATE_CONFIRM      = 4,
+   DHCPV6_STATE_DAD          = 5,
+   DHCPV6_STATE_BOUND        = 6,
+   DHCPV6_STATE_RENEW        = 7,
+   DHCPV6_STATE_REBIND       = 8,
+   DHCPV6_STATE_RELEASE      = 9,
+   DHCPV6_STATE_DECLINE      = 10
 } Dhcpv6State;
+
+
+/**
+ * @brief DHCPv6 configuration timeout callback
+ **/
+
+typedef void (*Dhcpv6TimeoutCallback)(Dhcpv6ClientCtx *context,
+   NetInterface *interface);
+
+
+/**
+ * @brief Link state change callback
+ **/
+
+typedef void (*Dhcpv6LinkChangeCallback)(Dhcpv6ClientCtx *context,
+   NetInterface *interface, bool_t linkState);
+
+
+/**
+ * @brief FSM state change callback
+ **/
+
+typedef void (*Dhcpv6StateChangeCallback)(Dhcpv6ClientCtx *context,
+   NetInterface *interface, Dhcpv6State state);
 
 
 /**
@@ -95,90 +277,130 @@ typedef enum
 
 typedef struct
 {
-   NetInterface *interface; ///<Network interface to configure
-   bool_t rapidCommit;      ///<Quick configuration using rapid commit
+   NetInterface *interface;                    ///<Network interface to configure
+   bool_t rapidCommit;                         ///<Quick configuration using rapid commit
+   bool_t manualDnsConfig;                     ///<Force manual DNS configuration
+   systime_t timeout;                          ///<DHCPv6 configuration timeout
+   Dhcpv6TimeoutCallback timeoutEvent;         ///<DHCPv6 configuration timeout event
+   Dhcpv6LinkChangeCallback linkChangeEvent;   ///<Link state change event
+   Dhcpv6StateChangeCallback stateChangeEvent; ///<FSM state change event
 } Dhcpv6ClientSettings;
+
+
+/**
+ * @brief IA address entry
+ **/
+
+typedef struct
+{
+   Ipv6Addr addr;              ///<IPv6 address
+   uint32_t validLifetime;     ///<Valid lifetime
+   uint32_t preferredLifetime; ///<Preferred lifetime
+} Dhcpv6ClientAddrEntry;
+
+
+/**
+ * @brief Client's IA (Identity Association)
+ **/
+
+typedef struct
+{
+   uint32_t t1;                                                  ///<T1 parameter
+   uint32_t t2;                                                  ///<T2 parameter
+   Dhcpv6ClientAddrEntry addrList[DHCPV6_CLIENT_ADDR_LIST_SIZE]; ///<Set of IPv6 addresses
+} Dhcpv6ClientIa;
 
 
 /**
  * @brief DHCPv6 client context
  **/
 
-typedef struct
+struct _Dhcpv6ClientCtx
 {
-   NetInterface *interface;                ///<Underlying network interface
-   bool_t rapidCommit;                     ///<Quick configuration using rapid commit
-   bool_t rapidCommitDone;                 ///<Rapid commit procedure done
-   Socket *socket;                         ///<Underlying socket
-   Dhcpv6State state;                      ///<Current state
-   int_t serverPreference;                 ///<Preference value for the server
-   uint32_t transactionId;                 ///<Value to match requests with replies
-   systime_t exchangeStartTime;            ///<Time at which the client sent the first message
-   uint32_t rc;                            ///<Retransmission count
-   uint32_t mrc;                           ///<Maximum retransmission count
-   systime_t rt;                           ///<Retransmission timeout
-   systime_t irt;                          ///<Initial retransmission timeout
-   systime_t mrt;                          ///<Maximum retransmission timeout
-   systime_t mrd;                          ///<Maximum retransmission duration
-   systime_t leaseStartTime;               ///<Lease start time
-   uint32_t t1;                            ///<T1 parameter
-   uint32_t t2;                            ///<T2 parameter
-   uint32_t preferredLifetime;             ///<Preferred lifetime
-   uint32_t validLifetime;                 ///<Valid lifetime
-   uint8_t clientId[DHCPV6_MAX_DUID_SIZE]; ///<Client DUID
-   size_t clientIdLength;                  ///<Length of the client DUID
-   uint8_t serverId[DHCPV6_MAX_DUID_SIZE]; ///<Server DUID
-   size_t serverIdLength;                  ///<Length of the server DUID
-   bool_t running;                         ///<DHCPv6 client is currently running or not?
-   bool_t stopRequest;                     ///<Stop request
-   OsEvent ackEvent;                       ///<Event object use to acknowledge user requests
-   OsEvent event;                          ///<Event object used to poll the socket
-   uint8_t buffer[DHCPV6_MAX_MSG_SIZE];    ///<Scratch buffer to store DHCPv6 messages
-} Dhcpv6ClientCtx;
+   Dhcpv6ClientSettings settings;                   ///<DHCPv6 client settings
+   bool_t running;                                  ///<This flag tells whether the DHCP client is running or not
+   Dhcpv6State state;                               ///<Current state of the FSM
+   bool_t timeoutEventDone;                         ///<Timeout callback function has been called
+   systime_t timestamp;                             ///<Timestamp to manage retransmissions
+   systime_t timeout;                               ///<Timeout value
+   uint_t retransmitCount;                          ///<Retransmission counter
+   uint8_t clientId[DHCPV6_MAX_DUID_SIZE];          ///<Client DUID
+   size_t clientIdLength;                           ///<Length of the client DUID
+   uint8_t clientFqdn[DHCPV6_CLIENT_MAX_FQDN_SIZE]; ///<Client's fully qualified domain name
+   size_t clientFqdnLength;                         ///<Length of the client's FQDN
+   uint8_t serverId[DHCPV6_MAX_DUID_SIZE];          ///<Server DUID
+   size_t serverIdLength;                           ///<Length of the server DUID
+   int_t serverPreference;                          ///<Preference value for the server
+   uint32_t transactionId;                          ///<Value to match requests with replies
+   systime_t configStartTime;                       ///<Address acquisition or renewal process start time
+   systime_t exchangeStartTime;                     ///<Time at which the client sent the first message
+   systime_t leaseStartTime;                        ///<Lease start time
+   Dhcpv6ClientIa ia;                               ///<Identity association
+};
 
 
-//Callback functions for client-initiated message exchanges
-typedef error_t (*Dhcpv6FormatCallback)(Dhcpv6ClientCtx *context, Dhcpv6Message *message, size_t *length);
-typedef error_t (*Dhcpv6ParseCallback)(Dhcpv6ClientCtx *context, const Dhcpv6Message *message, size_t length);
+//Tick counter to handle periodic operations
+extern systime_t dhcpv6ClientTickCounter;
 
-//DHCPv6 client specific functions
+//DHCPv6 client related functions
 void dhcpv6ClientGetDefaultSettings(Dhcpv6ClientSettings *settings);
 error_t dhcpv6ClientInit(Dhcpv6ClientCtx *context, const Dhcpv6ClientSettings *settings);
 error_t dhcpv6ClientStart(Dhcpv6ClientCtx *context);
 error_t dhcpv6ClientStop(Dhcpv6ClientCtx *context);
+error_t dhcpv6ClientRelease(Dhcpv6ClientCtx *context);
+Dhcpv6State dhcpv6ClientGetState(Dhcpv6ClientCtx *context);
 
-void dhcpv6ClientTask(void *param);
+void dhcpv6ClientTick(Dhcpv6ClientCtx *context);
+void dhcpv6ClientLinkChangeEvent(Dhcpv6ClientCtx *context);
 
-void dhcpv6StateSolicit(Dhcpv6ClientCtx *context);
-void dhcpv6StateRequest(Dhcpv6ClientCtx *context);
-void dhcpv6StateConfirm(Dhcpv6ClientCtx *context);
-void dhcpv6StateBound(Dhcpv6ClientCtx *context);
-void dhcpv6StateRenew(Dhcpv6ClientCtx *context);
-void dhcpv6StateRebind(Dhcpv6ClientCtx *context);
-void dhcpv6StateDecline(Dhcpv6ClientCtx *context);
+void dhcpv6ClientStateInit(Dhcpv6ClientCtx *context);
+void dhcpv6ClientStateSolicit(Dhcpv6ClientCtx *context);
+void dhcpv6ClientStateRequest(Dhcpv6ClientCtx *context);
+void dhcpv6ClientStateInitConfirm(Dhcpv6ClientCtx *context);
+void dhcpv6ClientStateConfirm(Dhcpv6ClientCtx *context);
+void dhcpv6ClientStateDad(Dhcpv6ClientCtx *context);
+void dhcpv6ClientStateBound(Dhcpv6ClientCtx *context);
+void dhcpv6ClientStateRenew(Dhcpv6ClientCtx *context);
+void dhcpv6ClientStateRebind(Dhcpv6ClientCtx *context);
+void dhcpv6ClientStateRelease(Dhcpv6ClientCtx *context);
+void dhcpv6ClientStateDecline(Dhcpv6ClientCtx *context);
 
-error_t dhcpv6MessageExchange(Dhcpv6ClientCtx *context,
-   Dhcpv6FormatCallback formatRequest, Dhcpv6ParseCallback parseResponse);
+error_t dhcpv6ClientSendMessage(Dhcpv6ClientCtx *context,
+   Dhcpv6MessageType type);
 
-error_t dhcpv6WaitForResponse(Dhcpv6ClientCtx *context,
-   Dhcpv6ParseCallback parseResponse, systime_t timeout);
+void dhcpv6ClientProcessMessage(NetInterface *interface,
+   const IpPseudoHeader *pseudoHeader, const UdpHeader *udpHeader,
+   const NetBuffer *buffer, size_t offset, void *params);
 
-error_t dhcpv6FormatSolicit(Dhcpv6ClientCtx *context, Dhcpv6Message *message, size_t *length);
-error_t dhcpv6FormatRequest(Dhcpv6ClientCtx *context, Dhcpv6Message *message, size_t *length);
-error_t dhcpv6FormatConfirm(Dhcpv6ClientCtx *context, Dhcpv6Message *message, size_t *length);
-error_t dhcpv6FormatRenew(Dhcpv6ClientCtx *context, Dhcpv6Message *message, size_t *length);
-error_t dhcpv6FormatRebind(Dhcpv6ClientCtx *context, Dhcpv6Message *message, size_t *length);
-error_t dhcpv6FormatDecline(Dhcpv6ClientCtx *context, Dhcpv6Message *message, size_t *length);
+void dhcpv6ClientParseAdvertise(Dhcpv6ClientCtx *context,
+   const Dhcpv6Message *message, size_t length);
 
-error_t dhcpv6ParseAdvertise(Dhcpv6ClientCtx *context, const Dhcpv6Message *message, size_t length);
-error_t dhcpv6ParseReply(Dhcpv6ClientCtx *context, const Dhcpv6Message *message, size_t length);
+void dhcpv6ClientParseReply(Dhcpv6ClientCtx *context,
+   const Dhcpv6Message *message, size_t length);
 
-error_t dhcpv6ParseIaNaOption(Dhcpv6ClientCtx *context, const Dhcpv6Option *option);
+error_t dhcpv6ClientParseIaNaOption(Dhcpv6ClientCtx *context,
+   const Dhcpv6Option *option);
 
-uint16_t dhcpv6ComputeElapsedTime(Dhcpv6ClientCtx *context);
+error_t dhcpv6ClientParseIaAddrOption(Dhcpv6ClientCtx *context,
+   const Dhcpv6Option *option);
 
-int32_t dhcpv6Rand(int32_t value);
-int32_t dhcpv6RandRange(int32_t min, int32_t max);
+void dhcpv6ClientAddAddr(Dhcpv6ClientCtx *context, const Ipv6Addr *addr,
+   uint32_t validLifetime, uint32_t preferredLifetime);
+
+void dhcpv6ClientRemoveAddr(Dhcpv6ClientCtx *context, const Ipv6Addr *addr);
+
+void dhcpv6ClientFlushAddrList(Dhcpv6ClientCtx *context);
+
+error_t dhcpv6ClientGenerateDuid(Dhcpv6ClientCtx *context);
+error_t dhcpv6ClientGenerateFqdn(Dhcpv6ClientCtx *context);
+error_t dhcpv6ClientGenerateLinkLocalAddr(Dhcpv6ClientCtx *context);
+
+void dhcpv6ClientChangeState(Dhcpv6ClientCtx *context,
+   Dhcpv6State newState, systime_t delay);
+
+void dhcpv6ClientCheckTimeout(Dhcpv6ClientCtx *context);
+
+uint16_t dhcpv6ClientComputeElapsedTime(Dhcpv6ClientCtx *context);
 
 void dhcpv6DumpConfig(Dhcpv6ClientCtx *context);
 

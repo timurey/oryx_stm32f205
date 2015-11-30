@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -130,7 +130,7 @@ void ipcpTick(PppContext *context)
          //Debug message
          TRACE_INFO("\r\nIPCP Timeout event\r\n");
 
-         //The restart timer is used to restransmit Configure-Request
+         //The restart timer is used to retransmit Configure-Request
          //and Terminate-Request packets
          pppTimeoutEvent(context, &context->ipcpFsm, &ipcpCallbacks);
       }
@@ -141,7 +141,7 @@ void ipcpTick(PppContext *context)
 /**
  * @brief Process an incoming IPCP packet
  * @param[in] context PPP context
- * @param[in]  packet IPCP packet received fom the peer
+ * @param[in]  packet IPCP packet received from the peer
  * @param[in] length Length of the packet, in bytes
  **/
 
@@ -281,7 +281,7 @@ error_t ipcpProcessConfigureReq(PppContext *context,
       if(notRecognizable)
       {
          //If some configuration options received in the Configure-Request are not
-         //recognizable or not acceptable for negociation, then the implementation
+         //recognizable or not acceptable for negotiation, then the implementation
          //must transmit a Configure-Reject
          pppRcvConfigureReqEvent(context, &context->ipcpFsm, &ipcpCallbacks,
             configureReqPacket, PPP_CODE_CONFIGURE_REJ);
@@ -382,6 +382,32 @@ error_t ipcpProcessConfigureNak(PppContext *context,
          //Save IP address
          context->localConfig.ipAddr = ipAddressOption->ipAddr;
       }
+      //Primary-DNS-Server-Address option?
+      else if(option->type == IPCP_OPTION_PRIMARY_DNS)
+      {
+         //Cast option
+         IpcpPrimaryDnsOption *primaryDns = (IpcpPrimaryDnsOption *) option;
+
+         //Check option length
+         if(primaryDns->length != sizeof(IpcpPrimaryDnsOption))
+            return ERROR_INVALID_LENGTH;
+
+         //Save primary DNS server address
+         context->localConfig.primaryDns = primaryDns->ipAddr;
+      }
+      //Secondary-DNS-Server-Address option?
+      else if(option->type == IPCP_OPTION_SECONDARY_DNS)
+      {
+         //Cast option
+         IpcpSecondaryDnsOption *secondaryDns = (IpcpSecondaryDnsOption *) option;
+
+         //Check option length
+         if(secondaryDns->length != sizeof(IpcpSecondaryDnsOption))
+            return ERROR_INVALID_LENGTH;
+
+         //Save secondary DNS server address
+         context->localConfig.secondaryDns = secondaryDns->ipAddr;
+      }
 
       //Remaining bytes to process
       length -= option->length;
@@ -437,6 +463,18 @@ error_t ipcpProcessConfigureReject(PppContext *context,
       {
          //The option is not recognized by the peer
          context->localConfig.ipAddrRejected = TRUE;
+      }
+      //Primary-DNS-Server-Address option?
+      else if(option->type == IPCP_OPTION_PRIMARY_DNS)
+      {
+         //The option is not recognized by the peer
+         context->localConfig.primaryDnsRejected = TRUE;
+      }
+      //Secondary-DNS-Server-Address option?
+      else if(option->type == IPCP_OPTION_SECONDARY_DNS)
+      {
+         //The option is not recognized by the peer
+         context->localConfig.secondaryDnsRejected = TRUE;
       }
 
       //Remaining bytes to process
@@ -582,32 +620,32 @@ void ipcpThisLayerUp(PppContext *context)
    //Debug message
    TRACE_INFO("  Local IP Addr = %s\r\n", ipv4AddrToString(context->localConfig.ipAddr, NULL));
    TRACE_INFO("  Peer IP Addr = %s\r\n", ipv4AddrToString(context->peerConfig.ipAddr, NULL));
+   TRACE_INFO("  Primary DNS = %s\r\n", ipv4AddrToString(context->localConfig.primaryDns, NULL));
+   TRACE_INFO("  Secondary DNS = %s\r\n", ipv4AddrToString(context->localConfig.secondaryDns, NULL));
 
    //Point to the underlying interface
    interface = context->interface;
 
    //Update IPv4 configuration
-   ipv4SetHostAddr(interface, context->localConfig.ipAddr);
-   ipv4SetDefaultGateway(interface, context->peerConfig.ipAddr);
+   interface->ipv4Context.addr = context->localConfig.ipAddr;
+   interface->ipv4Context.defaultGateway = context->peerConfig.ipAddr;
+   interface->ipv4Context.dnsServerList[0] = context->localConfig.primaryDns;
+#if (IPV4_DNS_SERVER_LIST_SIZE >= 2)
+   interface->ipv4Context.dnsServerList[1] = context->localConfig.secondaryDns;
+#endif
 
    //All the outgoing traffic will be routed to the other end of the link
-   ipv4SetSubnetMask(interface, IPCP_DEFAULT_SUBNET_MASK);
+   interface->ipv4Context.subnetMask = IPCP_DEFAULT_SUBNET_MASK;
 
    //Link is up
    interface->linkState = TRUE;
 
-   //Get exclusive access to the device
-   osAcquireMutex(&interface->nicDriverMutex);
-   //Disable Ethernet controller interrupts
+   //Disable interrupts
    interface->nicDriver->disableIrq(interface);
-
    //Process link state change event
    nicNotifyLinkChange(interface);
-
-   //Re-enable Ethernet controller interrupts
+   //Re-enable interrupts
    interface->nicDriver->enableIrq(interface);
-   //Release exclusive access to the device
-   osReleaseMutex(&interface->nicDriverMutex);
 }
 
 
@@ -629,18 +667,12 @@ void ipcpThisLayerDown(PppContext *context)
    //Link is up
    interface->linkState = FALSE;
 
-   //Get exclusive access to the device
-   osAcquireMutex(&interface->nicDriverMutex);
-   //Disable Ethernet controller interrupts
+   //Disable interrupts
    interface->nicDriver->disableIrq(interface);
-
    //Process link state change event
    nicNotifyLinkChange(interface);
-
-   //Re-enable Ethernet controller interrupts
+   //Re-enable interrupts
    interface->nicDriver->enableIrq(interface);
-   //Release exclusive access to the device
-   osReleaseMutex(&interface->nicDriverMutex);
 }
 
 
@@ -721,11 +753,8 @@ error_t ipcpSendConfigureReq(PppContext *context)
    //Debug message
    TRACE_INFO("IPCP Send-Configure-Request callback\r\n");
 
-   //Calculate the maximum size of the Configure-Request packet
-   length = sizeof(PppConfigurePacket) + sizeof(IpcpIpAddressOption);
-
-   //Allocate a buffer memory to hold the packet
-   buffer = pppAllocBuffer(length, &offset);
+   //Allocate a buffer memory to hold the Configure-Request packet
+   buffer = pppAllocBuffer(PPP_MAX_CONF_REQ_SIZE, &offset);
    //Failed to allocate memory?
    if(!buffer) return ERROR_OUT_OF_MEMORY;
 
@@ -743,6 +772,24 @@ error_t ipcpSendConfigureReq(PppContext *context)
       //Add option
       pppAddOption(configureReqPacket, IPCP_OPTION_IP_ADDRESS,
          &context->localConfig.ipAddr, sizeof(Ipv4Addr));
+   }
+
+   //Make sure the Primary-DNS-Server-Address option has not been
+   //previously rejected
+   if(!context->localConfig.primaryDnsRejected)
+   {
+      //Add option
+      pppAddOption(configureReqPacket, IPCP_OPTION_PRIMARY_DNS,
+         &context->localConfig.primaryDns, sizeof(Ipv4Addr));
+   }
+
+   //Make sure the Secondary-DNS-Server-Address option has not been
+   //previously rejected
+   if(!context->localConfig.secondaryDnsRejected)
+   {
+      //Add option
+      pppAddOption(configureReqPacket, IPCP_OPTION_SECONDARY_DNS,
+         &context->localConfig.secondaryDns, sizeof(Ipv4Addr));
    }
 
    //Save packet length
@@ -888,7 +935,7 @@ error_t ipcpSendTerminateAck(PppContext *context,
    }
    else
    {
-      //This Terminate-Ack packet serves to sychronize the automatons
+      //This Terminate-Ack packet serves to synchronize the automatons
       identifier = ++context->ipcpFsm.identifier;
    }
 
@@ -950,7 +997,7 @@ error_t ipcpParseOption(PppContext *context, PppOption *option,
       break;
    default:
       //If some configuration options received in the Configure-Request are not
-      //recognizable or not acceptable for negociation, then the implementation
+      //recognizable or not acceptable for negotiation, then the implementation
       //must transmit a Configure-Reject
       if(outPacket->code == PPP_CODE_CONFIGURE_REJ)
       {
@@ -960,7 +1007,7 @@ error_t ipcpParseOption(PppContext *context, PppOption *option,
             option->length - sizeof(PppOption));
       }
 
-      //The option is not acceptable for negociation
+      //The option is not acceptable for negotiation
       error = ERROR_INVALID_TYPE;
       break;
    }

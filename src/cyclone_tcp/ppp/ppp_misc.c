@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -303,7 +303,7 @@ error_t pppSendCodeRej(PppContext *context, const PppPacket *packet,
  * @param[in] identifier Identifier field
  * @param[in] protocol Rejected protocol
  * @param[in] information Rejected information
- * @param[in] length Length ofthe rejected information
+ * @param[in] length Length of the rejected information
  * @return Error code
  **/
 

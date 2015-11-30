@@ -1,6 +1,6 @@
 /**
  * @file tcp_misc.c
- * @brief TCP miscellaneous functions
+ * @brief Helper functions for TCP
  *
  * @section License
  *
@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -63,7 +63,6 @@ error_t tcpSendSegment(Socket *socket, uint8_t flags, uint32_t seqNum,
    error_t error;
    size_t offset;
    size_t totalLength;
-   uint_t timeToLive;
    NetBuffer *buffer;
    TcpHeader *segment;
    TcpQueueItem *queueItem;
@@ -141,9 +140,6 @@ error_t tcpSendSegment(Socket *socket, uint8_t flags, uint32_t seqNum,
       //Calculate TCP header checksum
       segment->checksum = ipCalcUpperLayerChecksumEx(&pseudoHeader.ipv4Data,
          sizeof(Ipv4PseudoHeader), buffer, offset, totalLength);
-
-      //Set TTL value
-      timeToLive = IPV4_DEFAULT_TTL;
    }
    else
 #endif
@@ -162,9 +158,6 @@ error_t tcpSendSegment(Socket *socket, uint8_t flags, uint32_t seqNum,
       //Calculate TCP header checksum
       segment->checksum = ipCalcUpperLayerChecksumEx(&pseudoHeader.ipv6Data,
          sizeof(Ipv6PseudoHeader), buffer, offset, totalLength);
-
-      //Set Hop Limit value
-      timeToLive = IPV6_DEFAULT_HOP_LIMIT;
    }
    else
 #endif
@@ -216,8 +209,6 @@ error_t tcpSendSegment(Socket *socket, uint8_t flags, uint32_t seqNum,
       memcpy(queueItem->header, segment, segment->dataOffset * 4);
       //Save pseudo header
       queueItem->pseudoHeader = pseudoHeader;
-      //Save TTL value
-      queueItem->timeToLive = timeToLive;
 
       //Take one RTT measurement at a time
       if(!socket->rttBusy)
@@ -228,8 +219,11 @@ error_t tcpSendSegment(Socket *socket, uint8_t flags, uint32_t seqNum,
          socket->rttSeqNum = ntohl(segment->seqNum);
          //Wait for an acknowledgment that covers that sequence number...
          socket->rttBusy = TRUE;
+
+#if (TCP_CONGESTION_CONTROL_SUPPORT == ENABLED)
          //Reset the byte counter
          socket->n = 0;
+#endif
       }
 
       //Check whether the RTO timer is already running
@@ -251,7 +245,7 @@ error_t tcpSendSegment(Socket *socket, uint8_t flags, uint32_t seqNum,
    tcpDumpHeader(segment, length, socket->iss, socket->irs);
 
    //Send TCP segment
-   error = ipSendDatagram(socket->interface, &pseudoHeader, buffer, offset, timeToLive);
+   error = ipSendDatagram(socket->interface, &pseudoHeader, buffer, offset, 0);
 
    //Free previously allocated memory
    netBufferFree(buffer);
@@ -274,7 +268,6 @@ error_t tcpSendResetSegment(NetInterface *interface,
 {
    error_t error;
    size_t offset;
-   uint_t timeToLive;
    uint8_t flags;
    uint32_t seqNum;
    uint32_t ackNum;
@@ -342,9 +335,6 @@ error_t tcpSendResetSegment(NetInterface *interface,
       //Calculate TCP header checksum
       segment2->checksum = ipCalcUpperLayerChecksumEx(&pseudoHeader2.ipv4Data,
          sizeof(Ipv4PseudoHeader), buffer, offset, sizeof(TcpHeader));
-
-      //Set TTL value
-      timeToLive = IPV4_DEFAULT_TTL;
    }
    else
 #endif
@@ -363,9 +353,6 @@ error_t tcpSendResetSegment(NetInterface *interface,
       //Calculate TCP header checksum
       segment2->checksum = ipCalcUpperLayerChecksumEx(&pseudoHeader2.ipv6Data,
          sizeof(Ipv6PseudoHeader), buffer, offset, sizeof(TcpHeader));
-
-      //Set Hop Limit value
-      timeToLive = IPV6_DEFAULT_HOP_LIMIT;
    }
    else
 #endif
@@ -384,7 +371,7 @@ error_t tcpSendResetSegment(NetInterface *interface,
    tcpDumpHeader(segment2, length, 0, 0);
 
    //Send TCP segment
-   error = ipSendDatagram(interface, &pseudoHeader2, buffer, offset, timeToLive);
+   error = ipSendDatagram(interface, &pseudoHeader2, buffer, offset, 0);
 
    //Free previously allocated memory
    netBufferFree(buffer);
@@ -684,8 +671,14 @@ error_t tcpCheckAck(Socket *socket, TcpHeader *segment, size_t length)
       //The incoming ACK segment acknowledges new data?
       if(TCP_CMP_SEQ(segment->ackNum, socket->sndUna) > 0)
       {
+#if (TCP_CONGESTION_CONTROL_SUPPORT == ENABLED)
          //Compute the number of bytes acknowledged by the incoming ACK
          uint_t n = segment->ackNum - socket->sndUna;
+
+         //Check whether the ACK segment acknowledges our SYN
+         if(socket->sndUna == socket->iss)
+            n--;
+
          //Total number of bytes acknowledged during the whole round-trip
          socket->n += n;
 
@@ -709,6 +702,8 @@ error_t tcpCheckAck(Socket *socket, TcpHeader *segment, size_t length)
 
          //Limit the size of the congestion window
          socket->cwnd = MIN(socket->cwnd, socket->txBufferSize);
+#endif
+
          //Update SND.UNA pointer
          socket->sndUna = segment->ackNum;
 
@@ -731,11 +726,12 @@ error_t tcpCheckAck(Socket *socket, TcpHeader *segment, size_t length)
          //Check the number of duplicate ACKs that have been received
          if(socket->dupAckCount == TCP_FAST_RETRANSMIT_THRES)
          {
+#if (TCP_CONGESTION_CONTROL_SUPPORT == ENABLED)
             //Amount of data that has been sent but not yet acknowledged
             uint_t flightSize = socket->sndNxt - socket->sndUna;
             //After receiving 3 duplicate ACKs, ssthresh must be adjusted
             socket->ssthresh = MAX(flightSize / 2, 2 * socket->mss);
-
+#endif
             //Debug message
             TRACE_INFO("%s: TCP fast retransmit...\r\n",
                formatSystemTime(osGetSystemTime(), NULL));
@@ -744,22 +740,28 @@ error_t tcpCheckAck(Socket *socket, TcpHeader *segment, size_t length)
             //segment, without waiting for the retransmission timer to expire
             tcpRetransmitSegment(socket);
 
+#if (TCP_CONGESTION_CONTROL_SUPPORT == ENABLED)
             //cwnd must set to ssthresh plus 3*SMSS. This artificially inflates
             //the congestion window by the number of segments (three) that have
             //left the network and which the receiver has buffered
             socket->cwnd = socket->ssthresh + TCP_FAST_RETRANSMIT_THRES * socket->mss;
+#endif
          }
          else if(socket->dupAckCount > TCP_FAST_RETRANSMIT_THRES)
          {
+#if (TCP_CONGESTION_CONTROL_SUPPORT == ENABLED)
             //For each additional duplicate ACK received (after the third),
             //cwnd must be incremented by SMSS. This artificially inflates
             //the congestion window in order to reflect the additional
             //segment that has left the network
             socket->cwnd += socket->mss;
+#endif
          }
 
+#if (TCP_CONGESTION_CONTROL_SUPPORT == ENABLED)
          //Limit the size of the congestion window
          socket->cwnd = MIN(socket->cwnd, socket->txBufferSize);
+#endif
       }
 
       //Update TX events
@@ -1187,9 +1189,10 @@ error_t tcpRetransmitSegment(Socket *socket)
          //Dump TCP header contents for debugging purpose
          tcpDumpHeader(header, queueItem->length, socket->iss, socket->irs);
 
-         //Retransmit the lost segment without waiting for the retransmission timer to expire
-         error = ipSendDatagram(socket->interface, &queueItem->pseudoHeader,
-            buffer, offset, queueItem->timeToLive);
+         //Retransmit the lost segment without waiting for the
+         //retransmission timer to expire
+         error = ipSendDatagram(socket->interface,
+            &queueItem->pseudoHeader, buffer, offset, 0);
 
          //End of exception handling block
       } while(0);
@@ -1228,8 +1231,12 @@ error_t tcpNagleAlgo(Socket *socket, uint_t flags)
 
    //The amount of data that can be sent at any given time is
    //limited by the receiver window and the congestion window
-   n = MIN(socket->sndWnd, socket->cwnd);
-   n = MIN(n, socket->txBufferSize);
+   n = MIN(socket->sndWnd, socket->txBufferSize);
+
+#if (TCP_CONGESTION_CONTROL_SUPPORT == ENABLED)
+   //Check the congestion window
+   n = MIN(n, socket->cwnd);
+#endif
 
    //Retrieve the size of the usable window
    u = n - (socket->sndNxt - socket->sndUna);
@@ -1512,12 +1519,13 @@ uint_t tcpWaitForEvents(Socket *socket, uint_t eventMask, systime_t timeout)
    {
       //Reset the event object
       osResetEvent(&socket->event);
-      //Leave critical section
-      osReleaseMutex(&socketMutex);
+
+      //Release exclusive access
+      osReleaseMutex(&netMutex);
       //Wait until an event is triggered
       osWaitForEvent(&socket->event, timeout);
-      //Enter critical section
-      osAcquireMutex(&socketMutex);
+      //Get exclusive access
+      osAcquireMutex(&netMutex);
    }
 
    //Return the list of TCP events that satisfied the wait

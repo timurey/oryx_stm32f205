@@ -28,7 +28,7 @@
  * a specific host when only its IPv4 address is known. Refer to RFC 826
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -42,7 +42,10 @@
 #include "debug.h"
 
 //Check TCP/IP stack configuration
-#if (IPV4_SUPPORT == ENABLED)
+#if (IPV4_SUPPORT == ENABLED && ETH_SUPPORT == ENABLED)
+
+//Tick counter to handle periodic operations
+systime_t arpTickCounter;
 
 
 /**
@@ -53,14 +56,7 @@
 
 error_t arpInit(NetInterface *interface)
 {
-   //Create a mutex to prevent simultaneous access to ARP cache
-   if(!osCreateMutex(&interface->arpCacheMutex))
-   {
-      //Failed to create mutex
-      return ERROR_OUT_OF_RESOURCES;
-   }
-
-   //Initialize ARP cache
+   //Initialize the ARP cache
    memset(interface->arpCache, 0, sizeof(interface->arpCache));
 
    //Successful initialization
@@ -78,9 +74,6 @@ void arpFlushCache(NetInterface *interface)
    uint_t i;
    ArpCacheEntry *entry;
 
-   //Acquire exclusive access to ARP cache
-   osAcquireMutex(&interface->arpCacheMutex);
-
    //Loop through ARP cache entries
    for(i = 0; i < ARP_CACHE_SIZE; i++)
    {
@@ -92,9 +85,6 @@ void arpFlushCache(NetInterface *interface)
       //Release ARP entry
       entry->state = ARP_STATE_NONE;
    }
-
-   //Release exclusive access to ARP cache
-   osReleaseMutex(&interface->arpCacheMutex);
 }
 
 
@@ -178,24 +168,29 @@ ArpCacheEntry *arpFindEntry(NetInterface *interface, Ipv4Addr ipAddr)
 /**
  * @brief Send packets that are waiting for address resolution
  * @param[in] interface Underlying network interface
- * @param[in] entry Pointer to a Neighbor cache entry
+ * @param[in] entry Pointer to a ARP cache entry
  **/
 
 void arpSendQueuedPackets(NetInterface *interface, ArpCacheEntry *entry)
 {
    uint_t i;
+   ArpQueueItem *item;
 
    //Check current state
    if(entry->state == ARP_STATE_INCOMPLETE)
    {
-      //Loop through queued packets
+      //Loop through the queued packets
       for(i = 0; i < entry->queueSize; i++)
       {
-         //Send current packet
-         ethSendFrame(interface, &entry->macAddr, entry->queue[i].buffer,
-            entry->queue[i].offset, ETH_TYPE_IPV4);
-         //Release previously allocated memory
-         netBufferFree(entry->queue[i].buffer);
+         //Point to the current queue item
+         item = &entry->queue[i];
+
+         //Send the IPv4 packet
+         ethSendFrame(interface, &entry->macAddr,
+            item->buffer, item->offset, ETH_TYPE_IPV4);
+
+         //Release memory buffer
+         netBufferFree(item->buffer);
       }
    }
 
@@ -207,7 +202,7 @@ void arpSendQueuedPackets(NetInterface *interface, ArpCacheEntry *entry)
 /**
  * @brief Flush packet queue
  * @param[in] interface Underlying network interface
- * @param[in] entry Pointer to a Neighbor cache entry
+ * @param[in] entry Pointer to a ARP cache entry
  **/
 
 void arpFlushQueuedPackets(NetInterface *interface, ArpCacheEntry *entry)
@@ -219,7 +214,10 @@ void arpFlushQueuedPackets(NetInterface *interface, ArpCacheEntry *entry)
    {
       //Drop packets that are waiting for address resolution
       for(i = 0; i < entry->queueSize; i++)
+      {
+         //Release memory buffer
          netBufferFree(entry->queue[i].buffer);
+      }
    }
 
    //The queue is now empty
@@ -237,24 +235,20 @@ void arpFlushQueuedPackets(NetInterface *interface, ArpCacheEntry *entry)
 
 error_t arpResolve(NetInterface *interface, Ipv4Addr ipAddr, MacAddr *macAddr)
 {
+   error_t error;
    ArpCacheEntry *entry;
-
-   //Acquire exclusive access to ARP cache
-   osAcquireMutex(&interface->arpCacheMutex);
 
    //Search the ARP cache for the specified IPv4 address
    entry = arpFindEntry(interface, ipAddr);
 
    //Check whether a matching entry has been found
-   if(entry)
+   if(entry != NULL)
    {
       //Check the state of the ARP entry
       if(entry->state == ARP_STATE_INCOMPLETE)
       {
-         //Release exclusive access to ARP cache
-         osReleaseMutex(&interface->arpCacheMutex);
          //The address resolution is already in progress
-         return ERROR_IN_PROGRESS;
+         error = ERROR_IN_PROGRESS;
       }
       else if(entry->state == ARP_STATE_STALE)
       {
@@ -268,65 +262,61 @@ error_t arpResolve(NetInterface *interface, Ipv4Addr ipAddr, MacAddr *macAddr)
          //Switch to the DELAY state
          entry->state = ARP_STATE_DELAY;
 
-         //Release exclusive access to ARP cache
-         osReleaseMutex(&interface->arpCacheMutex);
          //Successful address resolution
-         return NO_ERROR;
+         error = NO_ERROR;
       }
       else
       {
          //Copy the MAC address associated with the specified IPv4 address
          *macAddr = entry->macAddr;
 
-         //Release exclusive access to ARP cache
-         osReleaseMutex(&interface->arpCacheMutex);
          //Successful address resolution
-         return NO_ERROR;
+         error = NO_ERROR;
+      }
+   }
+   else
+   {
+      //If no entry exists, then create a new one
+      entry = arpCreateEntry(interface);
+
+      //ARP cache entry successfully created?
+      if(entry != NULL)
+      {
+         //Record the IPv4 address whose MAC address is unknown
+         entry->ipAddr = ipAddr;
+
+         //Reset retransmission counter
+         entry->retransmitCount = 0;
+         //No packet are pending in the transmit queue
+         entry->queueSize = 0;
+
+         //Send an ARP request
+         arpSendRequest(interface, entry->ipAddr, &MAC_BROADCAST_ADDR);
+
+         //Save the time at which the packet was sent
+         entry->timestamp = osGetSystemTime();
+         //Set timeout value
+         entry->timeout = ARP_REQUEST_TIMEOUT;
+         //Enter INCOMPLETE state
+         entry->state = ARP_STATE_INCOMPLETE;
+
+         //The address resolution is in progress
+         error = ERROR_IN_PROGRESS;
+      }
+      else
+      {
+         //Failed to create ARP cache entry...
+         error = ERROR_OUT_OF_RESOURCES;
       }
    }
 
-   //If no entry exists, then create a new one
-   entry = arpCreateEntry(interface);
-
-   //Any error to report?
-   if(!entry)
-   {
-      //Release exclusive access to ARP cache
-      osReleaseMutex(&interface->arpCacheMutex);
-      //Report an error to the calling function
-      return ERROR_OUT_OF_RESOURCES;
-   }
-
-   //Record the IPv4 address whose MAC address is unknown
-   entry->ipAddr = ipAddr;
-   entry->macAddr = MAC_UNSPECIFIED_ADDR;
-
-   //Reset retransmission counter
-   entry->retransmitCount = 0;
-   //No packet are pending in the transmit queue
-   entry->queueSize = 0;
-
-   //Send an ARP request
-   arpSendRequest(interface, interface->ipv4Config.addr,
-      entry->ipAddr, &MAC_BROADCAST_ADDR);
-
-   //Save the time at which the packet was sent
-   entry->timestamp = osGetSystemTime();
-   //Set timeout value
-   entry->timeout = ARP_REQUEST_TIMEOUT;
-   //Enter INCOMPLETE state
-   entry->state = ARP_STATE_INCOMPLETE;
-
-   //Release exclusive access to ARP cache
-   osReleaseMutex(&interface->arpCacheMutex);
-
-   //The address resolution is in progress
-   return ERROR_IN_PROGRESS;
+   //Return status code
+   return error;
 }
 
 
 /**
- * @brief Enqueue a packet waiting for address resolution
+ * @brief Enqueue an IPv4 packet waiting for address resolution
  * @param[in] interface Underlying network interface
  * @param[in] ipAddr IPv4 address of the destination host
  * @param[in] buffer Multi-part buffer containing the packet to be enqueued
@@ -345,70 +335,65 @@ error_t arpEnqueuePacket(NetInterface *interface,
    //Retrieve the length of the multi-part buffer
    length = netBufferGetLength(buffer);
 
-   //Acquire exclusive access to ARP cache
-   osAcquireMutex(&interface->arpCacheMutex);
-
-   //Search the ARP cache for the specified Ipv4 address
+   //Search the ARP cache for the specified IPv4 address
    entry = arpFindEntry(interface, ipAddr);
 
-   //No matching entry in ARP cache?
-   if(!entry)
+   //Check whether a matching entry exists
+   if(entry != NULL)
    {
-      //Release exclusive access to ARP cache
-      osReleaseMutex(&interface->arpCacheMutex);
-      //Report an error to the calling function
-      return ERROR_FAILURE;
-   }
-
-   //Check current state
-   if(entry->state == ARP_STATE_INCOMPLETE)
-   {
-      //Check whether the packet queue is full
-      if(entry->queueSize >= ARP_MAX_PENDING_PACKETS)
+      //Check current state
+      if(entry->state == ARP_STATE_INCOMPLETE)
       {
-         //When the queue overflows, the new arrival should replace the oldest entry
-         netBufferFree(entry->queue[0].buffer);
+         //Check whether the packet queue is full
+         if(entry->queueSize >= ARP_MAX_PENDING_PACKETS)
+         {
+            //When the queue overflows, the new arrival should replace the oldest entry
+            netBufferFree(entry->queue[0].buffer);
 
-         //Make room for the new packet
-         for(i = 1; i < ARP_MAX_PENDING_PACKETS; i++)
-            entry->queue[i - 1] = entry->queue[i];
+            //Make room for the new packet
+            for(i = 1; i < ARP_MAX_PENDING_PACKETS; i++)
+               entry->queue[i - 1] = entry->queue[i];
 
-         //Adjust the number of pending packets
-         entry->queueSize--;
+            //Adjust the number of pending packets
+            entry->queueSize--;
+         }
+
+         //Index of the entry to be filled in
+         i = entry->queueSize;
+         //Allocate a memory buffer to store the packet
+         entry->queue[i].buffer = netBufferAlloc(length);
+
+         //Successful memory allocation?
+         if(entry->queue[i].buffer != NULL)
+         {
+            //Copy the contents of the IPv4 packet
+            netBufferCopy(entry->queue[i].buffer, 0, buffer, 0, length);
+            //Offset to the first byte of the IPv4 header
+            entry->queue[i].offset = offset;
+
+            //Increment the number of queued packets
+            entry->queueSize++;
+            //The packet was successfully enqueued
+            error = NO_ERROR;
+         }
+         else
+         {
+            //Failed to allocate memory
+            error = ERROR_OUT_OF_MEMORY;
+         }
       }
-
-      //Index of the entry to be filled in
-      i = entry->queueSize;
-      //Allocate a memory buffer to store the packet
-      entry->queue[i].buffer = netBufferAlloc(length);
-
-      //Failed to allocate memory?
-      if(!entry->queue[i].buffer)
+      else
       {
-         //Release exclusive access to ARP cache
-         osReleaseMutex(&interface->arpCacheMutex);
-         //Report an error to the calling function
-         return ERROR_OUT_OF_MEMORY;
+         //The address is already resolved
+         error = ERROR_UNEXPECTED_STATE;
       }
-
-      //Copy packet contents
-      netBufferCopy(entry->queue[i].buffer, 0, buffer, 0, length);
-      //Offset to the first byte of the IPv4 header
-      entry->queue[i].offset = offset;
-
-      //Increment the number of queued packets
-      entry->queueSize++;
-      //The packet was successfully enqueued
-      error = NO_ERROR;
    }
    else
    {
-      //Send immediately the packet since the address is already resolved
-      error = ethSendFrame(interface, &entry->macAddr, buffer, offset, ETH_TYPE_IPV4);
+      //No matching entry in ARP cache
+      error = ERROR_NOT_FOUND;
    }
 
-   //Release exclusive access to ARP cache
-   osReleaseMutex(&interface->arpCacheMutex);
    //Return status code
    return error;
 }
@@ -432,9 +417,6 @@ void arpTick(NetInterface *interface)
    //Get current time
    time = osGetSystemTime();
 
-   //Acquire exclusive access to ARP cache
-   osAcquireMutex(&interface->arpCacheMutex);
-
    //Go through ARP cache
    for(i = 0; i < ARP_CACHE_SIZE; i++)
    {
@@ -445,7 +427,7 @@ void arpTick(NetInterface *interface)
       if(entry->state == ARP_STATE_INCOMPLETE)
       {
          //The request timed out?
-         if((time - entry->timestamp) >= entry->timeout)
+         if(timeCompare(time, entry->timestamp + entry->timeout) >= 0)
          {
             //Increment retransmission counter
             entry->retransmitCount++;
@@ -454,8 +436,7 @@ void arpTick(NetInterface *interface)
             if(entry->retransmitCount < ARP_MAX_REQUESTS)
             {
                //Retransmit ARP request
-               arpSendRequest(interface, interface->ipv4Config.addr,
-                  entry->ipAddr, &MAC_BROADCAST_ADDR);
+               arpSendRequest(interface, entry->ipAddr, &MAC_BROADCAST_ADDR);
 
                //Save the time at which the packet was sent
                entry->timestamp = time;
@@ -475,7 +456,7 @@ void arpTick(NetInterface *interface)
       else if(entry->state == ARP_STATE_REACHABLE)
       {
          //Periodically time out ARP cache entries
-         if((time - entry->timestamp) >= entry->timeout)
+         if(timeCompare(time, entry->timestamp + entry->timeout) >= 0)
          {
             //Save current time
             entry->timestamp = osGetSystemTime();
@@ -487,11 +468,10 @@ void arpTick(NetInterface *interface)
       else if(entry->state == ARP_STATE_DELAY)
       {
          //Wait for the specified delay before sending the first probe
-         if((time - entry->timestamp) >= entry->timeout)
+         if(timeCompare(time, entry->timestamp + entry->timeout) >= 0)
          {
             //Send a point-to-point ARP request to the host
-            arpSendRequest(interface, interface->ipv4Config.addr,
-               entry->ipAddr, &entry->macAddr);
+            arpSendRequest(interface, entry->ipAddr, &entry->macAddr);
 
             //Save the time at which the packet was sent
             entry->timestamp = time;
@@ -505,7 +485,7 @@ void arpTick(NetInterface *interface)
       else if(entry->state == ARP_STATE_PROBE)
       {
          //The request timed out?
-         if((time - entry->timestamp) >= entry->timeout)
+         if(timeCompare(time, entry->timestamp + entry->timeout) >= 0)
          {
             //Increment retransmission counter
             entry->retransmitCount++;
@@ -514,8 +494,7 @@ void arpTick(NetInterface *interface)
             if(entry->retransmitCount < ARP_MAX_PROBES)
             {
                //Send a point-to-point ARP request to the host
-               arpSendRequest(interface, interface->ipv4Config.addr,
-                  entry->ipAddr, &entry->macAddr);
+               arpSendRequest(interface, entry->ipAddr, &entry->macAddr);
 
                //Save the time at which the packet was sent
                entry->timestamp = time;
@@ -530,9 +509,6 @@ void arpTick(NetInterface *interface)
          }
       }
    }
-
-   //Release exclusive access to ARP cache
-   osReleaseMutex(&interface->arpCacheMutex);
 }
 
 
@@ -568,74 +544,60 @@ void arpProcessPacket(NetInterface *interface, ArpPacket *arpPacket, size_t leng
       return;
 
    //Check the state of the host address
-   if(interface->ipv4Config.addrState == IPV4_ADDR_STATE_TENTATIVE)
+   if(interface->ipv4Context.addrState == IPV4_ADDR_STATE_TENTATIVE)
    {
       //If the host receives any ARP packet where the sender IP address is
       //the address being probed for, then this is a conflicting ARP packet
-      if(arpPacket->spa == interface->ipv4Config.addr)
+      if(arpPacket->spa == interface->ipv4Context.addr)
       {
          //An address conflict has been detected...
-         interface->ipv4Config.addrConflict = TRUE;
+         interface->ipv4Context.addrConflict = TRUE;
          //Exit immediately
          return;
       }
-
-      //Check whether the target IP address is the address being probed for
-      if(arpPacket->tpa == interface->ipv4Config.addr)
+   }
+   else if(interface->ipv4Context.addrState == IPV4_ADDR_STATE_VALID)
+   {
+      //Check whether the sender protocol address matches the IP
+      //address assigned to the interface
+      if(arpPacket->spa == interface->ipv4Context.addr)
       {
-         //If the the sender hardware address does not match the hardware address
-         //of that interface, then this is a conflicting ARP packet
+         //If the the sender hardware address does not match the hardware
+         //address of that interface, then this is a conflicting ARP packet
          if(!macCompAddr(&arpPacket->sha, &interface->macAddr))
          {
             //An address conflict has been detected...
-            interface->ipv4Config.addrConflict = TRUE;
+            interface->ipv4Context.addrConflict = TRUE;
             //Exit immediately
             return;
          }
       }
    }
-   else if(interface->ipv4Config.addrState == IPV4_ADDR_STATE_VALID)
+
+   //Check whether the target protocol address matches the IP
+   //address assigned to the interface
+   if(arpPacket->tpa != interface->ipv4Context.addr)
+      return;
+
+   //Check operation code
+   switch(ntohs(arpPacket->op))
    {
-      //Check whether the sender protocol address matches the IP
-      //address assigned to the interface
-      if(arpPacket->spa == interface->ipv4Config.addr)
-      {
-         //If the the sender hardware address does not match the hardware address
-         //of that interface, then this is a conflicting ARP packet
-         if(!macCompAddr(&arpPacket->sha, &interface->macAddr))
-         {
-            //An address conflict has been detected...
-            interface->ipv4Config.addrConflict = TRUE;
-            //Exit immediately
-            return;
-         }
-      }
-
-      //Check whether the target protocol address matches the IP
-      //address assigned to the interface
-      if(arpPacket->tpa != interface->ipv4Config.addr)
-         return;
-
-      //Check operation code
-      switch(ntohs(arpPacket->op))
-      {
-      //ARP request?
-      case ARP_OPCODE_ARP_REQUEST:
-         //Process incoming ARP request
-         arpProcessRequest(interface, arpPacket);
-         break;
-      //ARP reply?
-      case ARP_OPCODE_ARP_REPLY:
-         //Process incoming ARP reply
-         arpProcessReply(interface, arpPacket);
-         break;
-      //Unknown operation code?
-      default:
-         //Debug message
-         TRACE_INFO("Unknown operation code!\r\n");
-         //Discard incoming packet
-         break;
-      }
+   //ARP request?
+   case ARP_OPCODE_ARP_REQUEST:
+      //Process incoming ARP request
+      arpProcessRequest(interface, arpPacket);
+      break;
+   //ARP reply?
+   case ARP_OPCODE_ARP_REPLY:
+      //Process incoming ARP reply
+      arpProcessReply(interface, arpPacket);
+      break;
+   //Unknown operation code?
+   default:
+      //Debug message
+      TRACE_INFO("Unknown operation code!\r\n");
+      //Discard incoming packet
+      break;
    }
 }
 
@@ -650,6 +612,32 @@ void arpProcessRequest(NetInterface *interface, ArpPacket *arpRequest)
 {
    //Debug message
    TRACE_INFO("ARP Request received...\r\n");
+
+   //Check sender protocol address
+   if(ipv4IsBroadcastAddr(interface, arpRequest->spa))
+      return;
+   if(ipv4IsMulticastAddr(arpRequest->spa))
+      return;
+
+   //Check whether the target IP address is an address being probed for
+   if(ipv4IsTentativeAddr(interface, arpRequest->tpa))
+   {
+      //ARP probe received?
+      if(arpRequest->spa == IPV4_UNSPECIFIED_ADDR)
+      {
+         //If the the sender hardware address does not match the hardware
+         //address of that interface, then this is a conflicting ARP packet
+         if(!macCompAddr(&arpRequest->sha, &interface->macAddr))
+         {
+            //An address conflict has been detected...
+            interface->ipv4Context.addrConflict = TRUE;
+         }
+      }
+
+      //In all cases, the host must not respond to an ARP request for an
+      //address being probed for
+      return;
+   }
 
    //Send ARP reply
    arpSendReply(interface, arpRequest->spa, &arpRequest->sha, &arpRequest->sha);
@@ -672,9 +660,9 @@ void arpProcessReply(NetInterface *interface, ArpPacket *arpReply)
    //Check sender protocol address
    if(arpReply->spa == IPV4_UNSPECIFIED_ADDR)
       return;
-   if(ipv4IsMulticastAddr(arpReply->spa))
-      return;
    if(ipv4IsBroadcastAddr(interface, arpReply->spa))
+      return;
+   if(ipv4IsMulticastAddr(arpReply->spa))
       return;
 
    //Check sender hardware address
@@ -682,9 +670,12 @@ void arpProcessReply(NetInterface *interface, ArpPacket *arpReply)
       return;
    if(macCompAddr(&arpReply->sha, &MAC_BROADCAST_ADDR))
       return;
+   if(macIsMulticastAddr(&arpReply->sha))
+      return;
 
-   //Acquire exclusive access to ARP cache
-   osAcquireMutex(&interface->arpCacheMutex);
+   //Check whether the target IP address is an address being probed for
+   if(ipv4IsTentativeAddr(interface, arpReply->tpa))
+      return;
 
    //Search the ARP cache for the specified IPv4 address
    entry = arpFindEntry(interface, arpReply->spa);
@@ -731,23 +722,17 @@ void arpProcessReply(NetInterface *interface, ArpPacket *arpReply)
          entry->state = ARP_STATE_REACHABLE;
       }
    }
-
-   //Release exclusive access to ARP cache
-   osReleaseMutex(&interface->arpCacheMutex);
 }
 
 
 /**
- * @brief Send ARP request
+ * @brief Send ARP probe
  * @param[in] interface Underlying network interface
- * @param[in] senderIpAddr Sender IPv4 address
  * @param[in] targetIpAddr Target IPv4 address
- * @param[in] destMacAddr Destination MAC address
  * @return Error code
  **/
 
-error_t arpSendRequest(NetInterface *interface, Ipv4Addr senderIpAddr,
-   Ipv4Addr targetIpAddr, const MacAddr *destMacAddr)
+error_t arpSendProbe(NetInterface *interface, Ipv4Addr targetIpAddr)
 {
    error_t error;
    size_t offset;
@@ -757,7 +742,67 @@ error_t arpSendRequest(NetInterface *interface, Ipv4Addr senderIpAddr,
    //Allocate a memory buffer to hold an ARP packet
    buffer = ethAllocBuffer(sizeof(ArpPacket), &offset);
    //Failed to allocate buffer?
-   if(!buffer) return ERROR_OUT_OF_MEMORY;
+   if(buffer == NULL)
+      return ERROR_OUT_OF_MEMORY;
+
+   //Point to the beginning of the ARP packet
+   arpRequest = netBufferAt(buffer, offset);
+
+   //Format ARP request
+   arpRequest->hrd = htons(ARP_HARDWARE_TYPE_ETH);
+   arpRequest->pro = htons(ARP_PROTOCOL_TYPE_IPV4);
+   arpRequest->hln = sizeof(MacAddr);
+   arpRequest->pln = sizeof(Ipv4Addr);
+   arpRequest->op = htons(ARP_OPCODE_ARP_REQUEST);
+   arpRequest->sha = interface->macAddr;
+   arpRequest->spa = IPV4_UNSPECIFIED_ADDR;
+   arpRequest->tha = MAC_UNSPECIFIED_ADDR;
+   arpRequest->tpa = targetIpAddr;
+
+   //Debug message
+   TRACE_INFO("Sending ARP Probe (%" PRIuSIZE " bytes)...\r\n", sizeof(ArpPacket));
+   //Dump ARP packet contents for debugging purpose
+   arpDumpPacket(arpRequest);
+
+   //Send ARP request
+   error = ethSendFrame(interface, &MAC_UNSPECIFIED_ADDR,
+      buffer, offset, ETH_TYPE_ARP);
+
+   //Free previously allocated memory
+   netBufferFree(buffer);
+   //Return status code
+   return error;
+}
+
+
+/**
+ * @brief Send ARP request
+ * @param[in] interface Underlying network interface
+ * @param[in] targetIpAddr Target IPv4 address
+ * @param[in] destMacAddr Destination MAC address
+ * @return Error code
+ **/
+
+error_t arpSendRequest(NetInterface *interface,
+   Ipv4Addr targetIpAddr, const MacAddr *destMacAddr)
+{
+   error_t error;
+   size_t offset;
+   NetBuffer *buffer;
+   ArpPacket *arpRequest;
+   Ipv4Addr senderIpAddr;
+
+   //Select the most appropriate sender IP address to be used
+   error = ipv4SelectSourceAddr(&interface, targetIpAddr, &senderIpAddr);
+   //No address assigned to the interface?
+   if(error)
+      return error;
+
+   //Allocate a memory buffer to hold an ARP packet
+   buffer = ethAllocBuffer(sizeof(ArpPacket), &offset);
+   //Failed to allocate buffer?
+   if(buffer == NULL)
+      return ERROR_OUT_OF_MEMORY;
 
    //Point to the beginning of the ARP packet
    arpRequest = netBufferAt(buffer, offset);
@@ -808,7 +853,8 @@ error_t arpSendReply(NetInterface *interface, Ipv4Addr targetIpAddr,
    //Allocate a memory buffer to hold an ARP packet
    buffer = ethAllocBuffer(sizeof(ArpPacket), &offset);
    //Failed to allocate buffer?
-   if(!buffer) return ERROR_OUT_OF_MEMORY;
+   if(buffer == NULL)
+      return ERROR_OUT_OF_MEMORY;
 
    //Point to the beginning of the ARP packet
    arpReply = netBufferAt(buffer, offset);
@@ -820,7 +866,7 @@ error_t arpSendReply(NetInterface *interface, Ipv4Addr targetIpAddr,
    arpReply->pln = sizeof(Ipv4Addr);
    arpReply->op = htons(ARP_OPCODE_ARP_REPLY);
    arpReply->sha = interface->macAddr;
-   arpReply->spa = interface->ipv4Config.addr;
+   arpReply->spa = interface->ipv4Context.addr;
    arpReply->tha = *targetMacAddr;
    arpReply->tpa = targetIpAddr;
 

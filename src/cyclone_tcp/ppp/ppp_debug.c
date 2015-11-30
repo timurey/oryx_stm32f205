@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Dependencies
@@ -71,6 +71,16 @@ static const char_t *papCodeLabel[] =
    "Authenticate-Request", //1
    "Authenticate-Ack",     //2
    "Authenticate-Nak"      //3
+};
+
+//CHAP codes
+static const char_t *chapCodeLabel[] =
+{
+   "",          //0
+   "Challenge", //1
+   "Response",  //2
+   "Success",   //3
+   "Failure"    //4
 };
 
 //LCP options
@@ -121,20 +131,6 @@ static const char_t *ipv6cpOptionLabel[] =
 
 
 /**
- * @brief Dump PPP frame header for debugging purpose
- * @param[in] header Pointer to the PPP header
- **/
-
-void pppDumpFrameHeader(const PppFrame *header)
-{
-   //Dump PPP frame header
-   TRACE_DEBUG("  Address = 0x%02" PRIX8 "\r\n", header->address);
-   TRACE_DEBUG("  Control = 0x%02" PRIX8  "\r\n", header->control);
-   TRACE_DEBUG("  Protocol = 0x%04" PRIX16 "\r\n", ntohs(header->protocol));
-}
-
-
-/**
  * @brief Dump LCP/NCP packet for debugging purpose
  * @param[in] packet Pointer to the LCP packet
  * @param[in] length Length of the packet, in bytes
@@ -161,6 +157,10 @@ error_t pppDumpPacket(const PppPacket *packet, size_t length, PppProtocol protoc
       //PAP packet?
       case PPP_PROTOCOL_PAP:
          error = papDumpPacket(packet, length);
+         break;
+      //CHAP packet?
+      case PPP_PROTOCOL_CHAP:
+         error = chapDumpPacket(packet, length);
          break;
       //Unknown protocol?
       default:
@@ -467,7 +467,6 @@ error_t ncpDumpPacket(const PppPacket *packet, size_t length, PppProtocol protoc
 
 error_t papDumpPacket(const PppPacket *packet, size_t length)
 {
-   error_t error;
    const char_t *label;
 
    //Make sure the PAP packet is valid
@@ -493,6 +492,195 @@ error_t papDumpPacket(const PppPacket *packet, size_t length)
    TRACE_DEBUG("  Code = %" PRIu8 " (%s)\r\n", packet->code, label);
    TRACE_DEBUG("  Identifier = %" PRIu8  "\r\n", packet->identifier);
    TRACE_DEBUG("  Length = %" PRIu16 "\r\n", ntohs(packet->length));
+
+   //Authenticate-Request packet?
+   if(packet->code == PAP_CODE_AUTH_REQ)
+   {
+      uint8_t *q;
+      PapAuthReqPacket *p;
+
+      //Cast PAP packet
+      p = (PapAuthReqPacket *) packet;
+
+      //Valid packet length?
+      if(length < sizeof(PapAuthReqPacket))
+         return ERROR_INVALID_LENGTH;
+
+      //Peer-ID-Length field
+      TRACE_DEBUG("  Peer-ID-Length = %" PRIu8 "\r\n", p->peerIdLength);
+
+      //Check the length of the Peer-ID field
+      if(length < (sizeof(PapAuthAckPacket) + 1 + p->peerIdLength))
+         return ERROR_INVALID_LENGTH;
+
+      //Peer-ID field
+      TRACE_DEBUG("  Peer-ID\r\n");
+      TRACE_DEBUG_ARRAY("    ", p->peerId, p->peerIdLength);
+
+      //Point to the Passwd-Length field
+      q = p->peerId + p->peerIdLength;
+
+      //Passwd-Length field
+      TRACE_DEBUG("  Passwd-Length = %" PRIu8 "\r\n", q[0]);
+
+      //Check the length of the Password field
+      if(length < (sizeof(PapAuthAckPacket) + 1 + p->peerIdLength + q[0]))
+         return ERROR_INVALID_LENGTH;
+
+      //Password field
+      TRACE_DEBUG("  Password\r\n");
+      TRACE_DEBUG_ARRAY("    ", q + 1, q[0]);
+   }
+   //Authenticate-Ack or Authenticate-Nak packet?
+   else if(packet->code == PAP_CODE_AUTH_ACK ||
+      packet->code == PAP_CODE_AUTH_NAK)
+   {
+      PapAuthAckPacket *p;
+
+      //Cast PAP packet
+      p = (PapAuthAckPacket *) packet;
+
+      //Valid packet length?
+      if(length < sizeof(PapAuthAckPacket))
+         return ERROR_INVALID_LENGTH;
+
+      //Msg-Length field
+      TRACE_DEBUG("  Msg-Length = %" PRIu8 "\r\n", p->msgLength);
+
+      //Check the length of the Message field
+      if(length < (sizeof(PapAuthAckPacket) + p->msgLength))
+         return ERROR_INVALID_LENGTH;
+
+      if(length > 0)
+      {
+         //Message field
+         TRACE_DEBUG("  Message\r\n");
+         TRACE_DEBUG_ARRAY("    ", p->message, p->msgLength);
+      }
+   }
+   //Unknown packet?
+   else
+   {
+      //Retrieve the length of data
+      length -= sizeof(PppPacket);
+
+      //Any data?
+      if(length > 0)
+      {
+         //Dump data
+         TRACE_DEBUG("  Data (%" PRIuSIZE " bytes)\r\n", length);
+         TRACE_DEBUG_ARRAY("    ", packet->data, length);
+      }
+   }
+
+   //No error to report
+   return NO_ERROR;
+}
+
+
+/**
+ * @brief Dump CHAP packet for debugging purpose
+ * @param[in] packet Pointer to the PAP packet
+ * @param[in] length Length of the packet, in bytes
+ * @return Error code
+ **/
+
+error_t chapDumpPacket(const PppPacket *packet, size_t length)
+{
+   const char_t *label;
+
+   //Make sure the CHAP packet is valid
+   if(length < sizeof(PppPacket))
+      return ERROR_INVALID_LENGTH;
+
+   //Check the length field
+   if(ntohs(packet->length) > length)
+      return ERROR_INVALID_LENGTH;
+   if(ntohs(packet->length) < sizeof(PppPacket))
+      return ERROR_INVALID_LENGTH;
+
+   //Save the length of the CHAP packet
+   length = ntohs(packet->length);
+
+   //Retrieve the name of the CHAP packet
+   if(packet->code < arraysize(chapCodeLabel))
+      label = chapCodeLabel[packet->code];
+   else
+      label = "Unknown";
+
+   //Dump CHAP packet header
+   TRACE_DEBUG("  Code = %" PRIu8 " (%s)\r\n", packet->code, label);
+   TRACE_DEBUG("  Identifier = %" PRIu8  "\r\n", packet->identifier);
+   TRACE_DEBUG("  Length = %" PRIu16 "\r\n", ntohs(packet->length));
+
+   //Challenge or Response packet?
+   if(packet->code == CHAP_CODE_CHALLENGE ||
+      packet->code == CHAP_CODE_RESPONSE)
+   {
+      uint8_t *q;
+      ChapChallengePacket *p;
+
+      //Cast CHAP packet
+      p = (ChapChallengePacket *) packet;
+
+      //Valid packet length?
+      if(length < sizeof(ChapChallengePacket))
+         return ERROR_INVALID_LENGTH;
+
+      //Value-Size field
+      TRACE_DEBUG("  Value-Size = %" PRIu8 "\r\n", p->valueSize);
+
+      //Check the length of the Value field
+      if(length < (sizeof(ChapChallengePacket) + p->valueSize))
+         return ERROR_INVALID_LENGTH;
+
+      //Value field
+      TRACE_DEBUG("  Value\r\n");
+      TRACE_DEBUG_ARRAY("    ", p->value, p->valueSize);
+
+      //Point to the Name field
+      q = p->value + p->valueSize;
+      //Retrieve the length of the Name field
+      length -= sizeof(ChapChallengePacket) + p->valueSize;
+
+      //Name field
+      TRACE_DEBUG("  Name (%" PRIuSIZE " bytes)\r\n", length);
+      TRACE_DEBUG_ARRAY("    ", q, length);
+   }
+   //Success or Failure packet?
+   else if(packet->code == CHAP_CODE_SUCCESS ||
+      packet->code == CHAP_CODE_FAILURE)
+   {
+      ChapSuccessPacket *p;
+
+      //Cast CHAP packet
+      p = (ChapSuccessPacket *) packet;
+
+      //Valid packet length?
+      if(length < sizeof(ChapSuccessPacket))
+         return ERROR_INVALID_LENGTH;
+
+      //Retrieve the length of Message field
+      length -= sizeof(ChapSuccessPacket);
+
+      //Message field
+      TRACE_DEBUG("  Message (%" PRIuSIZE " bytes)\r\n", length);
+      TRACE_DEBUG_ARRAY("    ", p->message, length);
+   }
+   //Unknown packet?
+   else
+   {
+      //Retrieve the length of data
+      length -= sizeof(PppPacket);
+
+      //Any data?
+      if(length > 0)
+      {
+         //Dump data
+         TRACE_DEBUG("  Data (%" PRIuSIZE " bytes)\r\n", length);
+         TRACE_DEBUG_ARRAY("    ", packet->data, length);
+      }
+   }
 
    //No error to report
    return NO_ERROR;

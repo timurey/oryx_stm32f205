@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _DP83848_H
@@ -299,7 +299,7 @@ void dp83848Tick(NetInterface *interface);
 void dp83848EnableIrq(NetInterface *interface);
 void dp83848DisableIrq(NetInterface *interface);
 
-bool_t dp83848EventHandler(NetInterface *interface);
+void dp83848EventHandler(NetInterface *interface);
 
 void dp83848WritePhyReg(NetInterface *interface, uint8_t address, uint16_t data);
 uint16_t dp83848ReadPhyReg(NetInterface *interface, uint8_t address);

@@ -29,8 +29,7 @@
 #ifndef _NET_CONFIG_H
 #define _NET_CONFIG_H
 
-//#define NET_TICK_PRIORITY 4
-//#define NET_RX_PRIORITY 3
+
 //Trace level for TCP/IP stack debugging
 #define MEM_TRACE_LEVEL          4
 #define NIC_TRACE_LEVEL          2
@@ -71,12 +70,12 @@
 #define NET_INTERFACE_COUNT 1
 
 //Maximum size of the MAC filter table
-#define MAC_FILTER_MAX_SIZE 4
+#define MAC_MULTICAST_FILTER_SIZE 4
 
 //IPv4 support
 #define IPV4_SUPPORT ENABLED
 //Maximum size of the IPv4 filter table
-#define IPV4_FILTER_MAX_SIZE 4
+#define IPV4_MULTICAST_FILTER_SIZE 4
 
 //IPv4 fragmentation support
 #define IPV4_FRAG_SUPPORT DISABLED
@@ -97,7 +96,7 @@
 //IPv6 support
 #define IPV6_SUPPORT DISABLED
 //Maximum size of the IPv6 filter table
-#define IPV6_FILTER_MAX_SIZE 8
+#define IPV6_MULTICAST_FILTER_SIZE 8
 
 //IPv6 fragmentation support
 #define IPV6_FRAG_SUPPORT ENABLED
@@ -148,13 +147,14 @@
 //Number of sockets that can be opened simultaneously
 #define SOCKET_MAX_COUNT 8
 
+
 #define DNS_CLIENT_SUPPORT ENABLED
 #define MDNS_CLIENT_SUPPORT ENABLED
 #define MDNS_RESPONDER_SUPPORT ENABLED
 #define DNS_SD_SUPPORT ENABLED
 
-#define NBNS_CLIENT_SUPPORT DISABLED
-#define NBNS_RESPONDER_SUPPORT DISABLED
+#define NBNS_CLIENT_SUPPORT ENABLED
+#define NBNS_RESPONDER_SUPPORT ENABLED
 
 #define BSD_SOCKET_SUPPORT DISABLED
 #define NET_MAX_HOSTNAME_LEN 32
@@ -195,6 +195,6 @@
 
 #define DNS_CACHE_SIZE 16
 
-//#define NET_TICK_STACK_SIZE 550*4
-//#define NET_RX_STACK_SIZE 650*4
+//#define NET_TASK_STACK_SIZE 550*4
+//#define NET_TASK_PRIORITY 5
 #endif

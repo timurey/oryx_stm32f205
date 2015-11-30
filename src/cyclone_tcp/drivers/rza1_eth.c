@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -36,6 +36,9 @@
 #include "core/net.h"
 #include "drivers/rza1_eth.h"
 #include "debug.h"
+
+//Underlying network interface
+static NetInterface *nicDriverInterface;
 
 //IAR EWARM compiler?
 #if defined(__ICCARM__)
@@ -90,8 +93,9 @@ const NicDriver rza1EthDriver =
    rza1EthEnableIrq,
    rza1EthDisableIrq,
    rza1EthEventHandler,
-   rza1EthSetMacFilter,
    rza1EthSendPacket,
+   rza1EthSetMulticastFilter,
+   rza1EthUpdateMacConfig,
    rza1EthWritePhyReg,
    rza1EthReadPhyReg,
    TRUE,
@@ -112,6 +116,9 @@ error_t rza1EthInit(NetInterface *interface)
 
    //Debug message
    TRACE_INFO("Initializing RZ/A1 Ethernet MAC...\r\n");
+
+   //Save underlying network interface
+   nicDriverInterface = interface;
 
    //Enable Ethernet peripheral clock
    CPG.STBCR7 &= ~CPG_STBCR7_MSTP74;
@@ -173,6 +180,9 @@ error_t rza1EthInit(NetInterface *interface)
    //Set the lower 16 bits of the MAC address
    ETHER.MALR0 = (interface->macAddr.b[4] << 8) | interface->macAddr.b[5];
 
+   //Disable all CAM entries
+   ETHER.TSU_TEN = 0;
+
    //Maximum frame length that can be accepted
    ETHER.RFLR0 = 1518;
    //Automatic pause frame
@@ -199,9 +209,7 @@ error_t rza1EthInit(NetInterface *interface)
    //Instruct the DMA to poll the receive descriptor list
    ETHER.EDRRR0 = ETHER_EDRRR0_RR;
 
-   //Force the TCP/IP stack to check the link state
-   osSetEvent(&interface->nicRxEvent);
-   //RZ/A1 Ethernet MAC is now ready to send
+   //Accept any packets from the upper layer
    osSetEvent(&interface->nicTxEvent);
 
    //Successful initialization
@@ -209,8 +217,9 @@ error_t rza1EthInit(NetInterface *interface)
 }
 
 
-//RSK RZ/A1H, Hachiko or Pekoe evaluation board?
-#if defined(USE_RSK_RZA1H) || defined(USE_HACHIKO) || defined(USE_PEKOE)
+//RSK RZ/A1H, Stream it! RZ, Hachiko or VK-RZ/A1H evaluation board?
+#if defined(USE_RSK_RZA1H) || defined(USE_STREAM_IT_RZ) || \
+   defined(USE_HACHIKO) || defined(USE_VK_RZA1H)
 
 /**
  * @brief GPIO configuration
@@ -347,8 +356,136 @@ void rza1EthInitGpio(NetInterface *interface)
    PORT5.PFCAEn.BIT.PFCAEn9 = 0;
    PORT5.PIPCn.BIT.PIPCn9 = 1;
 
-//Pekoe evaluation board?
-#elif defined(USE_PEKOE)
+//VK-RZ/A1H evaluation board?
+#elif defined(USE_VK_RZA1H)
+   //Configure ET_COL (P1_14)
+   PORT1.PMCn.BIT.PMCn14 = 1;
+   PORT1.PFCn.BIT.PFCn14 = 1;
+   PORT1.PFCEn.BIT.PFCEn14 = 1;
+   PORT1.PFCAEn.BIT.PFCAEn14 = 0;
+   PORT1.PIPCn.BIT.PIPCn14 = 1;
+
+   //Configure ET_TXCLK (P2_0)
+   PORT2.PMCn.BIT.PMCn0 = 1;
+   PORT2.PFCn.BIT.PFCn0 = 1;
+   PORT2.PFCEn.BIT.PFCEn0 = 0;
+   PORT2.PFCAEn.BIT.PFCAEn0 = 0;
+   PORT2.PIPCn.BIT.PIPCn0 = 1;
+
+   //Configure ET_TXER (P2_1)
+   PORT2.PMCn.BIT.PMCn1 = 1;
+   PORT2.PFCn.BIT.PFCn1 = 1;
+   PORT2.PFCEn.BIT.PFCEn1 = 0;
+   PORT2.PFCAEn.BIT.PFCAEn1 = 0;
+   PORT2.PIPCn.BIT.PIPCn1 = 1;
+
+   //Configure ET_TXEN (P2_2)
+   PORT2.PMCn.BIT.PMCn2 = 1;
+   PORT2.PFCn.BIT.PFCn2 = 1;
+   PORT2.PFCEn.BIT.PFCEn2 = 0;
+   PORT2.PFCAEn.BIT.PFCAEn2 = 0;
+   PORT2.PIPCn.BIT.PIPCn2 = 1;
+
+   //Configure ET_CRS (P2_3)
+   PORT2.PMCn.BIT.PMCn3 = 1;
+   PORT2.PFCn.BIT.PFCn3 = 1;
+   PORT2.PFCEn.BIT.PFCEn3 = 0;
+   PORT2.PFCAEn.BIT.PFCAEn3 = 0;
+   PORT2.PIPCn.BIT.PIPCn3 = 1;
+
+   //Configure ET_TXD0 (P2_4)
+   PORT2.PMCn.BIT.PMCn4 = 1;
+   PORT2.PFCn.BIT.PFCn4 = 1;
+   PORT2.PFCEn.BIT.PFCEn4 = 0;
+   PORT2.PFCAEn.BIT.PFCAEn4 = 0;
+   PORT2.PIPCn.BIT.PIPCn4 = 1;
+
+   //Configure ET_TXD1 (P2_5)
+   PORT2.PMCn.BIT.PMCn5 = 1;
+   PORT2.PFCn.BIT.PFCn5 = 1;
+   PORT2.PFCEn.BIT.PFCEn5 = 0;
+   PORT2.PFCAEn.BIT.PFCAEn5 = 0;
+   PORT2.PIPCn.BIT.PIPCn5 = 1;
+
+   //Configure ET_TXD2 (P2_6)
+   PORT2.PMCn.BIT.PMCn6 = 1;
+   PORT2.PFCn.BIT.PFCn6 = 1;
+   PORT2.PFCEn.BIT.PFCEn6 = 0;
+   PORT2.PFCAEn.BIT.PFCAEn6 = 0;
+   PORT2.PIPCn.BIT.PIPCn6 = 1;
+
+   //Configure ET_TXD3 (P2_7)
+   PORT2.PMCn.BIT.PMCn7 = 1;
+   PORT2.PFCn.BIT.PFCn7 = 1;
+   PORT2.PFCEn.BIT.PFCEn7 = 0;
+   PORT2.PFCAEn.BIT.PFCAEn7 = 0;
+   PORT2.PIPCn.BIT.PIPCn7 = 1;
+
+   //Configure ET_RXD0 (P2_8)
+   PORT2.PMCn.BIT.PMCn8 = 1;
+   PORT2.PFCn.BIT.PFCn8 = 1;
+   PORT2.PFCEn.BIT.PFCEn8 = 0;
+   PORT2.PFCAEn.BIT.PFCAEn8 = 0;
+   PORT2.PIPCn.BIT.PIPCn8 = 1;
+
+   //Configure ET_RXD1 (P2_9)
+   PORT2.PMCn.BIT.PMCn9 = 1;
+   PORT2.PFCn.BIT.PFCn9 = 1;
+   PORT2.PFCEn.BIT.PFCEn9 = 0;
+   PORT2.PFCAEn.BIT.PFCAEn9 = 0;
+   PORT2.PIPCn.BIT.PIPCn9 = 1;
+
+   //Configure ET_RXD2 (P2_10)
+   PORT2.PMCn.BIT.PMCn10 = 1;
+   PORT2.PFCn.BIT.PFCn10 = 1;
+   PORT2.PFCEn.BIT.PFCEn10 = 0;
+   PORT2.PFCAEn.BIT.PFCAEn10 = 0;
+   PORT2.PIPCn.BIT.PIPCn10 = 1;
+
+   //Configure ET_RXD3 (P2_11)
+   PORT2.PMCn.BIT.PMCn11 = 1;
+   PORT2.PFCn.BIT.PFCn11 = 1;
+   PORT2.PFCEn.BIT.PFCEn11 = 0;
+   PORT2.PFCAEn.BIT.PFCAEn11 = 0;
+   PORT2.PIPCn.BIT.PIPCn11 = 1;
+
+   //Configure ET_MDIO (P3_3)
+   PORT3.PMCn.BIT.PMCn3 = 1;
+   PORT3.PFCn.BIT.PFCn3 = 1;
+   PORT3.PFCEn.BIT.PFCEn3 = 0;
+   PORT3.PFCAEn.BIT.PFCAEn3 = 0;
+   PORT3.PIPCn.BIT.PIPCn3 = 1;
+
+   //Configure ET_RXCLK (P3_4)
+   PORT3.PMCn.BIT.PMCn4 = 1;
+   PORT3.PFCn.BIT.PFCn4 = 1;
+   PORT3.PFCEn.BIT.PFCEn4 = 0;
+   PORT3.PFCAEn.BIT.PFCAEn4 = 0;
+   PORT3.PIPCn.BIT.PIPCn4 = 1;
+
+   //Configure ET_RXER (P3_5)
+   PORT3.PMCn.BIT.PMCn5 = 1;
+   PORT3.PFCn.BIT.PFCn5 = 1;
+   PORT3.PFCEn.BIT.PFCEn5 = 0;
+   PORT3.PFCAEn.BIT.PFCAEn5 = 0;
+   PORT3.PIPCn.BIT.PIPCn5 = 1;
+
+   //Configure ET_RXDV (P3_6)
+   PORT3.PMCn.BIT.PMCn6 = 1;
+   PORT3.PFCn.BIT.PFCn6 = 1;
+   PORT3.PFCEn.BIT.PFCEn6 = 0;
+   PORT3.PFCAEn.BIT.PFCAEn6 = 0;
+   PORT3.PIPCn.BIT.PIPCn6 = 1;
+
+   //Configure ET_MDC (P7_0)
+   PORT7.PMCn.BIT.PMCn0 = 1;
+   PORT7.PFCn.BIT.PFCn0 = 0;
+   PORT7.PFCEn.BIT.PFCEn0 = 1;
+   PORT7.PFCAEn.BIT.PFCAEn0 = 0;
+   PORT7.PIPCn.BIT.PIPCn0 = 1;
+
+//Stream it! RZ evaluation board?
+#elif defined(USE_STREAM_IT_RZ)
    //Configure ET_TXD0 (P8_0)
    PORT8.PMCn.BIT.PMCn0 = 1;
    PORT8.PFCn.BIT.PFCn0 = 1;
@@ -539,18 +676,18 @@ void rza1EthInitDmaDesc(NetInterface *interface)
    rxIndex = 0;
 
    //Address of the first TX descriptor
-   ETHER.TDLAR0 = (uint32_t ) &txDmaDesc[0];
-   ETHER.TDFAR0 = (uint32_t ) &txDmaDesc[0];
+   ETHER.TDLAR0 = (uint32_t) &txDmaDesc[0];
+   ETHER.TDFAR0 = (uint32_t) &txDmaDesc[0];
    //Address of the last TX descriptor
-   ETHER.TDFXR0 = (uint32_t ) &txDmaDesc[RZA1_ETH_TX_BUFFER_COUNT - 1];
+   ETHER.TDFXR0 = (uint32_t) &txDmaDesc[RZA1_ETH_TX_BUFFER_COUNT - 1];
    //Set TDLF flag
    ETHER.TDFFR0 = ETHER_TDFFR_TDLF;
 
    //Address of the first RX descriptor
-   ETHER.RDLAR0 = (uint32_t ) &rxDmaDesc[0];
-   ETHER.RDFAR0 = (uint32_t ) &rxDmaDesc[0];
+   ETHER.RDLAR0 = (uint32_t) &rxDmaDesc[0];
+   ETHER.RDFAR0 = (uint32_t) &rxDmaDesc[0];
    //Address of the last RX descriptor
-   ETHER.RDFXR0 = (uint32_t ) &rxDmaDesc[RZA1_ETH_RX_BUFFER_COUNT - 1];
+   ETHER.RDFXR0 = (uint32_t) &rxDmaDesc[RZA1_ETH_RX_BUFFER_COUNT - 1];
    //Set RDLF flag
    ETHER.RDFFR0 = ETHER_RDFFR0_RDLF;
 }
@@ -609,13 +746,10 @@ void rza1EthIrqHandler(uint32_t intSense)
 {
    bool_t flag;
    uint32_t status;
-   NetInterface *interface;
 
    //Enter interrupt service routine
    osEnterIsr();
 
-   //Point to the structure describing the network interface
-   interface = &netInterface[0];
    //This flag will be set if a higher priority task must be woken
    flag = FALSE;
 
@@ -631,18 +765,21 @@ void rza1EthIrqHandler(uint32_t intSense)
       //Check whether the TX buffer is available for writing
       if(!(txDmaDesc[txIndex].td0 & ETHER_TD0_TACT))
       {
-         //Notify the user that the transmitter is ready to send
-         flag |= osSetEventFromIsr(&interface->nicTxEvent);
+         //Notify the TCP/IP stack that the transmitter is ready to send
+         flag |= osSetEventFromIsr(&nicDriverInterface->nicTxEvent);
       }
    }
+
    //A packet has been received?
    if(status & ETHER_EESR0_FR)
    {
       //Disable FR interrupts
       ETHER.EESIPR0 &= ~ETHER_EESIPR0_FRIP;
 
-      //Notify the user that a packet has been received
-      flag |= osSetEventFromIsr(&interface->nicRxEvent);
+      //Set event flag
+      nicDriverInterface->nicEvent = TRUE;
+      //Notify the TCP/IP stack of the event
+      flag |= osSetEventFromIsr(&netEvent);
    }
 
    //Leave interrupt service routine
@@ -659,33 +796,6 @@ void rza1EthEventHandler(NetInterface *interface)
 {
    error_t error;
    size_t length;
-   bool_t linkStateChange;
-
-   //PHY event is pending?
-   if(interface->phyEvent)
-   {
-      //Acknowledge the event by clearing the flag
-      interface->phyEvent = FALSE;
-      //Handle PHY specific events
-      linkStateChange = interface->phyDriver->eventHandler(interface);
-
-      //Check whether the link state has changed?
-      if(linkStateChange)
-      {
-         //Set duplex mode for proper operation
-         if(interface->linkState)
-         {
-            //Half-duplex or full-duplex mode?
-            if(interface->fullDuplex)
-               ETHER.ECMR0 |= ETH_ECMR0_DM;
-            else
-               ETHER.ECMR0 &= ~ETH_ECMR0_DM;
-         }
-
-         //Process link state change event
-         nicNotifyLinkChange(interface);
-      }
-   }
 
    //Packet received?
    if(ETHER.EESR0 & ETHER_EESR0_FR)
@@ -713,61 +823,6 @@ void rza1EthEventHandler(NetInterface *interface)
 
    //Re-enable EDMAC interrupts
    ETHER.EESIPR0 =  ETHER_EESIPR0_TWBIP | ETHER_EESIPR0_FRIP;
-}
-
-
-/**
- * @brief Configure multicast MAC address filtering
- * @param[in] interface Underlying network interface
- * @return Error code
- **/
-
-error_t rza1EthSetMacFilter(NetInterface *interface)
-{
-   uint_t i;
-   volatile uint32_t *addressHigh;
-   volatile uint32_t *addressLow;
-
-   //Debug message
-   TRACE_INFO("Updating RZ/A1 CAM entry table...\r\n");
-
-   //Disable all CAM entries
-   ETHER.TSU_TEN = 0;
-
-   //The MAC filter table contains the multicast MAC addresses
-   //to accept when receiving an Ethernet frame
-   for(i = 0; i < interface->macFilterSize && i < 32; i++)
-   {
-      //Point to the current MAC address
-      MacAddr *macAddr = &interface->macFilter[i].addr;
-
-      //Debug message
-      TRACE_INFO("  %s\r\n", macAddrToString(macAddr, NULL));
-
-      //Point to the CAM entry registers
-      addressHigh = &ETHER.TSU_ADRH0 + 2 * i;
-      addressLow = &ETHER.TSU_ADRL0 + 2 * i;
-
-      //The contents of the CAM entry table registers cannot be
-      //modified while the ADSBSY flag is set
-      while(ETHER.TSU_ADSBSY & ETHER_TSU_ADSBSY_ADSBSY);
-
-      //Set the upper 32 bits of the MAC address
-      *addressHigh = (macAddr->b[0] << 24) | (macAddr->b[1] << 16) |
-         (macAddr->b[2] << 8) | macAddr->b[3];
-
-      //Wait for the ADSBSY flag to be cleared
-      while(ETHER.TSU_ADSBSY & ETHER_TSU_ADSBSY_ADSBSY);
-
-      //Set the lower 16 bits of the MAC address
-      *addressLow = (macAddr->b[4] << 8) | macAddr->b[5];
-
-      //Enable the CAM entry
-      ETHER.TSU_TEN |= 1 << (31 - i);
-   }
-
-   //Successful processing
-   return NO_ERROR;
 }
 
 
@@ -922,6 +977,87 @@ error_t rza1EthReceivePacket(NetInterface *interface,
 
    //Return status code
    return error;
+}
+
+
+/**
+ * @brief Configure multicast MAC address filtering
+ * @param[in] interface Underlying network interface
+ * @return Error code
+ **/
+
+error_t rza1EthSetMulticastFilter(NetInterface *interface)
+{
+   uint_t i;
+   volatile uint32_t *addrHigh;
+   volatile uint32_t *addrLow;
+   MacFilterEntry *entry;
+
+   //Debug message
+   TRACE_DEBUG("Updating RZ/A1 multicast filter...\r\n");
+
+   //The MAC filter table contains the multicast MAC addresses
+   //to accept when receiving an Ethernet frame
+   for(i = 0; i < MAC_MULTICAST_FILTER_SIZE && i < 32; i++)
+   {
+      //Point to the current entry
+      entry = &interface->macMulticastFilter[i];
+
+      //Valid entry?
+      if(entry->refCount > 0)
+      {
+         //Debug message
+         TRACE_DEBUG("  %s\r\n", macAddrToString(&entry->addr, NULL));
+
+         //Point to the CAM entry registers
+         addrHigh = &ETHER.TSU_ADRH0 + 2 * i;
+         addrLow = &ETHER.TSU_ADRL0 + 2 * i;
+
+         //The contents of the CAM entry table registers cannot be
+         //modified while the ADSBSY flag is set
+         while(ETHER.TSU_ADSBSY & ETHER_TSU_ADSBSY_ADSBSY);
+
+         //Set the upper 32 bits of the MAC address
+         *addrHigh = (entry->addr.b[0] << 24) | (entry->addr.b[1] << 16) |
+            (entry->addr.b[2] << 8) |entry->addr.b[3];
+
+         //Wait for the ADSBSY flag to be cleared
+         while(ETHER.TSU_ADSBSY & ETHER_TSU_ADSBSY_ADSBSY);
+
+         //Set the lower 16 bits of the MAC address
+         *addrLow = (entry->addr.b[4] << 8) | entry->addr.b[5];
+
+         //Enable the CAM entry
+         ETHER.TSU_TEN |= 1 << (31 - i);
+      }
+      else
+      {
+         //Disable the CAM entry
+         ETHER.TSU_TEN &= ~(1 << (31 - i));
+      }
+   }
+
+   //Successful processing
+   return NO_ERROR;
+}
+
+
+/**
+ * @brief Adjust MAC configuration parameters for proper operation
+ * @param[in] interface Underlying network interface
+ * @return Error code
+ **/
+
+error_t rza1EthUpdateMacConfig(NetInterface *interface)
+{
+   //Half-duplex or full-duplex mode?
+   if(interface->duplexMode == NIC_FULL_DUPLEX_MODE)
+      ETHER.ECMR0 |= ETH_ECMR0_DM;
+   else
+      ETHER.ECMR0 &= ~ETH_ECMR0_DM;
+
+   //Successful processing
+   return NO_ERROR;
 }
 
 

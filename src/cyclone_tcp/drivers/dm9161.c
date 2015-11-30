@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -77,6 +77,11 @@ error_t dm9161Init(NetInterface *interface)
    //The PHY will generate interrupts when link status changes are detected
    dm9161WritePhyReg(interface, DM9161_PHY_REG_MDINTR, ~(MDINTR_LINK_MASK | MDINTR_INTR_MASK));
 
+   //Force the TCP/IP stack to poll the link state at startup
+   interface->phyEvent = TRUE;
+   //Notify the TCP/IP stack of the event
+   osSetEvent(&netEvent);
+
    //Successful initialization
    return NO_ERROR;
 }
@@ -89,12 +94,12 @@ error_t dm9161Init(NetInterface *interface)
 
 void dm9161Tick(NetInterface *interface)
 {
+   uint16_t value;
+   bool_t linkState;
+
    //No external interrupt line driver?
    if(interface->extIntDriver == NULL)
    {
-      uint16_t value;
-      bool_t linkState;
-
       //Read basic status register
       value = dm9161ReadPhyReg(interface, DM9161_PHY_REG_BMSR);
       //Retrieve current link state
@@ -103,18 +108,18 @@ void dm9161Tick(NetInterface *interface)
       //Link up event?
       if(linkState && !interface->linkState)
       {
-         //A PHY event is pending...
+         //Set event flag
          interface->phyEvent = TRUE;
-         //Notify the user that the link state has changed
-         osSetEvent(&interface->nicRxEvent);
+         //Notify the TCP/IP stack of the event
+         osSetEvent(&netEvent);
       }
       //Link down event?
       else if(!linkState && interface->linkState)
       {
-         //A PHY event is pending...
+         //Set event flag
          interface->phyEvent = TRUE;
-         //Notify the user that the link state has changed
-         osSetEvent(&interface->nicRxEvent);
+         //Notify the TCP/IP stack of the event
+         osSetEvent(&netEvent);
       }
    }
 }
@@ -149,10 +154,9 @@ void dm9161DisableIrq(NetInterface *interface)
 /**
  * @brief DM9161 event handler
  * @param[in] interface Underlying network interface
- * @return TRUE if a link state change notification is received
  **/
 
-bool_t dm9161EventHandler(NetInterface *interface)
+void dm9161EventHandler(NetInterface *interface)
 {
    uint16_t value;
    bool_t end;
@@ -163,8 +167,8 @@ bool_t dm9161EventHandler(NetInterface *interface)
    //Link status change?
    if(value & MDINTR_LINK_CHANGE)
    {
-      //Any link failure condition is latched in the BMSR register...
-      //Reading the register twice always return the actual link status
+      //Any link failure condition is latched in the BMSR register... Reading
+      //the register twice will always return the actual link status
       value = dm9161ReadPhyReg(interface, DM9161_PHY_REG_BMSR);
       value = dm9161ReadPhyReg(interface, DM9161_PHY_REG_BMSR);
 
@@ -203,26 +207,26 @@ bool_t dm9161EventHandler(NetInterface *interface)
          if(value & DSCSR_10HDX)
          {
             //10BASE-T half-duplex
-            interface->speed100 = FALSE;
-            interface->fullDuplex = FALSE;
+            interface->linkSpeed = NIC_LINK_SPEED_10MBPS;
+            interface->duplexMode = NIC_HALF_DUPLEX_MODE;
          }
          else if(value & DSCSR_10FDX)
          {
             //10BASE-T full-duplex
-            interface->speed100 = FALSE;
-            interface->fullDuplex = TRUE;
+            interface->linkSpeed = NIC_LINK_SPEED_10MBPS;
+            interface->duplexMode = NIC_FULL_DUPLEX_MODE;
          }
          else if(value & DSCSR_100HDX)
          {
             //100BASE-TX half-duplex
-            interface->speed100 = TRUE;
-            interface->fullDuplex = FALSE;
+            interface->linkSpeed = NIC_LINK_SPEED_100MBPS;
+            interface->duplexMode = NIC_HALF_DUPLEX_MODE;
          }
          else if(value & DSCSR_100FDX)
          {
             //100BASE-TX full-duplex
-            interface->speed100 = TRUE;
-            interface->fullDuplex = TRUE;
+            interface->linkSpeed = NIC_LINK_SPEED_100MBPS;
+            interface->duplexMode = NIC_FULL_DUPLEX_MODE;
          }
          else
          {
@@ -232,29 +236,18 @@ bool_t dm9161EventHandler(NetInterface *interface)
 
          //Update link state
          interface->linkState = TRUE;
-         //Display link state
-         TRACE_INFO("Link is up (%s)...\r\n", interface->name);
 
-         //Display actual speed and duplex mode
-         TRACE_INFO("%s %s\r\n",
-            interface->speed100 ? "100BASE-TX" : "10BASE-T",
-            interface->fullDuplex ? "Full-Duplex" : "Half-Duplex");
+         //Adjust MAC configuration parameters for proper operation
+         interface->nicDriver->updateMacConfig(interface);
       }
       else
       {
          //Update link state
          interface->linkState = FALSE;
-         //Display link state
-         TRACE_INFO("Link is down (%s)...\r\n", interface->name);
       }
 
-      //Notify the user that the link state has changed
-      return TRUE;
-   }
-   else
-   {
-      //No link state change...
-      return FALSE;
+      //Process link state change event
+      nicNotifyLinkChange(interface);
    }
 }
 

@@ -187,8 +187,14 @@ error_t httpServerCgiCallback(HttpConnection *connection,
 {
    static uint_t pageCounter = 0;
    uint_t length;
-   time_t unixTime;
-   DateTime date;
+   MacAddr macAddr;
+#if (IPV4_SUPPORT == ENABLED)
+   Ipv4Addr ipv4Addr;
+#endif
+#if (IPV6_SUPPORT == ENABLED)
+   uint_t n;
+   Ipv6Addr ipv6Addr;
+#endif
 
    //Underlying network interface
    NetInterface *interface = connection->socket->interface;
@@ -201,68 +207,75 @@ error_t httpServerCgiCallback(HttpConnection *connection,
    }
    else if(!strcasecmp(param, "BOARD_NAME"))
    {
-      strcpy(connection->buffer, interface->hostname);
+      strcpy(connection->buffer, "STM3220G-EVAL");
    }
    else if(!strcasecmp(param, "SYSTEM_TIME"))
    {
-      memset(&connection->buffer, 0x00, HTTP_SERVER_BUFFER_SIZE );
-      //		unixTime = RTC_GetCounter();
-      unixTime = 0;
-      //Convert Unix timestamp to date
-      convertUnixTimeToDate(unixTime, &date);
-      formatDate(&date, connection->buffer);
-
+      systime_t time = osGetSystemTime();
+      formatSystemTime(time, connection->buffer);
    }
    else if(!strcasecmp(param, "MAC_ADDR"))
    {
-      macAddrToString(&interface->macAddr, connection->buffer);
+      netGetMacAddr(interface, &macAddr);
+      macAddrToString(&macAddr, connection->buffer);
    }
    else if(!strcasecmp(param, "IPV4_ADDR"))
    {
-      ipv4AddrToString(interface->ipv4Config.addr, connection->buffer);
+      ipv4GetHostAddr(interface, &ipv4Addr);
+      ipv4AddrToString(ipv4Addr, connection->buffer);
    }
    else if(!strcasecmp(param, "SUBNET_MASK"))
    {
-      ipv4AddrToString(interface->ipv4Config.subnetMask, connection->buffer);
+      ipv4GetSubnetMask(interface, &ipv4Addr);
+      ipv4AddrToString(ipv4Addr, connection->buffer);
    }
    else if(!strcasecmp(param, "DEFAULT_GATEWAY"))
    {
-      ipv4AddrToString(interface->ipv4Config.defaultGateway, connection->buffer);
+      ipv4GetDefaultGateway(interface, &ipv4Addr);
+      ipv4AddrToString(ipv4Addr, connection->buffer);
    }
    else if(!strcasecmp(param, "IPV4_PRIMARY_DNS"))
    {
-      ipv4AddrToString(interface->ipv4Config.dnsServer[0], connection->buffer);
+      ipv4GetDnsServer(interface, 0, &ipv4Addr);
+      ipv4AddrToString(ipv4Addr, connection->buffer);
    }
    else if(!strcasecmp(param, "IPV4_SECONDARY_DNS"))
    {
-      ipv4AddrToString(interface->ipv4Config.dnsServer[1], connection->buffer);
+      ipv4GetDnsServer(interface, 1, &ipv4Addr);
+      ipv4AddrToString(ipv4Addr, connection->buffer);
    }
 #if (IPV6_SUPPORT == ENABLED)
    else if(!strcasecmp(param, "LINK_LOCAL_ADDR"))
    {
-      ipv6AddrToString(&interface->ipv6Config.linkLocalAddr, connection->buffer);
+      ipv6GetLinkLocalAddr(interface, &ipv6Addr);
+      ipv6AddrToString(&ipv6Addr, connection->buffer);
    }
    else if(!strcasecmp(param, "GLOBAL_ADDR"))
    {
-      ipv6AddrToString(&interface->ipv6Config.globalAddr, connection->buffer);
+      ipv6GetGlobalAddr(interface, 0, &ipv6Addr);
+      ipv6AddrToString(&ipv6Addr, connection->buffer);
    }
    else if(!strcasecmp(param, "IPV6_PREFIX"))
    {
-      ipv6AddrToString(&interface->ipv6Config.prefix, connection->buffer);
+      ipv6GetPrefix(interface, 0, &ipv6Addr, &n);
+      ipv6AddrToString(&ipv6Addr, connection->buffer);
       length = strlen(connection->buffer);
-      sprintf(connection->buffer + length, "/%u", interface->ipv6Config.prefixLength);
+      sprintf(connection->buffer + length, "/%u", n);
    }
    else if(!strcasecmp(param, "ROUTER"))
    {
-      ipv6AddrToString(&interface->ipv6Config.router, connection->buffer);
+      ipv6GetDefaultRouter(interface, 0, &ipv6Addr);
+      ipv6AddrToString(&ipv6Addr, connection->buffer);
    }
    else if(!strcasecmp(param, "IPV6_PRIMARY_DNS"))
    {
-      ipv6AddrToString(&interface->ipv6Config.dnsServer[0], connection->buffer);
+      ipv6GetDnsServer(interface, 0, &ipv6Addr);
+      ipv6AddrToString(&ipv6Addr, connection->buffer);
    }
    else if(!strcasecmp(param, "IPV6_SECONDARY_DNS"))
    {
-      ipv6AddrToString(&interface->ipv6Config.dnsServer[1], connection->buffer);
+      ipv6GetDnsServer(interface, 1, &ipv6Addr);
+      ipv6AddrToString(&ipv6Addr, connection->buffer);
    }
 #endif
    else

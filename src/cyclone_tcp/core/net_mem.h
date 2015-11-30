@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _NET_MEM_H
@@ -74,7 +74,7 @@
 //Size of the header part of the buffer
 #define CHUNKED_BUFFER_HEADER_SIZE (sizeof(NetBuffer) + MAX_CHUNK_COUNT * sizeof(ChunkDesc))
 
-//Miscellaneous macro declarations
+//Helper macro for defining a buffer
 #define N(size) (((size) + NET_MEM_POOL_BUFFER_SIZE - 1) / NET_MEM_POOL_BUFFER_SIZE)
 
 

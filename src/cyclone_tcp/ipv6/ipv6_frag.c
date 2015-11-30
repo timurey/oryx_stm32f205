@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -40,6 +40,9 @@
 //Check TCP/IP stack configuration
 #if (IPV6_SUPPORT == ENABLED && IPV6_FRAG_SUPPORT == ENABLED)
 
+//Tick counter to handle periodic operations
+systime_t ipv6FragTickCounter;
+
 
 /**
  * @brief Fragment IPv6 datagram into smaller packets
@@ -47,12 +50,13 @@
  * @param[in] pseudoHeader IPv6 pseudo header
  * @param[in] payload Multi-part buffer containing the payload
  * @param[in] payloadOffset Offset to the first payload byte
+ * @param[in] pathMtu PMTU value
  * @param[in] hopLimit Hop Limit value
  * @return Error code
  **/
 
 error_t ipv6FragmentDatagram(NetInterface *interface, Ipv6PseudoHeader *pseudoHeader,
-   const NetBuffer *payload, size_t payloadOffset, uint8_t hopLimit)
+   const NetBuffer *payload, size_t payloadOffset, size_t pathMtu, uint8_t hopLimit)
 {
    error_t error;
    uint32_t id;
@@ -64,7 +68,7 @@ error_t ipv6FragmentDatagram(NetInterface *interface, Ipv6PseudoHeader *pseudoHe
    NetBuffer *fragment;
 
    //Identification field is used to identify fragments of an original IP datagram
-   id = osAtomicInc32(&interface->ipv6Identification);
+   id = interface->ipv6Context.identification++;
 
    //Retrieve the length of the payload
    payloadLength = netBufferGetLength(payload) - payloadOffset;
@@ -75,12 +79,16 @@ error_t ipv6FragmentDatagram(NetInterface *interface, Ipv6PseudoHeader *pseudoHe
    if(!fragment)
       return ERROR_OUT_OF_MEMORY;
 
-   //Maximum payload size for fragmented packets
-   maxFragmentSize = interface->ipv6Config.mtu -
-      (sizeof(Ipv6Header) + sizeof(Ipv6FragmentHeader));
+   //The node should never set its PMTU estimate below the IPv6 minimum link MTU
+   pathMtu = MAX(pathMtu, IPV6_DEFAULT_MTU);
 
+   //Determine the maximum payload size for fragmented packets
+   maxFragmentSize = pathMtu - sizeof(Ipv6Header) - sizeof(Ipv6FragmentHeader);
    //The size shall be a multiple of 8-byte blocks
    maxFragmentSize -= (maxFragmentSize % 8);
+
+   //Initialize error code
+   error = NO_ERROR;
 
    //Split the payload into multiple IP fragments
    for(offset = 0; offset < payloadLength; offset += length)
@@ -128,15 +136,17 @@ error_t ipv6FragmentDatagram(NetInterface *interface, Ipv6PseudoHeader *pseudoHe
 /**
  * @brief Parse Fragment header and reassemble original datagram
  * @param[in] interface Underlying network interface
- * @param[in] buffer Multi-part buffer containing the incoming IPv6 packet
+ * @param[in] ipPacket Multi-part buffer containing the incoming IPv6 packet
+ * @param[in] ipPacketOffset Offset to the first byte of the IPv6 packet
  * @param[in] fragHeaderOffset Offset to the Fragment header
  * @param[in] nextHeaderOffset Offset to the Next Header field of the previous header
  **/
 
-void ipv6ParseFragmentHeader(NetInterface *interface, const NetBuffer *buffer,
-   size_t fragHeaderOffset, size_t nextHeaderOffset)
+void ipv6ParseFragmentHeader(NetInterface *interface, const NetBuffer *ipPacket,
+   size_t ipPacketOffset, size_t fragHeaderOffset, size_t nextHeaderOffset)
 {
    error_t error;
+   size_t n;
    size_t length;
    uint16_t offset;
    uint16_t dataFirst;
@@ -144,42 +154,44 @@ void ipv6ParseFragmentHeader(NetInterface *interface, const NetBuffer *buffer,
    Ipv6FragDesc *frag;
    Ipv6HoleDesc *hole;
    Ipv6HoleDesc *prevHole;
-   Ipv6Header *packet;
-   Ipv6FragmentHeader *header;
+   Ipv6Header *ipHeader;
+   Ipv6FragmentHeader *fragHeader;
 
    //Remaining bytes to process in the payload
-   length = netBufferGetLength(buffer) - fragHeaderOffset;
+   length = netBufferGetLength(ipPacket) - fragHeaderOffset;
 
    //Ensure the fragment header is valid
    if(length < sizeof(Ipv6FragmentHeader))
       return;
 
    //Point to the IPv6 header
-   packet = netBufferAt(buffer, 0);
+   ipHeader = netBufferAt(ipPacket, ipPacketOffset);
    //Sanity check
-   if(!packet) return;
+   if(ipHeader == NULL)
+      return;
 
-   //Point to the IPv6 Fragment header
-   header = netBufferAt(buffer, fragHeaderOffset);
+   //Point to the Fragment header
+   fragHeader = netBufferAt(ipPacket, fragHeaderOffset);
    //Sanity check
-   if(!header) return;
+   if(fragHeader == NULL)
+      return;
 
    //Calculate the length of the fragment
    length -= sizeof(Ipv6FragmentHeader);
    //Convert the fragment offset from network byte order
-   offset = ntohs(header->fragmentOffset);
+   offset = ntohs(fragHeader->fragmentOffset);
 
    //Every fragment except the last must contain a multiple of 8 bytes of data
    if((offset & IPV6_FLAG_M) && (length % 8))
    {
       //Compute the offset of the Payload Length field within the packet
-      size_t n = (uint8_t *) &packet->payloadLength - (uint8_t *) packet;
+      n = (uint8_t *) &ipHeader->payloadLength - (uint8_t *) ipHeader;
 
       //The fragment must be discarded and an ICMP Parameter Problem
       //message should be sent to the source of the fragment, pointing
       //to the Payload Length field of the fragment packet
       icmpv6SendErrorMessage(interface, ICMPV6_TYPE_PARAM_PROBLEM,
-         ICMPV6_CODE_INVALID_HEADER_FIELD, n, buffer);
+         ICMPV6_CODE_INVALID_HEADER_FIELD, n, ipPacket, ipPacketOffset);
 
       //Exit immediately
       return;
@@ -191,9 +203,10 @@ void ipv6ParseFragmentHeader(NetInterface *interface, const NetBuffer *buffer,
    dataLast = dataFirst + length;
 
    //Search for a matching IP datagram being reassembled
-   frag = ipv6SearchFragQueue(interface, packet, header);
+   frag = ipv6SearchFragQueue(interface, ipHeader, fragHeader);
    //No matching entry in the reassembly queue?
-   if(!frag) return;
+   if(frag == NULL)
+      return;
 
    //The very first fragment requires special handling
    if(!(offset & IPV6_OFFSET_MASK))
@@ -201,20 +214,21 @@ void ipv6ParseFragmentHeader(NetInterface *interface, const NetBuffer *buffer,
       uint8_t *p;
 
       //Calculate the length of the unfragmentable part
-      frag->unfragPartLength = fragHeaderOffset;
+      frag->unfragPartLength = fragHeaderOffset - ipPacketOffset;
 
       //The size of the reconstructed datagram exceeds the maximum value?
       if((frag->unfragPartLength + frag->fragPartLength) > IPV6_MAX_FRAG_DATAGRAM_SIZE)
       {
-         //Compute the offset of the Fragment Offset field within the packet
-         size_t n = fragHeaderOffset + (uint8_t *) &header->fragmentOffset -
-            (uint8_t *) header;
+         //Retrieve the offset of the Fragment header within the packet
+         n = fragHeaderOffset - ipPacketOffset;
+         //Compute the exact offset of the Fragment Offset field
+         n += (uint8_t *) &fragHeader->fragmentOffset - (uint8_t *) fragHeader;
 
          //The fragment must be discarded and an ICMP Parameter Problem
          //message should be sent to the source of the fragment, pointing
          //to the Fragment Offset field of the fragment packet
          icmpv6SendErrorMessage(interface, ICMPV6_TYPE_PARAM_PROBLEM,
-            ICMPV6_CODE_INVALID_HEADER_FIELD, n, buffer);
+            ICMPV6_CODE_INVALID_HEADER_FIELD, n, ipPacket, ipPacketOffset);
 
          //Drop any allocated resources
          netBufferSetLength((NetBuffer *) &frag->buffer, 0);
@@ -237,15 +251,17 @@ void ipv6ParseFragmentHeader(NetInterface *interface, const NetBuffer *buffer,
       //The unfragmentable part of the reassembled packet consists
       //of all headers up to, but not including, the Fragment header
       //of the first fragment packet
-      netBufferCopy((NetBuffer *) &frag->buffer, 0, buffer, 0, frag->unfragPartLength);
+      netBufferCopy((NetBuffer *) &frag->buffer, 0, ipPacket,
+         ipPacketOffset, frag->unfragPartLength);
 
       //Point to the Next Header field of the last header
-      p = netBufferAt((NetBuffer *) &frag->buffer, nextHeaderOffset);
+      p = netBufferAt((NetBuffer *) &frag->buffer,
+         nextHeaderOffset - ipPacketOffset);
 
       //The Next Header field of the last header of the unfragmentable
       //part is obtained from the Next Header field of the first
       //fragment's Fragment header
-      *p = header->nextHeader;
+      *p = fragHeader->nextHeader;
    }
 
    //It may be necessary to increase the size of the buffer...
@@ -254,14 +270,16 @@ void ipv6ParseFragmentHeader(NetInterface *interface, const NetBuffer *buffer,
       //The size of the reconstructed datagram exceeds the maximum value?
       if((frag->unfragPartLength + dataLast) > IPV6_MAX_FRAG_DATAGRAM_SIZE)
       {
-         //Compute the offset of the Fragment Offset field within the packet
-         size_t n = fragHeaderOffset + (uint8_t *) &header->fragmentOffset - (uint8_t *) header;
+         //Retrieve the offset of the Fragment header within the packet
+         n = fragHeaderOffset - ipPacketOffset;
+         //Compute the exact offset of the Fragment Offset field
+         n += (uint8_t *) &fragHeader->fragmentOffset - (uint8_t *) fragHeader;
 
          //The fragment must be discarded and an ICMP Parameter Problem
          //message should be sent to the source of the fragment, pointing
          //to the Fragment Offset field of the fragment packet
          icmpv6SendErrorMessage(interface, ICMPV6_TYPE_PARAM_PROBLEM,
-            ICMPV6_CODE_INVALID_HEADER_FIELD, n, buffer);
+            ICMPV6_CODE_INVALID_HEADER_FIELD, n, ipPacket, ipPacketOffset);
 
          //Drop any allocated resources
          netBufferSetLength((NetBuffer *) &frag->buffer, 0);
@@ -370,7 +388,7 @@ void ipv6ParseFragmentHeader(NetInterface *interface, const NetBuffer *buffer,
 
    //Copy data from the fragment to the reassembly buffer
    netBufferCopy((NetBuffer *) &frag->buffer, frag->unfragPartLength + dataFirst,
-      buffer, fragHeaderOffset + sizeof(Ipv6FragmentHeader), length);
+      ipPacket, fragHeaderOffset + sizeof(Ipv6FragmentHeader), length);
 
    //Dump hole descriptor list
    ipv6DumpHoleList(frag);
@@ -393,7 +411,7 @@ void ipv6ParseFragmentHeader(NetInterface *interface, const NetBuffer *buffer,
             frag->fragPartLength - sizeof(Ipv6Header));
 
          //Pass the original IPv6 datagram to the higher protocol layer
-         ipv6ProcessPacket(interface, (NetBuffer *) &frag->buffer);
+         ipv6ProcessPacket(interface, (NetBuffer *) &frag->buffer, 0);
       }
 
       //Release previously allocated memory
@@ -418,9 +436,6 @@ void ipv6FragTick(NetInterface *interface)
    systime_t time;
    Ipv6HoleDesc *hole;
 
-   //Acquire exclusive access to the reassembly queue
-   osAcquireMutex(&interface->ipv6FragQueueMutex);
-
    //Get current time
    time = osGetSystemTime();
 
@@ -428,7 +443,7 @@ void ipv6FragTick(NetInterface *interface)
    for(i = 0; i < IPV6_MAX_FRAG_DATAGRAMS; i++)
    {
       //Point to the current entry in the reassembly queue
-      Ipv6FragDesc *frag = &interface->ipv6FragQueue[i];
+      Ipv6FragDesc *frag = &interface->ipv6Context.fragQueue[i];
 
       //Make sure the entry is currently in use
       if(frag->buffer.chunkCount > 0)
@@ -458,7 +473,7 @@ void ipv6FragTick(NetInterface *interface)
                {
                   //Send an ICMPv6 Time Exceeded message
                   icmpv6SendErrorMessage(interface, ICMPV6_TYPE_TIME_EXCEEDED,
-                     ICMPV6_CODE_REASSEMBLY_TIME_EXCEEDED, 0, (NetBuffer *) &frag->buffer);
+                     ICMPV6_CODE_REASSEMBLY_TIME_EXCEEDED, 0, (NetBuffer *) &frag->buffer, 0);
                }
             }
 
@@ -467,9 +482,6 @@ void ipv6FragTick(NetInterface *interface)
          }
       }
    }
-
-   //Release exclusive access to the reassembly queue
-   osReleaseMutex(&interface->ipv6FragQueueMutex);
 }
 
 
@@ -494,7 +506,7 @@ Ipv6FragDesc *ipv6SearchFragQueue(NetInterface *interface,
    for(i = 0; i < IPV6_MAX_FRAG_DATAGRAMS; i++)
    {
       //Point to the current entry in the reassembly queue
-      frag = &interface->ipv6FragQueue[i];
+      frag = &interface->ipv6Context.fragQueue[i];
 
       //Check whether the current entry is used?
       if(frag->buffer.chunkCount > 0)
@@ -521,7 +533,7 @@ Ipv6FragDesc *ipv6SearchFragQueue(NetInterface *interface,
    for(i = 0; i < IPV6_MAX_FRAG_DATAGRAMS; i++)
    {
       //Point to the current entry in the reassembly queue
-      frag = &interface->ipv6FragQueue[i];
+      frag = &interface->ipv6Context.fragQueue[i];
 
       //The current entry is free?
       if(!frag->buffer.chunkCount)
@@ -588,18 +600,12 @@ void ipv6FlushFragQueue(NetInterface *interface)
 {
    uint_t i;
 
-   //Acquire exclusive access to the reassembly queue
-   osAcquireMutex(&interface->ipv6FragQueueMutex);
-
    //Loop through the reassembly queue
    for(i = 0; i < IPV6_MAX_FRAG_DATAGRAMS; i++)
    {
       //Drop any partially reconstructed datagram
-      netBufferSetLength((NetBuffer *) &interface->ipv6FragQueue[i].buffer, 0);
+      netBufferSetLength((NetBuffer *) &interface->ipv6Context.fragQueue[i].buffer, 0);
    }
-
-   //Release exclusive access to the reassembly queue
-   osReleaseMutex(&interface->ipv6FragQueueMutex);
 }
 
 
