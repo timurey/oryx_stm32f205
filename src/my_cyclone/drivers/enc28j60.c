@@ -27,7 +27,7 @@
  **/
 
 //Switch to the appropriate trace level
-#define TRACE_LEVEL NIC_TRACE_LEVEL
+#define TRACE_LEVEL 2
 
 //Dependencies
 #include <limits.h>
