@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -47,7 +47,7 @@
 void icecastClientGetDefaultSettings(IcecastClientSettings *settings)
 {
    //Use default interface
-   settings->interface = NULL;
+   settings->interface = netGetDefaultInterface();
 
    //Icecast server name
    strcpy(settings->serverName, "");

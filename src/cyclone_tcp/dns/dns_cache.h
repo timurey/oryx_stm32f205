@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _DNS_CACHE_H
@@ -36,7 +36,7 @@
 //DNS tick interval
 #ifndef DNS_TICK_INTERVAL
    #define DNS_TICK_INTERVAL 200
-#elif (DNS_TICK_INTERVAL < 100)
+#elif (DNS_TICK_INTERVAL < 10)
    #error DNS_TICK_INTERVAL parameter is not valid
 #endif
 
@@ -105,7 +105,7 @@ typedef struct
 
 
 //Global variables
-extern OsMutex dnsCacheMutex;
+extern systime_t dnsTickCounter;
 extern DnsCacheEntry dnsCache[DNS_CACHE_SIZE];
 
 //DNS related functions

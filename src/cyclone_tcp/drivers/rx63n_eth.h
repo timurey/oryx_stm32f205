@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _RX63N_ETH_H
@@ -174,13 +174,14 @@ void rx63nEthEnableIrq(NetInterface *interface);
 void rx63nEthDisableIrq(NetInterface *interface);
 void rx63nEthEventHandler(NetInterface *interface);
 
-error_t rx63nEthSetMacFilter(NetInterface *interface);
-
 error_t rx63nEthSendPacket(NetInterface *interface,
    const NetBuffer *buffer, size_t offset);
 
 error_t rx63nEthReceivePacket(NetInterface *interface,
    uint8_t *buffer, size_t size, size_t *length);
+
+error_t rx63nEthSetMulticastFilter(NetInterface *interface);
+error_t rx63nEthUpdateMacConfig(NetInterface *interface);
 
 void rx63nEthWritePhyReg(uint8_t phyAddr, uint8_t regAddr, uint16_t data);
 uint16_t rx63nEthReadPhyReg(uint8_t phyAddr, uint8_t regAddr);

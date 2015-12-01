@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -52,8 +52,9 @@ const NicDriver dm9000Driver =
    dm9000EnableIrq,
    dm9000DisableIrq,
    dm9000EventHandler,
-   dm9000SetMacFilter,
    dm9000SendPacket,
+   dm9000SetMulticastFilter,
+   NULL,
    NULL,
    NULL,
    TRUE,
@@ -149,8 +150,13 @@ error_t dm9000Init(NetInterface *interface)
    //Enable the receiver by setting RXEN
    dm9000WriteReg(DM9000_REG_RCR, RCR_DIS_LONG | RCR_DIS_CRC | RCR_RXEN);
 
-   //DM9000 transmitter is now ready to send
+   //Accept any packets from the upper layer
    osSetEvent(&interface->nicTxEvent);
+
+   //Force the TCP/IP stack to poll the link state at startup
+   interface->nicEvent = TRUE;
+   //Notify the TCP/IP stack of the event
+   osSetEvent(&netEvent);
 
    //Successful initialization
    return NO_ERROR;
@@ -220,9 +226,13 @@ bool_t dm9000IrqHandler(NetInterface *interface)
       mask = dm9000ReadReg(DM9000_REG_IMR);
       //Disable LNKCHGI interrupt
       dm9000WriteReg(DM9000_REG_IMR, mask & ~IMR_LNKCHGI);
-      //Notify the user that the link state has changed
-      flag |= osSetEventFromIsr(&interface->nicRxEvent);
+
+      //Set event flag
+      interface->nicEvent = TRUE;
+      //Notify the TCP/IP stack of the event
+      flag |= osSetEventFromIsr(&netEvent);
    }
+
    //Packet transmission complete?
    if(status & ISR_PT)
    {
@@ -232,12 +242,15 @@ bool_t dm9000IrqHandler(NetInterface *interface)
          //The transmission of the current packet is complete
          if(context->queuedPackets > 0)
             context->queuedPackets--;
-         //Notify the user that the transmitter is ready to send
+
+         //Notify the TCP/IP stack that the transmitter is ready to send
          flag |= osSetEventFromIsr(&interface->nicTxEvent);
       }
+
       //Clear interrupt flag
       dm9000WriteReg(DM9000_REG_ISR, ISR_PT);
    }
+
    //Packet received?
    if(status & ISR_PR)
    {
@@ -245,8 +258,11 @@ bool_t dm9000IrqHandler(NetInterface *interface)
       mask = dm9000ReadReg(DM9000_REG_IMR);
       //Disable PRI interrupt
       dm9000WriteReg(DM9000_REG_IMR, mask & ~IMR_PRI);
-      //Notify the user that a packet has been received
-      flag |= osSetEventFromIsr(&interface->nicRxEvent);
+
+      //Set event flag
+      interface->nicEvent = TRUE;
+      //Notify the TCP/IP stack of the event
+      flag |= osSetEventFromIsr(&netEvent);
    }
 
    //A higher priority task must be woken?
@@ -279,35 +295,34 @@ void dm9000EventHandler(NetInterface *interface)
       //Check link state
       if(status & NSR_LINKST)
       {
-         //Link is up
-         interface->linkState = TRUE;
          //Get current speed
-         interface->speed100 = (status & NSR_SPEED) ? FALSE : TRUE;
+         if(status & NSR_SPEED)
+            interface->linkSpeed = NIC_LINK_SPEED_10MBPS;
+         else
+            interface->linkSpeed = NIC_LINK_SPEED_100MBPS;
 
          //Read network control register
          status = dm9000ReadReg(DM9000_REG_NCR);
+
          //Determine the new duplex mode
-         interface->fullDuplex = (status & NCR_FDX) ? TRUE : FALSE;
+         if(status & NCR_FDX)
+            interface->duplexMode = NIC_FULL_DUPLEX_MODE;
+         else
+            interface->duplexMode = NIC_HALF_DUPLEX_MODE;
 
-         //Display link state
-         TRACE_INFO("Link is up (%s)...\r\n", interface->name);
-
-         //Display actual speed and duplex mode
-         TRACE_INFO("%s %s\r\n",
-            interface->speed100 ? "100BASE-TX" : "10BASE-T",
-            interface->fullDuplex ? "Full-Duplex" : "Half-Duplex");
+         //Link is up
+         interface->linkState = TRUE;
       }
       else
       {
          //Link is down
          interface->linkState = FALSE;
-         //Display link state
-         TRACE_INFO("Link is down (%s)...\r\n", interface->name);
       }
 
       //Process link state change event
       nicNotifyLinkChange(interface);
    }
+
    //Check whether a packet has been received?
    if(status & ISR_PR)
    {
@@ -334,56 +349,6 @@ void dm9000EventHandler(NetInterface *interface)
 
    //Re-enable LNKCHGI and PRI interrupts
    dm9000WriteReg(DM9000_REG_IMR, IMR_PAR | IMR_LNKCHGI | IMR_PTI | IMR_PRI);
-}
-
-
-/**
- * @brief Configure multicast MAC address filtering
- * @param[in] interface Underlying network interface
- * @return Error code
- **/
-
-error_t dm9000SetMacFilter(NetInterface *interface)
-{
-   uint_t i;
-   uint_t k;
-   uint32_t crc;
-   uint8_t hashTable[8];
-
-   //Debug message
-   TRACE_INFO("Updating DM9000 hash table...\r\n");
-
-   //Clear hash table
-   memset(hashTable, 0, sizeof(hashTable));
-   //Always accept broadcast packets regardless of the MAC filter table
-   hashTable[7] = 0x80;
-
-   //The MAC filter table contains the multicast MAC addresses
-   //to accept when receiving an Ethernet frame
-   for(i = 0; i < interface->macFilterSize; i++)
-   {
-      //Compute CRC over the current MAC address
-      crc = dm9000CalcCrc(&interface->macFilter[i].addr, sizeof(MacAddr));
-      //Calculate the corresponding index in the table
-      k = crc & 0x3F;
-      //Update hash table contents
-      hashTable[k / 8] |= (1 << (k % 8));
-   }
-
-   //Write the hash table to the DM9000 controller
-   for(i = 0; i < 8; i++)
-      dm9000WriteReg(DM9000_REG_MAR0 + i, hashTable[i]);
-
-   //Debug message
-   TRACE_INFO("  MAR = %02" PRIX8 " %02" PRIX8 " %02" PRIX8 " %02" PRIX8 " "
-      "%02" PRIX8 " %02" PRIX8 " %02" PRIX8 " %02" PRIX8 "\r\n",
-      dm9000ReadReg(DM9000_REG_MAR0), dm9000ReadReg(DM9000_REG_MAR1),
-      dm9000ReadReg(DM9000_REG_MAR2), dm9000ReadReg(DM9000_REG_MAR3),
-      dm9000ReadReg(DM9000_REG_MAR4), dm9000ReadReg(DM9000_REG_MAR5),
-      dm9000ReadReg(DM9000_REG_MAR6), dm9000ReadReg(DM9000_REG_MAR7));
-
-   //Successful processing
-   return NO_ERROR;
 }
 
 
@@ -422,18 +387,18 @@ error_t dm9000SendPacket(NetInterface *interface,
    //A dummy write is required before accessing FIFO
    dm9000WriteReg(DM9000_REG_MWCMDX, 0);
    //Select MWCMD register
-   *DM9000_INDEX_REG = DM9000_REG_MWCMD;
+   DM9000_INDEX_REG = DM9000_REG_MWCMD;
 
    //Point to the beginning of the buffer
    p = (uint16_t *) txBuffer;
 
    //Write data to the FIFO using 16-bit mode
    for(i = length; i > 1; i -= 2)
-      *DM9000_DATA_REG = *(p++);
+      DM9000_DATA_REG = *(p++);
 
    //Odd number of bytes?
    if(i > 0)
-      *DM9000_DATA_REG = *((uint8_t *) p);
+      DM9000_DATA_REG = *((uint8_t *) p);
 
    //Write the number of bytes to send
    dm9000WriteReg(DM9000_REG_TXPLL, LSB(length));
@@ -474,20 +439,20 @@ error_t dm9000ReceivePacket(NetInterface *interface,
    data = dm9000ReadReg(DM9000_REG_MRCMDX);
 
    //Select MRCMDX1 register
-   *DM9000_INDEX_REG = DM9000_REG_MRCMDX1;
+   DM9000_INDEX_REG = DM9000_REG_MRCMDX1;
    //Read the first byte of the header
-   status = LSB(*DM9000_DATA_REG);
+   status = LSB(DM9000_DATA_REG);
 
    //The first byte indicates if a packet has been received
    if(status == 0x01)
    {
       //Select MRCMD register
-      *DM9000_INDEX_REG = DM9000_REG_MRCMD;
+      DM9000_INDEX_REG = DM9000_REG_MRCMD;
       //The second byte is the RX status byte
-      status = MSB(*DM9000_DATA_REG);
+      status = MSB(DM9000_DATA_REG);
 
       //Retrieve packet length
-      n = *DM9000_DATA_REG;
+      n = DM9000_DATA_REG;
       //Limit the number of data to read
       size = MIN(size, n);
 
@@ -500,7 +465,7 @@ error_t dm9000ReceivePacket(NetInterface *interface,
          //Read data from FIFO using 16-bit mode
          while((i + 1) < size)
          {
-            data = *DM9000_DATA_REG;
+            data = DM9000_DATA_REG;
             buffer[i++] = LSB(data);
             buffer[i++] = MSB(data);
          }
@@ -508,7 +473,7 @@ error_t dm9000ReceivePacket(NetInterface *interface,
          //Odd number of bytes to read?
          if((i + 1) == size)
          {
-            data = *DM9000_DATA_REG;
+            data = DM9000_DATA_REG;
             buffer[i] = LSB(data);
             i += 2;
          }
@@ -527,7 +492,7 @@ error_t dm9000ReceivePacket(NetInterface *interface,
       //Flush remaining bytes
       while(i < n)
       {
-         data = *DM9000_DATA_REG;
+         data = DM9000_DATA_REG;
          i += 2;
       }
    }
@@ -543,6 +508,64 @@ error_t dm9000ReceivePacket(NetInterface *interface,
 
 
 /**
+ * @brief Configure multicast MAC address filtering
+ * @param[in] interface Underlying network interface
+ * @return Error code
+ **/
+
+error_t dm9000SetMulticastFilter(NetInterface *interface)
+{
+   uint_t i;
+   uint_t k;
+   uint32_t crc;
+   uint8_t hashTable[8];
+   MacFilterEntry *entry;
+
+   //Debug message
+   TRACE_DEBUG("Updating DM9000 hash table...\r\n");
+
+   //Clear hash table
+   memset(hashTable, 0, sizeof(hashTable));
+   //Always accept broadcast packets regardless of the MAC filter table
+   hashTable[7] = 0x80;
+
+   //The MAC filter table contains the multicast MAC addresses
+   //to accept when receiving an Ethernet frame
+   for(i = 0; i < MAC_MULTICAST_FILTER_SIZE; i++)
+   {
+      //Point to the current entry
+      entry = &interface->macMulticastFilter[i];
+
+      //Valid entry?
+      if(entry->refCount > 0)
+      {
+         //Compute CRC over the current MAC address
+         crc = dm9000CalcCrc(&entry->addr, sizeof(MacAddr));
+         //Calculate the corresponding index in the table
+         k = crc & 0x3F;
+         //Update hash table contents
+         hashTable[k / 8] |= (1 << (k % 8));
+      }
+   }
+
+   //Write the hash table to the DM9000 controller
+   for(i = 0; i < 8; i++)
+      dm9000WriteReg(DM9000_REG_MAR0 + i, hashTable[i]);
+
+   //Debug message
+   TRACE_DEBUG("  MAR = %02" PRIX8 " %02" PRIX8 " %02" PRIX8 " %02" PRIX8 " "
+      "%02" PRIX8 " %02" PRIX8 " %02" PRIX8 " %02" PRIX8 "\r\n",
+      dm9000ReadReg(DM9000_REG_MAR0), dm9000ReadReg(DM9000_REG_MAR1),
+      dm9000ReadReg(DM9000_REG_MAR2), dm9000ReadReg(DM9000_REG_MAR3),
+      dm9000ReadReg(DM9000_REG_MAR4), dm9000ReadReg(DM9000_REG_MAR5),
+      dm9000ReadReg(DM9000_REG_MAR6), dm9000ReadReg(DM9000_REG_MAR7));
+
+   //Successful processing
+   return NO_ERROR;
+}
+
+
+/**
  * @brief Write DM9000 register
  * @param[in] address Register address
  * @param[in] data Register value
@@ -551,9 +574,9 @@ error_t dm9000ReceivePacket(NetInterface *interface,
 void dm9000WriteReg(uint8_t address, uint8_t data)
 {
    //Write register address to INDEX register
-   *DM9000_INDEX_REG = address;
+   DM9000_INDEX_REG = address;
    //Write register value to DATA register
-   *DM9000_DATA_REG = data;
+   DM9000_DATA_REG = data;
 }
 
 
@@ -566,9 +589,9 @@ void dm9000WriteReg(uint8_t address, uint8_t data)
 uint8_t dm9000ReadReg(uint8_t address)
 {
    //Write register address to INDEX register
-   *DM9000_INDEX_REG = address;
+   DM9000_INDEX_REG = address;
    //Read register value from DATA register
-   return *DM9000_DATA_REG;
+   return DM9000_DATA_REG;
 }
 
 

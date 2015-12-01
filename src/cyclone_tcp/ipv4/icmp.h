@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _ICMP_H
@@ -83,8 +83,8 @@ typedef enum
 } IcmpTimeExceededCode;
 
 
-//Win32 compiler?
-#if defined(_WIN32)
+//CodeWarrior or Win32 compiler?
+#if defined(__CWCC__) || defined(_WIN32)
    #pragma pack(push, 1)
 #endif
 
@@ -175,8 +175,8 @@ typedef __start_packed struct
 } __end_packed IcmpEchoMessage;
 
 
-//Win32 compiler?
-#if defined(_WIN32)
+//CodeWarrior or Win32 compiler?
+#if defined(__CWCC__) || defined(_WIN32)
    #pragma pack(pop)
 #endif
 
@@ -188,8 +188,8 @@ void icmpProcessMessage(NetInterface *interface,
 void icmpProcessEchoRequest(NetInterface *interface,
    Ipv4Addr srcIpAddr, const NetBuffer *request, size_t requestOffset);
 
-error_t icmpSendErrorMessage(NetInterface *interface, uint8_t type,
-   uint8_t code, uint8_t parameter, const NetBuffer *ipPacket);
+error_t icmpSendErrorMessage(NetInterface *interface, uint8_t type, uint8_t code,
+   uint8_t parameter, const NetBuffer *ipPacket, size_t ipPacketOffset);
 
 void icmpDumpMessage(const IcmpHeader *message);
 void icmpDumpEchoMessage(const IcmpEchoMessage *message);

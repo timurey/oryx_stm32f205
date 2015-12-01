@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -38,7 +38,7 @@
 #include "debug.h"
 
 //Check TCP/IP stack configuration
-#if (PPP_SUPPORT == ENABLED)
+#if (PPP_SUPPORT == ENABLED && PAP_SUPPORT == ENABLED)
 
 
 /**
@@ -52,12 +52,23 @@ error_t papStartAuth(PppContext *context)
    //Debug message
    TRACE_INFO("\r\nStarting PAP authentication...\r\n");
 
-   //Initialize restart counter
-   context->papFsm.restartCounter = PAP_MAX_REQUESTS;
-   //Send Authenticate-Request packet
-   papSendAuthReq(context);
-   //Switch to the Req-Sent state
-   context->papFsm.state = PAP_STATE_1_REQ_SENT;
+   //Check whether the other end of the PPP link is being authenticated
+   if(context->localConfig.authProtocol == PPP_PROTOCOL_PAP)
+   {
+      //Switch to the Started state
+      context->papFsm.localState = PAP_STATE_1_STARTED;
+   }
+
+   //Check whether the other end of the PPP link is the authenticator
+   if(context->peerConfig.authProtocol == PPP_PROTOCOL_PAP)
+   {
+      //Initialize restart counter
+      context->papFsm.restartCounter = PAP_MAX_REQUESTS;
+      //Send Authenticate-Request packet
+      papSendAuthReq(context);
+      //Switch to the Req-Sent state
+      context->papFsm.peerState = PAP_STATE_2_REQ_SENT;
+   }
 
    //Successful processing
    return NO_ERROR;
@@ -74,6 +85,10 @@ error_t papAbortAuth(PppContext *context)
 {
    //Debug message
    TRACE_INFO("\r\nAborting PAP authentication...\r\n");
+
+   //Abort PAP authentication process
+   context->papFsm.localState = PAP_STATE_0_INITIAL;
+   context->papFsm.peerState = PAP_STATE_0_INITIAL;
 
    //Successful processing
    return NO_ERROR;
@@ -92,7 +107,7 @@ error_t papAbortAuth(PppContext *context)
 void papTick(PppContext *context)
 {
    //Check whether the restart timer is running
-   if(context->papFsm.state == PAP_STATE_1_REQ_SENT)
+   if(context->papFsm.peerState == PAP_STATE_2_REQ_SENT)
    {
       //Get current time
       systime_t time = osGetSystemTime();
@@ -106,13 +121,13 @@ void papTick(PppContext *context)
          //Check whether the restart counter is greater than zero
          if(context->papFsm.restartCounter > 0)
          {
-            //Retransmit Authenticate-Request packet
+            //Retransmit the Authenticate-Request packet
             papSendAuthReq(context);
          }
          else
          {
-            //Back to the default state
-            context->papFsm.state = PAP_STATE_0_INITIAL;
+            //Abort PAP authentication
+            context->papFsm.peerState = PAP_STATE_0_INITIAL;
             //Authentication failed
             lcpClose(context);
          }
@@ -124,7 +139,7 @@ void papTick(PppContext *context)
 /**
  * @brief Process an incoming PAP packet
  * @param[in] context PPP context
- * @param[in] packet PAP packet received fom the peer
+ * @param[in] packet PAP packet received from the peer
  * @param[in] length Length of the packet, in bytes
  **/
 
@@ -149,23 +164,33 @@ void papProcessPacket(PppContext *context,
    //Dump PAP packet contents for debugging purpose
    pppDumpPacket(packet, length, PPP_PROTOCOL_PAP);
 
+   //Because the Authenticate-Ack might be lost, the authenticator must
+   //allow repeated Authenticate-Request packets after completing the
+   //Authentication phase
+   if(context->pppPhase != PPP_PHASE_AUTHENTICATE &&
+      context->pppPhase != PPP_PHASE_NETWORK)
+   {
+      //Any packets received during any other phase must be silently discarded
+      return;
+   }
+
    //Check PAP code field
    switch(packet->code)
    {
    //Authenticate-Request packet?
    case PAP_CODE_AUTH_REQ:
       //Process Authenticate-Request packet
-      papProcessAuthReq(context, packet, length);
+      papProcessAuthReq(context, (PapAuthReqPacket *) packet, length);
       break;
    //Authenticate-Ack packet?
    case PAP_CODE_AUTH_ACK:
       //Process Authenticate-Ack packet
-      papProcessAuthAck(context, packet, length);
+      papProcessAuthAck(context, (PapAuthAckPacket *) packet, length);
       break;
    //Authenticate-Nak packet?
    case PAP_CODE_AUTH_NAK:
       //Process Authenticate-Nak packet
-      papProcessAuthNak(context, packet, length);
+      papProcessAuthNak(context, (PapAuthNakPacket *) packet, length);
       break;
    //Unknown code field
    default:
@@ -184,13 +209,103 @@ void papProcessPacket(PppContext *context,
  **/
 
 error_t papProcessAuthReq(PppContext *context,
-   const PppPacket *authReqPacket, size_t length)
+   const PapAuthReqPacket *authReqPacket, size_t length)
 {
+   bool_t status;
+   size_t usernameLen;
+   const uint8_t *p;
+
    //Debug message
    TRACE_INFO("\r\nPAP Authenticate-Request packet received\r\n");
 
-   //Not implemented
-   return ERROR_NOT_IMPLEMENTED;
+   //Make sure the Authenticate-Request packet is acceptable
+   if(context->localConfig.authProtocol != PPP_PROTOCOL_PAP)
+      return ERROR_FAILURE;
+
+   //Check the length of the packet
+   if(length < sizeof(PapAuthReqPacket))
+      return ERROR_INVALID_LENGTH;
+
+   //Retrieve the length of the Peer-ID field
+   usernameLen = authReqPacket->peerIdLength;
+
+   //Malformed Authenticate-Request packet?
+   if(length < (sizeof(PapAuthReqPacket) + 1 + usernameLen))
+      return ERROR_INVALID_LENGTH;
+
+   //Limit the length of the string
+   usernameLen = MIN(usernameLen, PPP_MAX_USERNAME_LEN);
+   //Copy the name of the peer to be identified
+   memcpy(context->peerName, authReqPacket->peerId, usernameLen);
+   //Properly terminate the string with a NULL character
+   context->peerName[usernameLen] = '\0';
+
+   //Point to the Passwd-Length field
+   p = authReqPacket->peerId + usernameLen;
+
+   //Save the length of Password field
+   context->papFsm.passwordLen = p[0];
+   //Point to the Password field
+   context->papFsm.password = p + 1;
+
+   //Malformed Authenticate-Request packet?
+   if(length < (sizeof(PapAuthReqPacket) + 1 + usernameLen + context->papFsm.passwordLen))
+      return ERROR_INVALID_LENGTH;
+
+   //Invoke user-defined callback, if any
+   if(context->settings.authCallback != NULL)
+   {
+      //Perfom username and password verification
+      status = context->settings.authCallback(context->interface,
+         context->peerName);
+   }
+   else
+   {
+      //Unable to perform authentication...
+      status = FALSE;
+   }
+
+   //Successful authentication?
+   if(status)
+   {
+      //If the Peer-ID/Password pair received in the Authenticate-Request
+      //is both recognizable and acceptable, then the authenticator must
+      //transmit an Authenticate-Ack packet
+      papSendAuthAck(context, authReqPacket->identifier);
+
+      //Switch to the Ack-Sent state
+      context->papFsm.localState = PAP_STATE_4_ACK_SENT;
+      //The user has been successfully authenticated
+      context->localAuthDone = TRUE;
+
+      //Check whether PPP authentication is complete
+      if(context->localAuthDone && context->peerAuthDone)
+      {
+         //Check current PPP phase
+         if(context->pppPhase == PPP_PHASE_AUTHENTICATE)
+         {
+            //Advance to the Network phase
+            context->pppPhase = PPP_PHASE_NETWORK;
+            //IPCP Open event
+            ipcpOpen(context);
+         }
+      }
+   }
+   else
+   {
+      //If the Peer-ID/Password pair received in the Authenticate-Request
+      //is not recognizable or acceptable, then the authenticator must
+      //transmit an Authenticate-Nak packet
+      papSendAuthNak(context, authReqPacket->identifier);
+
+      //Switch to the Nak-Sent state
+      context->papFsm.localState = PAP_STATE_6_NAK_SENT;
+      //The authenticator should take action to terminate the link
+      lcpClose(context);
+   }
+
+   //Successful processing
+   return NO_ERROR;
 }
 
 
@@ -203,10 +318,18 @@ error_t papProcessAuthReq(PppContext *context,
  **/
 
 error_t papProcessAuthAck(PppContext *context,
-   const PppPacket *authAckPacket, size_t length)
+   const PapAuthAckPacket *authAckPacket, size_t length)
 {
    //Debug message
    TRACE_INFO("\r\nPAP Authenticate-Ack packet received\r\n");
+
+   //Make sure the Authenticate-Ack packet is acceptable
+   if(context->peerConfig.authProtocol != PPP_PROTOCOL_PAP)
+      return ERROR_FAILURE;
+
+   //Check the length of the packet
+   if(length < sizeof(PapAuthAckPacket))
+      return ERROR_INVALID_LENGTH;
 
    //When a packet is received with an invalid Identifier field, the
    //packet is silently discarded without affecting the automaton
@@ -214,11 +337,22 @@ error_t papProcessAuthAck(PppContext *context,
       return ERROR_WRONG_IDENTIFIER;
 
    //Switch to the Ack-Rcvd state
-   context->papFsm.state = PAP_STATE_2_ACK_RCVD;
-   //Advance to the Network phase
-   context->pppPhase = PPP_PHASE_NETWORK;
-   //IPCP Open event
-   ipcpOpen(context);
+   context->papFsm.peerState = PAP_STATE_5_ACK_RCVD;
+   //The user name has been accepted by the authenticator
+   context->peerAuthDone = TRUE;
+
+   //Check whether PPP authentication is complete
+   if(context->localAuthDone && context->peerAuthDone)
+   {
+      //Check current PPP phase
+      if(context->pppPhase == PPP_PHASE_AUTHENTICATE)
+      {
+         //Advance to the Network phase
+         context->pppPhase = PPP_PHASE_NETWORK;
+         //IPCP Open event
+         ipcpOpen(context);
+      }
+   }
 
    //Successful processing
    return NO_ERROR;
@@ -234,10 +368,18 @@ error_t papProcessAuthAck(PppContext *context,
  **/
 
 error_t papProcessAuthNak(PppContext *context,
-   const PppPacket *authNakPacket, size_t length)
+   const PapAuthNakPacket *authNakPacket, size_t length)
 {
    //Debug message
    TRACE_INFO("\r\nPAP Authenticate-Nak packet received\r\n");
+
+   //Make sure the Authenticate-Nak packet is acceptable
+   if(context->peerConfig.authProtocol != PPP_PROTOCOL_PAP)
+      return ERROR_FAILURE;
+
+   //Check the length of the packet
+   if(length < sizeof(PapAuthNakPacket))
+      return ERROR_INVALID_LENGTH;
 
    //When a packet is received with an invalid Identifier field, the
    //packet is silently discarded without affecting the automaton
@@ -245,7 +387,7 @@ error_t papProcessAuthNak(PppContext *context,
       return ERROR_WRONG_IDENTIFIER;
 
    //Switch to the Nak-Rcvd state
-   context->papFsm.state = PAP_STATE_3_NAK_RCVD;
+   context->papFsm.peerState = PAP_STATE_7_NAK_RCVD;
    //Authentication failed
    lcpClose(context);
 
@@ -267,8 +409,9 @@ error_t papSendAuthReq(PppContext *context)
    size_t passwordLen;
    size_t length;
    size_t offset;
+   uint8_t *p;
    NetBuffer *buffer;
-   PppPacket *authReqPacket;
+   PapAuthReqPacket *authReqPacket;
 
    //Get the length of the user name
    usernameLen = strlen(context->username);
@@ -276,7 +419,7 @@ error_t papSendAuthReq(PppContext *context)
    passwordLen = strlen(context->password);
 
    //Calculate the length of the Authenticate-Request packet
-   length = sizeof(PppPacket) + 2 + usernameLen + passwordLen;
+   length = sizeof(PapAuthReqPacket) + 1 + usernameLen + passwordLen;
 
    //Allocate a buffer memory to hold the packet
    buffer = pppAllocBuffer(length, &offset);
@@ -292,14 +435,17 @@ error_t papSendAuthReq(PppContext *context)
    authReqPacket->length = htons(length);
 
    //The Peer-ID-Length field indicates the length of Peer-ID field
-   authReqPacket->data[0] = usernameLen;
+   authReqPacket->peerIdLength = usernameLen;
    //Append Peer-ID
-   memcpy(authReqPacket->data + 1, context->username, usernameLen);
+   memcpy(authReqPacket->peerId, context->username, usernameLen);
 
+   //Point to the Passwd-Length field
+   p = authReqPacket->peerId + usernameLen;
    //The Passwd-Length field indicates the length of Password field
-   authReqPacket->data[usernameLen + 1] = passwordLen;
+   p[0] = passwordLen;
+
    //Append Password
-   memcpy(authReqPacket->data + usernameLen + 2, context->password, passwordLen);
+   memcpy(p + 1, context->password, passwordLen);
 
    //Adjust the length of the multi-part buffer
    netBufferSetLength(buffer, offset + length);
@@ -323,6 +469,137 @@ error_t papSendAuthReq(PppContext *context)
    netBufferFree(buffer);
    //Return status code
    return error;
+}
+
+
+/**
+ * @brief Send Authenticate-Ack packet
+ * @param[in] context PPP context
+ * @param[in] identifier Identifier field
+ * @return Error code
+ **/
+
+error_t papSendAuthAck(PppContext *context, uint8_t identifier)
+{
+   error_t error;
+   size_t length;
+   size_t offset;
+   NetBuffer *buffer;
+   PapAuthAckPacket *authAckPacket;
+
+   //Retrieve the length of the Authenticate-Ack packet
+   length = sizeof(PapAuthAckPacket);
+
+   //Allocate a buffer memory to hold the Authenticate-Ack packet
+   buffer = pppAllocBuffer(length, &offset);
+   //Failed to allocate memory?
+   if(!buffer) return ERROR_OUT_OF_MEMORY;
+
+   //Point to the Authenticate-Ack packet
+   authAckPacket = netBufferAt(buffer, offset);
+
+   //Format packet header
+   authAckPacket->code = PAP_CODE_AUTH_ACK;
+   authAckPacket->identifier = identifier;
+   authAckPacket->length = htons(length);
+
+   //The Message field is zero or more octets, and its contents are
+   //implementation dependent
+   authAckPacket->msgLength = 0;
+
+   //Debug message
+   TRACE_INFO("Sending PAP Authenticate-Ack packet (%" PRIuSIZE " bytes)...\r\n", length);
+   //Dump packet contents for debugging purpose
+   pppDumpPacket((PppPacket *) authAckPacket, length, PPP_PROTOCOL_PAP);
+
+   //Send PPP frame
+   error = pppSendFrame(context->interface, buffer, offset, PPP_PROTOCOL_PAP);
+
+   //Free previously allocated memory block
+   netBufferFree(buffer);
+   //Return status code
+   return error;
+}
+
+
+/**
+ * @brief Send Authenticate-Nak packet
+ * @param[in] context PPP context
+ * @param[in] identifier Identifier field
+ * @return Error code
+ **/
+
+error_t papSendAuthNak(PppContext *context, uint8_t identifier)
+{
+   error_t error;
+   size_t length;
+   size_t offset;
+   NetBuffer *buffer;
+   PapAuthNakPacket *authNakPacket;
+
+   //Retrieve the length of the Authenticate-Nak packet
+   length = sizeof(PapAuthNakPacket);
+
+   //Allocate a buffer memory to hold the Authenticate-Nak packet
+   buffer = pppAllocBuffer(length, &offset);
+   //Failed to allocate memory?
+   if(!buffer) return ERROR_OUT_OF_MEMORY;
+
+   //Point to the Authenticate-Nak packet
+   authNakPacket = netBufferAt(buffer, offset);
+
+   //Format packet header
+   authNakPacket->code = PAP_CODE_AUTH_NAK;
+   authNakPacket->identifier = identifier;
+   authNakPacket->length = htons(length);
+
+   //The Message field is zero or more octets, and its contents are
+   //implementation dependent
+   authNakPacket->msgLength = 0;
+
+   //Debug message
+   TRACE_INFO("Sending PAP Authenticate-Nak packet (%" PRIuSIZE " bytes)...\r\n", length);
+   //Dump packet contents for debugging purpose
+   pppDumpPacket((PppPacket *) authNakPacket, length, PPP_PROTOCOL_PAP);
+
+   //Send PPP frame
+   error = pppSendFrame(context->interface, buffer, offset, PPP_PROTOCOL_PAP);
+
+   //Free previously allocated memory block
+   netBufferFree(buffer);
+   //Return status code
+   return error;
+}
+
+
+/**
+ * @brief Password verification
+ * @param[in] context PPP context
+ * @param[in] password NULL-terminated string containing the password to be checked
+ * @return TRUE if the password is valid, else FALSE
+ **/
+
+bool_t papCheckPassword(PppContext *context, const char_t *password)
+{
+   size_t n;
+   bool_t status;
+
+   //This flag tells whether the password is valid
+   status = FALSE;
+
+   //Retrieve the length of the password
+   n = strlen(password);
+
+   //Compare the length of the password against the expected value
+   if(n == context->papFsm.passwordLen)
+   {
+      //Check whether the password is valid
+      if(!memcmp(password, context->papFsm.password, n))
+         status = TRUE;
+   }
+
+   //Return TRUE is the password is valid, else FALSE
+   return status;
 }
 
 #endif

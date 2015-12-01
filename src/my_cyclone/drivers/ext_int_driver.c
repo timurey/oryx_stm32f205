@@ -41,9 +41,9 @@ void EXTI1_IRQHandler(void);
 
 const ExtIntDriver extIntDriver =
 {
-		extIntInit,
-		extIntEnableIrq,
-		extIntDisableIrq
+	extIntInit,
+	extIntEnableIrq,
+	extIntDisableIrq
 };
 
 
@@ -121,7 +121,9 @@ void EXTI1_IRQHandler(void)
 		//Clear interrupt flag
 		__HAL_GPIO_EXTI_CLEAR_IT(GPIO_PIN_1);
 		//A PHY event is pending...
-		interface->phyEvent = TRUE;
+		//Set event flag
+//		interface->nicEvent = TRUE;
+
 		//Notify the user that the link state has changed
 		flag = enc28j60IrqHandler(interface);
 	}

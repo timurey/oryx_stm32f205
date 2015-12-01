@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -41,6 +41,45 @@
 
 //Check TCP/IP stack configuration
 #if (FTP_SERVER_SUPPORT == ENABLED)
+
+
+/**
+ * @brief Get a passive port number
+ * @param[in] context Pointer to the FTP server context
+ * @return Passive port number
+ **/
+
+uint16_t ftpServerGetPassivePort(FtpServerContext *context)
+{
+   uint_t port;
+
+   //Retrieve current passive port number
+   port = context->passivePort;
+
+   //Invalid port number?
+   if(port < context->settings.passivePortMin ||
+      port > context->settings.passivePortMax)
+   {
+      //Generate a random port number
+      port = context->settings.passivePortMin + netGetRand() %
+         (context->settings.passivePortMax - context->settings.passivePortMin + 1);
+   }
+
+   //Next passive port to use
+   if(port < context->settings.passivePortMax)
+   {
+      //Increment port number
+      context->passivePort = port + 1;
+   }
+   else
+   {
+      //Wrap around if necessary
+      context->passivePort = context->settings.passivePortMin;
+   }
+
+   //Return the passive port number
+   return port;
+}
 
 
 /**
@@ -156,6 +195,8 @@ FtpClientConnection *ftpServerAcceptControlConnection(FtpServerContext *context)
          TRACE_INFO("TCP server: Control connection established with client %s port %" PRIu16 "...\r\n",
             ipAddrToString(&clientIpAddr, NULL), clientPort);
 
+         //Underlying network interface
+         connection->interface = socket->interface;
          //Save socket handle
          connection->controlSocket = socket;
          //Set home directory
@@ -222,15 +263,17 @@ void ftpServerCloseControlConnection(FtpClientConnection *connection)
 
 /**
  * @brief Open data connection
+ * @param[in] context Pointer to the FTP server context
  * @param[in] connection Pointer to the client connection
  * @return Error code
  **/
 
-error_t ftpServerOpenDataConnection(FtpClientConnection *connection)
+error_t ftpServerOpenDataConnection(FtpServerContext *context,
+   FtpClientConnection *connection)
 {
    error_t error;
 
-   //Release previsoulsy allocated resources
+   //Release previously allocated resources
    ftpServerCloseDataConnection(connection);
 
    //No port specified?
@@ -256,12 +299,25 @@ error_t ftpServerOpenDataConnection(FtpClientConnection *connection)
       if(error) break;
 
       //Change the size of the TX buffer
-      error = socketSetTxBufferSize(connection->dataSocket, FTP_SERVER_DATA_SOCKET_BUFFER_SIZE);
+      error = socketSetTxBufferSize(connection->dataSocket,
+         FTP_SERVER_DATA_SOCKET_BUFFER_SIZE);
       //Any error to report?
       if(error) break;
 
       //Change the size of the RX buffer
-      error = socketSetRxBufferSize(connection->dataSocket, FTP_SERVER_DATA_SOCKET_BUFFER_SIZE);
+      error = socketSetRxBufferSize(connection->dataSocket,
+         FTP_SERVER_DATA_SOCKET_BUFFER_SIZE);
+      //Any error to report?
+      if(error) break;
+
+      //Associate the socket with the relevant interface
+      error = socketBindToInterface(connection->dataSocket, connection->interface);
+      //Unable to bind the socket to the desired interface?
+      if(error) break;
+
+      //The server initiates the data connection from port 20
+      error = socketBind(connection->dataSocket, &IP_ADDR_ANY,
+         context->settings.dataPort);
       //Any error to report?
       if(error) break;
 

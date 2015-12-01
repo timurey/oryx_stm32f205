@@ -32,7 +32,7 @@
  * - RFC 3810: Multicast Listener Discovery Version 2 (MLDv2) for IPv6
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -48,6 +48,9 @@
 
 //Check TCP/IP stack configuration
 #if (IPV6_SUPPORT == ENABLED && MLD_SUPPORT == ENABLED)
+
+//Tick counter to handle periodic operations
+systime_t mldTickCounter;
 
 
 /**
@@ -155,34 +158,32 @@ void mldTick(NetInterface *interface)
    //Get current time
    time = osGetSystemTime();
 
-   //Acquire exclusive access to the IPv6 filter table
-   osAcquireMutex(&interface->ipv6FilterMutex);
-
-   //Loop through filter table entries
-   for(i = 0; i < interface->ipv6FilterSize; i++)
+   //Go through the multicast filter table
+   for(i = 0; i < IPV6_MULTICAST_FILTER_SIZE; i++)
    {
       //Point to the current entry
-      entry = &interface->ipv6Filter[i];
+      entry = &interface->ipv6Context.multicastFilter[i];
 
-      //Delaying Listener state?
-      if(entry->state == MLD_STATE_DELAYING_LISTENER)
+      //Valid entry?
+      if(entry->refCount > 0)
       {
-         //Timer expired?
-         if(timeCompare(time, entry->timer) >= 0)
+         //Delaying Listener state?
+         if(entry->state == MLD_STATE_DELAYING_LISTENER)
          {
-            //Send a Multicast Listener Report message
-            mldSendListenerReport(interface, &entry->addr);
+            //Timer expired?
+            if(timeCompare(time, entry->timer) >= 0)
+            {
+               //Send a Multicast Listener Report message
+               mldSendListenerReport(interface, &entry->addr);
 
-            //Set flag
-            entry->flag = TRUE;
-            //Switch to the Idle Listener state
-            entry->state = MLD_STATE_IDLE_LISTENER;
+               //Set flag
+               entry->flag = TRUE;
+               //Switch to the Idle Listener state
+               entry->state = MLD_STATE_IDLE_LISTENER;
+            }
          }
       }
    }
-
-   //Release exclusive access to the IPv6 filter table
-   osReleaseMutex(&interface->ipv6FilterMutex);
 }
 
 
@@ -200,53 +201,55 @@ void mldLinkChangeEvent(NetInterface *interface)
    //Get current time
    time = osGetSystemTime();
 
-   //Acquire exclusive access to the IPv6 filter table
-   osAcquireMutex(&interface->ipv6FilterMutex);
-
    //Link up event?
    if(interface->linkState)
    {
-      //Loop through filter table entries
-      for(i = 0; i < interface->ipv6FilterSize; i++)
+      //Go through the multicast filter table
+      for(i = 0; i < IPV6_MULTICAST_FILTER_SIZE; i++)
       {
          //Point to the current entry
-         entry = &interface->ipv6Filter[i];
+         entry = &interface->ipv6Context.multicastFilter[i];
 
-         //The link-scope all-nodes address (FF02::1) is handled as a special
-         //case. The host starts in Idle Listener state for that address on
-         //every interface and never transitions to another state
-         if(ipv6CompAddr(&entry->addr, &IPV6_LINK_LOCAL_ALL_NODES_ADDR))
-            continue;
+         //Valid entry?
+         if(entry->refCount > 0)
+         {
+            //The link-scope all-nodes address (FF02::1) is handled as a special
+            //case. The host starts in Idle Listener state for that address on
+            //every interface and never transitions to another state
+            if(!ipv6CompAddr(&entry->addr, &IPV6_LINK_LOCAL_ALL_NODES_ADDR))
+            {
+               //Send an unsolicited Multicast Listener Report message for that group
+               mldSendListenerReport(interface, &entry->addr);
 
-         //Send an unsolicited Multicast Listener Report message for that group
-         mldSendListenerReport(interface, &entry->addr);
-
-         //Set flag
-         entry->flag = TRUE;
-         //Start timer
-         entry->timer = time + MLD_UNSOLICITED_REPORT_INTERVAL;
-         //Enter the Delaying Listener state
-         entry->state = MLD_STATE_DELAYING_LISTENER;
+               //Set flag
+               entry->flag = TRUE;
+               //Start timer
+               entry->timer = time + MLD_UNSOLICITED_REPORT_INTERVAL;
+               //Enter the Delaying Listener state
+               entry->state = MLD_STATE_DELAYING_LISTENER;
+            }
+         }
       }
    }
    //Link down event?
    else
    {
-      //Loop through filter table entries
-      for(i = 0; i < interface->ipv6FilterSize; i++)
+      //Go through the multicast filter table
+      for(i = 0; i < IPV6_MULTICAST_FILTER_SIZE; i++)
       {
          //Point to the current entry
-         entry = &interface->ipv6Filter[i];
+         entry = &interface->ipv6Context.multicastFilter[i];
 
-         //Clear flag
-         entry->flag = FALSE;
-         //Enter the Idle Listener state
-         entry->state = MLD_STATE_IDLE_LISTENER;
+         //Valid entry?
+         if(entry->refCount > 0)
+         {
+            //Clear flag
+            entry->flag = FALSE;
+            //Enter the Idle Listener state
+            entry->state = MLD_STATE_IDLE_LISTENER;
+         }
       }
    }
-
-   //Release exclusive access to the IPv6 filter table
-   osReleaseMutex(&interface->ipv6FilterMutex);
 }
 
 
@@ -300,56 +303,54 @@ void mldProcessListenerQuery(NetInterface *interface, Ipv6PseudoHeader *pseudoHe
    //before sending a responding report
    maxRespDelay = message->maxRespDelay * 10;
 
-   //Acquire exclusive access to the IPv6 filter table
-   osAcquireMutex(&interface->ipv6FilterMutex);
-
-   //Loop through filter table entries
-   for(i = 0; i < interface->ipv6FilterSize; i++)
+   //Go through the multicast filter table
+   for(i = 0; i < IPV6_MULTICAST_FILTER_SIZE; i++)
    {
       //Point to the current entry
-      entry = &interface->ipv6Filter[i];
+      entry = &interface->ipv6Context.multicastFilter[i];
 
-      //The link-scope all-nodes address (FF02::1) is handled as a special
-      //case. The host starts in Idle Listener state for that address on
-      //every interface and never transitions to another state
-      if(ipv6CompAddr(&entry->addr, &IPV6_LINK_LOCAL_ALL_NODES_ADDR))
-         continue;
-
-      //A General Query is used to learn which multicast addresses have listeners
-      //on an attached link. A Multicast-Address-Specific Query is used to learn
-      //if a particular multicast address has any listeners on an attached link
-      if(ipv6CompAddr(&message->multicastAddr, &IPV6_UNSPECIFIED_ADDR) ||
-         ipv6CompAddr(&message->multicastAddr, &entry->addr))
+      //Valid entry?
+      if(entry->refCount > 0)
       {
-         //Delaying Listener state?
-         if(entry->state == MLD_STATE_DELAYING_LISTENER)
+         //The link-scope all-nodes address (FF02::1) is handled as a special
+         //case. The host starts in Idle Listener state for that address on
+         //every interface and never transitions to another state
+         if(!ipv6CompAddr(&entry->addr, &IPV6_LINK_LOCAL_ALL_NODES_ADDR))
          {
-            //The timer has not yet expired?
-            if(timeCompare(time, entry->timer) < 0)
+            //A General Query is used to learn which multicast addresses have listeners
+            //on an attached link. A Multicast-Address-Specific Query is used to learn
+            //if a particular multicast address has any listeners on an attached link
+            if(ipv6CompAddr(&message->multicastAddr, &IPV6_UNSPECIFIED_ADDR) ||
+               ipv6CompAddr(&message->multicastAddr, &entry->addr))
             {
-               //If a timer for the address is already running, it is reset to
-               //the new random value only if the requested Max Response Delay
-               //is less than the remaining value of the running timer
-               if(maxRespDelay < (entry->timer - time))
+               //Delaying Listener state?
+               if(entry->state == MLD_STATE_DELAYING_LISTENER)
                {
-                  //Restart delay timer
+                  //The timer has not yet expired?
+                  if(timeCompare(time, entry->timer) < 0)
+                  {
+                     //If a timer for the address is already running, it is reset to
+                     //the new random value only if the requested Max Response Delay
+                     //is less than the remaining value of the running timer
+                     if(maxRespDelay < (entry->timer - time))
+                     {
+                        //Restart delay timer
+                        entry->timer = time + mldRand(maxRespDelay);
+                     }
+                  }
+               }
+               //Idle Listener state?
+               else if(entry->state == MLD_STATE_IDLE_LISTENER)
+               {
+                  //Switch to the Delaying Listener state
+                  entry->state = MLD_STATE_DELAYING_LISTENER;
+                  //Delay the response by a random amount of time
                   entry->timer = time + mldRand(maxRespDelay);
                }
             }
          }
-         //Idle Listener state?
-         else if(entry->state == MLD_STATE_IDLE_LISTENER)
-         {
-            //Switch to the Delaying Listener state
-            entry->state = MLD_STATE_DELAYING_LISTENER;
-            //Delay the response by a random amount of time
-            entry->timer = time + mldRand(maxRespDelay);
-         }
       }
    }
-
-   //Release exclusive access to the IPv6 filter table
-   osReleaseMutex(&interface->ipv6FilterMutex);
 }
 
 
@@ -394,32 +395,30 @@ void mldProcessListenerReport(NetInterface *interface, Ipv6PseudoHeader *pseudoH
    if(hopLimit != MLD_HOP_LIMIT)
       return;
 
-   //Acquire exclusive access to the IPv6 filter table
-   osAcquireMutex(&interface->ipv6FilterMutex);
-
-   //Loop through filter table entries
-   for(i = 0; i < interface->ipv6FilterSize; i++)
+   //Go through the multicast filter table
+   for(i = 0; i < IPV6_MULTICAST_FILTER_SIZE; i++)
    {
       //Point to the current entry
-      entry = &interface->ipv6Filter[i];
+      entry = &interface->ipv6Context.multicastFilter[i];
 
-      //Report messages are ignored for multicast addresses
-      //in the Non-Listener or Idle Listener state
-      if(entry->state == MLD_STATE_DELAYING_LISTENER)
+      //Valid entry?
+      if(entry->refCount > 0)
       {
-         //The Multicast Listener Report message matches the current entry?
-         if(ipv6CompAddr(&message->multicastAddr, &entry->addr))
+         //Report messages are ignored for multicast addresses
+         //in the Non-Listener or Idle Listener state
+         if(entry->state == MLD_STATE_DELAYING_LISTENER)
          {
-            //Clear flag
-            entry->flag = FALSE;
-            //Switch to the Idle Listener state
-            entry->state = MLD_STATE_IDLE_LISTENER;
+            //The Multicast Listener Report message matches the current entry?
+            if(ipv6CompAddr(&message->multicastAddr, &entry->addr))
+            {
+               //Clear flag
+               entry->flag = FALSE;
+               //Switch to the Idle Listener state
+               entry->state = MLD_STATE_IDLE_LISTENER;
+            }
          }
       }
    }
-
-   //Release exclusive access to the IPv6 filter table
-   osReleaseMutex(&interface->ipv6FilterMutex);
 }
 
 
@@ -464,7 +463,7 @@ error_t mldSendListenerReport(NetInterface *interface, Ipv6Addr *ipAddr)
    message->multicastAddr = *ipAddr;
 
    //Format IPv6 pseudo header
-   pseudoHeader.srcAddr = interface->ipv6Config.linkLocalAddr;
+   pseudoHeader.srcAddr = interface->ipv6Context.addrList[0].addr;
    pseudoHeader.destAddr = *ipAddr;
    pseudoHeader.length = HTONS(sizeof(MldMessage));
    pseudoHeader.reserved = 0;
@@ -530,7 +529,7 @@ error_t mldSendListenerDone(NetInterface *interface, Ipv6Addr *ipAddr)
    message->multicastAddr = *ipAddr;
 
    //Format IPv6 pseudo header
-   pseudoHeader.srcAddr = interface->ipv6Config.linkLocalAddr;
+   pseudoHeader.srcAddr = interface->ipv6Context.addrList[0].addr;
    pseudoHeader.destAddr = IPV6_LINK_LOCAL_ALL_ROUTERS_ADDR;
    pseudoHeader.length = HTONS(sizeof(MldMessage));
    pseudoHeader.reserved = 0;

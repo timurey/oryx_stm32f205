@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _A2FXXXM3_ETH_H
@@ -120,12 +120,6 @@ typedef struct
 } A2fxxxm3RxDmaDesc;
 
 
-//Win32 compiler?
-#if defined(_WIN32)
-   #pragma pack(push, 1)
-#endif
-
-
 /**
  * @brief Hash table setup frame
  **/
@@ -137,12 +131,6 @@ typedef struct
    uint32_t physicalAddr[3]; //156-167
    uint32_t reserved2[6];    //168-191
 } A2fxxxm3HashTableSetupFrame;
-
-
-//Win32 compiler?
-#if defined(_WIN32)
-   #pragma pack(pop)
-#endif
 
 
 //A2FxxxM3 Ethernet MAC driver
@@ -158,8 +146,6 @@ void a2fxxxm3EthEnableIrq(NetInterface *interface);
 void a2fxxxm3EthDisableIrq(NetInterface *interface);
 void a2fxxxm3EthEventHandler(NetInterface *interface);
 
-error_t a2fxxxm3EthSetMacFilter(NetInterface *interface);
-
 error_t a2fxxxm3EthSendSetup(NetInterface *interface);
 
 error_t a2fxxxm3EthSendPacket(NetInterface *interface,
@@ -167,6 +153,9 @@ error_t a2fxxxm3EthSendPacket(NetInterface *interface,
 
 error_t a2fxxxm3EthReceivePacket(NetInterface *interface,
    uint8_t *buffer, size_t size, size_t *length);
+
+error_t a2fxxxm3EthSetMulticastFilter(NetInterface *interface);
+error_t a2fxxxm3EthUpdateMacConfig(NetInterface *interface);
 
 void a2fxxxm3EthWritePhyReg(uint8_t phyAddr, uint8_t regAddr, uint16_t data);
 uint16_t a2fxxxm3EthReadPhyReg(uint8_t phyAddr, uint8_t regAddr);

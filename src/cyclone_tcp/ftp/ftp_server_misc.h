@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _FTP_SERVER_MISC_H
@@ -33,13 +33,17 @@
 #include "ftp/ftp_server.h"
 
 //FTP related functions
+uint16_t ftpServerGetPassivePort(FtpServerContext *context);
+
 void ftpServerCloseConnection(FtpServerContext *context,
    FtpClientConnection *connection);
 
 FtpClientConnection *ftpServerAcceptControlConnection(FtpServerContext *context);
 void ftpServerCloseControlConnection(FtpClientConnection *connection);
 
-error_t ftpServerOpenDataConnection(FtpClientConnection *connection);
+error_t ftpServerOpenDataConnection(FtpServerContext *context,
+   FtpClientConnection *connection);
+
 void ftpServerAcceptDataConnection(FtpClientConnection *connection);
 void ftpServerCloseDataConnection(FtpClientConnection *connection);
 

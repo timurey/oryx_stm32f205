@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -149,17 +149,9 @@ static const uint32_t crc32Table[256] =
 
 error_t ethInit(NetInterface *interface)
 {
-   //Create a mutex to prevent simultaneous access to the MAC filter table
-   if(!osCreateMutex(&interface->macFilterMutex))
-   {
-      //Failed to create mutex
-      return ERROR_OUT_OF_RESOURCES;
-   }
-
    //Clear the MAC filter table contents
-   memset(interface->macFilter, 0, sizeof(interface->macFilter));
-   //No entry in the filter table
-   interface->macFilterSize = 0;
+   memset(interface->macMulticastFilter, 0,
+      sizeof(interface->macMulticastFilter));
 
    //Successful initialization
    return NO_ERROR;
@@ -181,15 +173,11 @@ void ethProcessFrame(NetInterface *interface, EthHeader *ethFrame, size_t length
    uint32_t crc;
 
    //Ensure the length of the incoming frame is valid
-   if(length < ETH_MIN_FRAME_SIZE)
+   if(length < (sizeof(EthHeader) + ETH_CRC_SIZE))
       return;
 
-#if (MIB2_SUPPORT == ENABLED)
    //Total number of octets received on the interface
-   MIB2_LOCK();
    MIB2_INC_COUNTER32(interface->mibIfEntry->ifInOctets, length);
-   MIB2_UNLOCK();
-#endif
 
    //Debug message
    TRACE_DEBUG("Ethernet frame received (%" PRIuSIZE " bytes)...\r\n", length);
@@ -205,12 +193,9 @@ void ethProcessFrame(NetInterface *interface, EthHeader *ethFrame, size_t length
          //Debug message
          TRACE_WARNING("Wrong CRC detected!\r\n");
 
-#if (MIB2_SUPPORT == ENABLED)
          //Number of inbound packets that contained errors
-         MIB2_LOCK();
          MIB2_INC_COUNTER32(interface->mibIfEntry->ifInErrors, 1);
-         MIB2_UNLOCK();
-#endif
+
          //Discard the received frame
          return;
       }
@@ -224,20 +209,13 @@ void ethProcessFrame(NetInterface *interface, EthHeader *ethFrame, size_t length
    //Frame filtering based on destination MAC address
    if(ethCheckDestAddr(interface, &ethFrame->destAddr))
    {
-#if (MIB2_SUPPORT == ENABLED)
       //Number of inbound packets which were chosen to be discarded
       //even though no errors had been detected
-      MIB2_LOCK();
       MIB2_INC_COUNTER32(interface->mibIfEntry->ifInDiscards, 1);
-      MIB2_UNLOCK();
-#endif
+
       //Discard the received frame
       return;
    }
-
-#if (MIB2_SUPPORT == ENABLED)
-   //Enter critical section
-   MIB2_LOCK();
 
    //Check whether the destination address is a group address
    if(macIsMulticastAddr(&ethFrame->destAddr))
@@ -250,10 +228,6 @@ void ethProcessFrame(NetInterface *interface, EthHeader *ethFrame, size_t length
       //Number of unicast packets delivered to a higher-layer protocol
       MIB2_INC_COUNTER32(interface->mibIfEntry->ifInUcastPkts, 1);
    }
-
-   //Leave critical section
-   MIB2_UNLOCK();
-#endif
 
 #if (RAW_SOCKET_SUPPORT == ENABLED)
    //Allow raw sockets to process Ethernet packets
@@ -278,6 +252,7 @@ void ethProcessFrame(NetInterface *interface, EthHeader *ethFrame, size_t length
       ipv4ProcessPacket(interface, (Ipv4Header *) ethFrame->data, length);
       break;
 #endif
+
 #if (IPV6_SUPPORT == ENABLED)
    //IPv6 packet received?
    case ETH_TYPE_IPV6:
@@ -287,22 +262,20 @@ void ethProcessFrame(NetInterface *interface, EthHeader *ethFrame, size_t length
       buffer.chunk[0].address = ethFrame->data;
       buffer.chunk[0].length = length;
       buffer.chunk[0].size = 0;
+
       //Process incoming IPv6 packet
-      ipv6ProcessPacket(interface, (NetBuffer *) &buffer);
+      ipv6ProcessPacket(interface, (NetBuffer *) &buffer, 0);
       break;
 #endif
+
    //Unknown packet received?
    default:
       //Debug message
       TRACE_WARNING("Unknown Ethernet type!\r\n");
 
-#if (MIB2_SUPPORT == ENABLED)
       //Number of packets received via the interface which were
       //discarded because of an unknown or unsupported protocol
-      MIB2_LOCK();
       MIB2_INC_COUNTER32(interface->mibIfEntry->ifInUnknownProtos , 1);
-      MIB2_UNLOCK();
-#endif
       break;
    }
 }
@@ -362,11 +335,12 @@ error_t ethSendFrame(NetInterface *interface, const MacAddr *destAddr,
          length += n;
       }
    }
+
    //CRC generation not supported by hardware?
    if(!interface->nicDriver->autoCrcGen)
    {
       //Compute CRC over the header and payload
-      crc = ethCalcCrcEx(buffer, 0, length);
+      crc = ethCalcCrcEx(buffer, offset, length);
       //Convert from host byte order to little-endian byte order
       crc = htole32(crc);
 
@@ -378,10 +352,6 @@ error_t ethSendFrame(NetInterface *interface, const MacAddr *destAddr,
       //Adjust frame length
       length += sizeof(crc);
    }
-
-#if (MIB2_SUPPORT == ENABLED)
-   //Enter critical section
-   MIB2_LOCK();
 
    //Total number of octets transmitted out of the interface
    MIB2_INC_COUNTER32(interface->mibIfEntry->ifOutOctets, length);
@@ -400,17 +370,15 @@ error_t ethSendFrame(NetInterface *interface, const MacAddr *destAddr,
       MIB2_INC_COUNTER32(interface->mibIfEntry->ifOutUcastPkts, 1);
    }
 
-   //Leave critical section
-   MIB2_UNLOCK();
-#endif
-
    //Debug message
    TRACE_DEBUG("Sending Ethernet frame (%" PRIuSIZE " bytes)...\r\n", length);
    //Dump Ethernet header contents for debugging purpose
    ethDumpHeader(header);
 
    //Send the resulting packet over the specified link
-   return nicSendPacket(interface, buffer, offset);
+   error = nicSendPacket(interface, buffer, offset);
+   //Return status code
+   return error;
 }
 
 
@@ -424,6 +392,7 @@ error_t ethSendFrame(NetInterface *interface, const MacAddr *destAddr,
 error_t ethCheckDestAddr(NetInterface *interface, const MacAddr *macAddr)
 {
    uint_t i;
+   MacFilterEntry *entry;
 
    //Filter out any invalid addresses
    error_t error = ERROR_INVALID_ADDRESS;
@@ -439,27 +408,28 @@ error_t ethCheckDestAddr(NetInterface *interface, const MacAddr *macAddr)
       error = NO_ERROR;
    }
    //Multicast address?
-   else
+   else if(macIsMulticastAddr(macAddr))
    {
-      //Acquire exclusive access to the MAC filter table
-      osAcquireMutex(&interface->macFilterMutex);
-
-      //Loop through the MAC filter table
-      for(i = 0; i < interface->macFilterSize; i++)
+      //Go through the multicast filter table
+      for(i = 0; i < MAC_MULTICAST_FILTER_SIZE; i++)
       {
-         //Check whether the destination MAC address matches
-         //a relevant multicast address
-         if(macCompAddr(&interface->macFilter[i].addr, macAddr))
+         //Point to the current entry
+         entry = &interface->macMulticastFilter[i];
+
+         //Valid entry?
+         if(entry->refCount > 0)
          {
-            //The MAC address is acceptable
-            error = NO_ERROR;
-            //Stop immediately
-            break;
+            //Check whether the destination MAC address matches
+            //a relevant multicast address
+            if(macCompAddr(&entry->addr, macAddr))
+            {
+               //The MAC address is acceptable
+               error = NO_ERROR;
+               //Stop immediately
+               break;
+            }
          }
       }
-
-      //Release exclusive access to the MAC filter table
-      osReleaseMutex(&interface->macFilterMutex);
    }
 
    //Return status code
@@ -477,46 +447,61 @@ error_t ethCheckDestAddr(NetInterface *interface, const MacAddr *macAddr)
 error_t ethAcceptMulticastAddr(NetInterface *interface, const MacAddr *macAddr)
 {
    uint_t i;
+   MacFilterEntry *entry;
+   MacFilterEntry *firstFreeEntry;
 
-   //Acquire exclusive access to the MAC filter table
-   osAcquireMutex(&interface->macFilterMutex);
+   //Keep track of the first free entry
+   firstFreeEntry = NULL;
 
-   //Loop through filter table entries
-   for(i = 0; i < interface->macFilterSize; i++)
+   //Go through the multicast filter table
+   for(i = 0; i < MAC_MULTICAST_FILTER_SIZE; i++)
    {
-      //Check whether the table already contains the specified MAC address
-      if(macCompAddr(&interface->macFilter[i].addr, macAddr))
+      //Point to the current entry
+      entry = &interface->macMulticastFilter[i];
+
+      //Valid entry?
+      if(entry->refCount > 0)
       {
-         //Increment the reference count
-         interface->macFilter[i].refCount++;
-         //Release exclusive access to the MAC filter table
-         osReleaseMutex(&interface->macFilterMutex);
-         //No error to report
-         return NO_ERROR;
+         //Check whether the table already contains the specified MAC address
+         if(macCompAddr(&entry->addr, macAddr))
+         {
+            //Increment the reference count
+            entry->refCount++;
+            //No error to report
+            return NO_ERROR;
+         }
+      }
+      else
+      {
+         //Keep track of the first free entry
+         if(firstFreeEntry == NULL)
+            firstFreeEntry = entry;
       }
    }
 
-   //The MAC filter table is full?
-   if(i >= MAC_FILTER_MAX_SIZE)
+   //Check whether the multicast filter table is full
+   if(firstFreeEntry == NULL)
    {
-      //Release exclusive access to the MAC filter table
-      osReleaseMutex(&interface->macFilterMutex);
       //A new entry cannot be added
       return ERROR_FAILURE;
    }
 
    //Add a new entry to the table
-   interface->macFilter[i].addr = *macAddr;
+   firstFreeEntry->addr = *macAddr;
    //Initialize the reference count
-   interface->macFilter[i].refCount = 1;
-   //Adjust the size of the MAC filter table
-   interface->macFilterSize++;
+   firstFreeEntry->refCount = 1;
 
-   //Force the Ethernet controller to update its MAC filter table
-   nicSetMacFilter(interface);
+   //Force the network interface controller to add the current
+   //entry to its MAC filter table
+   firstFreeEntry->addFlag = TRUE;
+   firstFreeEntry->deleteFlag = FALSE;
 
-   //Release exclusive access to the MAC filter table
-   osReleaseMutex(&interface->macFilterMutex);
+   //Update the MAC filter table
+   nicSetMulticastFilter(interface);
+
+   //Clear the flag
+   firstFreeEntry->addFlag = FALSE;
+
    //No error to report
    return NO_ERROR;
 }
@@ -532,45 +517,47 @@ error_t ethAcceptMulticastAddr(NetInterface *interface, const MacAddr *macAddr)
 error_t ethDropMulticastAddr(NetInterface *interface, const MacAddr *macAddr)
 {
    uint_t i;
-   uint_t j;
+   MacFilterEntry *entry;
 
-   //Acquire exclusive access to the MAC filter table
-   osAcquireMutex(&interface->macFilterMutex);
-
-   //Loop through filter table entries
-   for(i = 0; i < interface->macFilterSize; i++)
+   //Go through the multicast filter table
+   for(i = 0; i < MAC_MULTICAST_FILTER_SIZE; i++)
    {
-      //Specified MAC address found?
-      if(macCompAddr(&interface->macFilter[i].addr, macAddr))
+      //Point to the current entry
+      entry = &interface->macMulticastFilter[i];
+
+      //Valid entry?
+      if(entry->refCount > 0)
       {
-         //Decrement the reference count
-         interface->macFilter[i].refCount--;
-
-         //Remove the entry if the reference count drops to zero
-         if(interface->macFilter[i].refCount < 1)
+         //Specified MAC address found?
+         if(macCompAddr(&entry->addr, macAddr))
          {
-            //Adjust the size of the MAC filter table
-            interface->macFilterSize--;
+            //Decrement the reference count
+            entry->refCount--;
 
-            //Remove the corresponding entry
-            for(j = i; j < interface->macFilterSize; j++)
-               interface->macFilter[j] = interface->macFilter[j + 1];
+            //Remove the entry if the reference count drops to zero
+            if(entry->refCount == 0)
+            {
+               //Force the network interface controller to remove the current
+               //entry from its MAC filter table
+               entry->deleteFlag = TRUE;
 
-            //Force the Ethernet controller to update its MAC filter table
-            nicSetMacFilter(interface);
+               //Update the MAC filter table
+               nicSetMulticastFilter(interface);
+
+               //Clear the flag
+               entry->deleteFlag = FALSE;
+               //Remove the multicast address from the list
+               entry->addr = MAC_UNSPECIFIED_ADDR;
+            }
+
+            //No error to report
+            return NO_ERROR;
          }
-
-         //Release exclusive access to the MAC filter table
-         osReleaseMutex(&interface->macFilterMutex);
-         //No error to report
-         return NO_ERROR;
       }
    }
 
-   //Release exclusive access to the MAC filter table
-   osReleaseMutex(&interface->macFilterMutex);
    //The specified MAC address does not exist
-   return ERROR_FAILURE;
+   return ERROR_ADDRESS_NOT_FOUND;
 }
 
 
@@ -840,6 +827,34 @@ char_t *macAddrToString(const MacAddr *macAddr, char_t *str)
 
    //Return a pointer to the formatted string
    return str;
+}
+
+
+/**
+ * @brief Map a MAC address to the IPv6 modified EUI-64 identifier
+ * @param[in] macAddr Host MAC address
+ * @param[out] interfaceId IPv6 modified EUI-64 identifier
+ **/
+
+void macAddrToEui64(const MacAddr *macAddr, Eui64 *interfaceId)
+{
+   //Copy the Organization Unique Identifier (OUI)
+   interfaceId->b[0] = macAddr->b[0];
+   interfaceId->b[1] = macAddr->b[1];
+   interfaceId->b[2] = macAddr->b[2];
+
+   //The middle 16 bits are given the value 0xFFFE
+   interfaceId->b[3] = 0xFF;
+   interfaceId->b[4] = 0xFE;
+
+   //Copy the right-most 24 bits of the MAC address
+   interfaceId->b[5] = macAddr->b[3];
+   interfaceId->b[6] = macAddr->b[4];
+   interfaceId->b[7] = macAddr->b[5];
+
+   //Modified EUI-64 format interface identifiers are
+   //formed by inverting the Universal/Local bit
+   interfaceId->b[0] ^= MAC_ADDR_FLAG_LOCAL;
 }
 
 

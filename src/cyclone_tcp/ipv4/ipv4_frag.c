@@ -32,7 +32,7 @@
  * - RFC 815: IP datagram reassembly algorithms
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -48,6 +48,9 @@
 
 //Check TCP/IP stack configuration
 #if (IPV4_SUPPORT == ENABLED && IPV4_FRAG_SUPPORT == ENABLED)
+
+//Tick counter to handle periodic operations
+systime_t ipv4FragTickCounter;
 
 
 /**
@@ -81,10 +84,13 @@ error_t ipv4FragmentDatagram(NetInterface *interface, Ipv4PseudoHeader *pseudoHe
    if(!fragment)
       return ERROR_OUT_OF_MEMORY;
 
-   //Maximum payload size for fragmented packets
-   maxFragmentSize = interface->ipv4Config.mtu - sizeof(Ipv4Header);
+   //Determine the maximum payload size for fragmented packets
+   maxFragmentSize = interface->ipv4Context.linkMtu - sizeof(Ipv4Header);
    //The size shall be a multiple of 8-byte blocks
    maxFragmentSize -= (maxFragmentSize % 8);
+
+   //Initialize error code
+   error = NO_ERROR;
 
    //Split the payload into multiple IP fragments
    for(offset = 0; offset < payloadLength; offset += length)
@@ -364,9 +370,6 @@ void ipv4FragTick(NetInterface *interface)
    systime_t time;
    Ipv4HoleDesc *hole;
 
-   //Acquire exclusive access to the reassembly queue
-   osAcquireMutex(&interface->ipv4FragQueueMutex);
-
    //Get current time
    time = osGetSystemTime();
 
@@ -374,7 +377,7 @@ void ipv4FragTick(NetInterface *interface)
    for(i = 0; i < IPV4_MAX_FRAG_DATAGRAMS; i++)
    {
       //Point to the current entry in the reassembly queue
-      Ipv4FragDesc *frag = &interface->ipv4FragQueue[i];
+      Ipv4FragDesc *frag = &interface->ipv4Context.fragQueue[i];
 
       //Make sure the entry is currently in use
       if(frag->buffer.chunkCount > 0)
@@ -404,7 +407,7 @@ void ipv4FragTick(NetInterface *interface)
                {
                   //Send an ICMP Time Exceeded message
                   icmpSendErrorMessage(interface, ICMP_TYPE_TIME_EXCEEDED,
-                     ICMP_CODE_REASSEMBLY_TIME_EXCEEDED, 0, (NetBuffer *) &frag->buffer);
+                     ICMP_CODE_REASSEMBLY_TIME_EXCEEDED, 0, (NetBuffer *) &frag->buffer, 0);
                }
             }
 
@@ -413,9 +416,6 @@ void ipv4FragTick(NetInterface *interface)
          }
       }
    }
-
-   //Release exclusive access to the reassembly queue
-   osReleaseMutex(&interface->ipv4FragQueueMutex);
 }
 
 
@@ -438,7 +438,7 @@ Ipv4FragDesc *ipv4SearchFragQueue(NetInterface *interface, const Ipv4Header *pac
    for(i = 0; i < IPV4_MAX_FRAG_DATAGRAMS; i++)
    {
       //Point to the current entry in the reassembly queue
-      frag = &interface->ipv4FragQueue[i];
+      frag = &interface->ipv4Context.fragQueue[i];
 
       //Check whether the current entry is used?
       if(frag->buffer.chunkCount > 0)
@@ -467,7 +467,7 @@ Ipv4FragDesc *ipv4SearchFragQueue(NetInterface *interface, const Ipv4Header *pac
    for(i = 0; i < IPV4_MAX_FRAG_DATAGRAMS; i++)
    {
       //Point to the current entry in the reassembly queue
-      frag = &interface->ipv4FragQueue[i];
+      frag = &interface->ipv4Context.fragQueue[i];
 
       //The current entry is free?
       if(!frag->buffer.chunkCount)
@@ -532,18 +532,12 @@ void ipv4FlushFragQueue(NetInterface *interface)
 {
    uint_t i;
 
-   //Acquire exclusive access to the reassembly queue
-   osAcquireMutex(&interface->ipv4FragQueueMutex);
-
    //Loop through the reassembly queue
    for(i = 0; i < IPV4_MAX_FRAG_DATAGRAMS; i++)
    {
       //Drop any partially reconstructed datagram
-      netBufferSetLength((NetBuffer *) &interface->ipv4FragQueue[i].buffer, 0);
+      netBufferSetLength((NetBuffer *) &interface->ipv4Context.fragQueue[i].buffer, 0);
    }
-
-   //Release exclusive access to the reassembly queue
-   osReleaseMutex(&interface->ipv4FragQueueMutex);
 }
 
 

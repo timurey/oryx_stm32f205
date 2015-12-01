@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _XMC4500_ETH_H
@@ -136,6 +136,9 @@
 #define ETH_CON_RXD0_B     (1 << ETH_CON_RXD0_Pos)
 #define ETH_CON_RXD0_C     (2 << ETH_CON_RXD0_Pos)
 #define ETH_CON_RXD0_D     (3 << ETH_CON_RXD0_Pos)
+
+//ETH0_MAC_CONFIGURATION register
+#define ETH_MAC_CONFIGURATION_RESERVED15_Msk (1 << 15)
 
 //ETH0_GMII_ADDRESS register
 #define ETH_GMII_ADDRESS_CR_DIV42  (0 << ETH_GMII_ADDRESS_CR_Pos)
@@ -265,13 +268,14 @@ void xmc4500EthEnableIrq(NetInterface *interface);
 void xmc4500EthDisableIrq(NetInterface *interface);
 void xmc4500EthEventHandler(NetInterface *interface);
 
-error_t xmc4500EthSetMacFilter(NetInterface *interface);
-
 error_t xmc4500EthSendPacket(NetInterface *interface,
    const NetBuffer *buffer, size_t offset);
 
 error_t xmc4500EthReceivePacket(NetInterface *interface,
    uint8_t *buffer, size_t size, size_t *length);
+
+error_t xmc4500EthSetMulticastFilter(NetInterface *interface);
+error_t xmc4500EthUpdateMacConfig(NetInterface *interface);
 
 void xmc4500EthWritePhyReg(uint8_t phyAddr, uint8_t regAddr, uint16_t data);
 uint16_t xmc4500EthReadPhyReg(uint8_t phyAddr, uint8_t regAddr);

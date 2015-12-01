@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _ST802RT1A_H
@@ -290,7 +290,7 @@ void st802rt1aTick(NetInterface *interface);
 void st802rt1aEnableIrq(NetInterface *interface);
 void st802rt1aDisableIrq(NetInterface *interface);
 
-bool_t st802rt1aEventHandler(NetInterface *interface);
+void st802rt1aEventHandler(NetInterface *interface);
 
 void st802rt1aWritePhyReg(NetInterface *interface, uint8_t address, uint16_t data);
 uint16_t st802rt1aReadPhyReg(NetInterface *interface, uint8_t address);

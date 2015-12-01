@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _MDNS_CLIENT_H
@@ -38,7 +38,7 @@
 
 //mDNS client support
 #ifndef MDNS_CLIENT_SUPPORT
-   #define MDNS_CLIENT_SUPPORT ENABLED
+   #define MDNS_CLIENT_SUPPORT DISABLED
 #elif (MDNS_CLIENT_SUPPORT != ENABLED && MDNS_CLIENT_SUPPORT != DISABLED)
    #error MDNS_CLIENT_SUPPORT parameter is not valid
 #endif
@@ -72,15 +72,12 @@
 #endif
 
 //mDNS related functions
-error_t mdnsResolve(NetInterface *interface,
+error_t mdnsClientResolve(NetInterface *interface,
    const char_t *name, HostType type, IpAddr *ipAddr);
 
-error_t mdnsSendQuery(DnsCacheEntry *entry);
+error_t mdnsClientSendQuery(DnsCacheEntry *entry);
 
-void mdnsProcessResponse(NetInterface *interface, const IpPseudoHeader *pseudoHeader,
-   const UdpHeader *udpHeader, const DnsHeader *message, size_t length);
-
-bool_t mdnsCheckSourceAddr(NetInterface *interface,
-   const IpPseudoHeader *pseudoHeader);
+void mdnsClientParseAnRecord(NetInterface *interface,
+   const MdnsMessage *message, size_t offset, const DnsResourceRecord *record);
 
 #endif

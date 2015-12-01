@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _FTP_SERVER_H
@@ -139,10 +139,29 @@
    #error FTP_SERVER_DATA_SOCKET_BUFFER_SIZE parameter is not valid
 #endif
 
+//Passive port range (lower limit)
+#ifndef FTP_SERVER_PASSIVE_PORT_MIN
+   #define FTP_SERVER_PASSIVE_PORT_MIN 48128
+#elif (FTP_SERVER_PASSIVE_PORT_MIN < 1024)
+   #error FTP_SERVER_PASSIVE_PORT_MIN parameter is not valid
+#endif
+
+//Passive port range (upper limit)
+#ifndef FTP_SERVER_PASSIVE_PORT_MAX
+   #define FTP_SERVER_PASSIVE_PORT_MAX 49151
+#elif (FTP_SERVER_PASSIVE_PORT_MAX <= FTP_SERVER_PASSIVE_PORT_MIN || FTP_SERVER_PASSIVE_PORT_MAX > 65535)
+   #error FTP_SERVER_PASSIVE_PORT_MAX parameter is not valid
+#endif
+
 //FTP port number
 #define FTP_PORT 21
+//FTP data port number
+#define FTP_DATA_PORT 20
+
 //FTPS port number (implicit mode)
 #define FTPS_PORT 990
+//FTPS data port number (implicit mode)
+#define FTPS_DATA_PORT 989
 
 
 /**
@@ -213,6 +232,7 @@ typedef enum
 
 typedef struct
 {
+   NetInterface *interface;                         ///<Underlying network interface
    bool_t userLoggedIn;                             ///<This flag tells whether the user is logged in
    systime_t timestamp;                             ///<Time stamp to manage timeout
    FtpControlConnState controlState;                ///<Control connection state
@@ -270,7 +290,10 @@ typedef uint_t (*FtpGetFilePermCallback)(FtpClientConnection *connection,
 typedef struct
 {
    NetInterface *interface;                         ///<Underlying network interface
-   uint16_t port;                                   ///<FTP server port number
+   uint16_t port;                                   ///<FTP command port number
+   uint16_t dataPort;                               ///<FTP data port number
+   uint16_t passivePortMin;                         ///<Passive port range (lower value)
+   uint16_t passivePortMax;                         ///<Passive port range (upper value)
    char_t rootDir[FTP_SERVER_MAX_ROOT_DIR_LEN + 1]; ///<Root directory
    FtpCheckUserCallback checkUserCallback;          ///<User verification callback function
    FtpCheckPasswordCallback checkPasswordCallback;  ///<Password verification callback function
@@ -287,6 +310,7 @@ typedef struct
    FtpServerSettings settings;                                    ///<User settings
    OsEvent event;                                                 ///<Event object used to poll the sockets
    Socket *socket;                                                ///<Listening socket
+   uint16_t passivePort;                                          ///<Current passive port number
    FtpClientConnection *connection[FTP_SERVER_MAX_CONNECTIONS];   ///<Client connections
    SocketEventDesc eventDesc[2 * FTP_SERVER_MAX_CONNECTIONS + 1]; ///<The events the application is interested in
 } FtpServerContext;

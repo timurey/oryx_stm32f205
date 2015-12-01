@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -77,6 +77,11 @@ error_t dp83620Init(NetInterface *interface)
    //The PHY will generate interrupts when link status changes are detected
    dp83620WritePhyReg(interface, DP83620_PHY_REG_MISR, MISR_LINK_INT_EN);
 
+   //Force the TCP/IP stack to poll the link state at startup
+   interface->phyEvent = TRUE;
+   //Notify the TCP/IP stack of the event
+   osSetEvent(&netEvent);
+
    //Successful initialization
    return NO_ERROR;
 }
@@ -89,12 +94,12 @@ error_t dp83620Init(NetInterface *interface)
 
 void dp83620Tick(NetInterface *interface)
 {
+   uint16_t value;
+   bool_t linkState;
+
    //No external interrupt line driver?
    if(interface->extIntDriver == NULL)
    {
-      uint16_t value;
-      bool_t linkState;
-
       //Read basic status register
       value = dp83620ReadPhyReg(interface, DP83620_PHY_REG_BMSR);
       //Retrieve current link state
@@ -103,18 +108,18 @@ void dp83620Tick(NetInterface *interface)
       //Link up event?
       if(linkState && !interface->linkState)
       {
-         //A PHY event is pending...
+         //Set event flag
          interface->phyEvent = TRUE;
-         //Notify the user that the link state has changed
-         osSetEvent(&interface->nicRxEvent);
+         //Notify the TCP/IP stack of the event
+         osSetEvent(&netEvent);
       }
       //Link down event?
       else if(!linkState && interface->linkState)
       {
-         //A PHY event is pending...
+         //Set event flag
          interface->phyEvent = TRUE;
-         //Notify the user that the link state has changed
-         osSetEvent(&interface->nicRxEvent);
+         //Notify the TCP/IP stack of the event
+         osSetEvent(&netEvent);
       }
    }
 }
@@ -149,10 +154,9 @@ void dp83620DisableIrq(NetInterface *interface)
 /**
  * @brief DP83620 event handler
  * @param[in] interface Underlying network interface
- * @return TRUE if a link state change notification is received
  **/
 
-bool_t dp83620EventHandler(NetInterface *interface)
+void dp83620EventHandler(NetInterface *interface)
 {
    uint16_t status;
 
@@ -169,36 +173,31 @@ bool_t dp83620EventHandler(NetInterface *interface)
       if(status & PHYSTS_LINK_STATUS)
       {
          //Check current speed
-         interface->speed100 = (status & PHYSTS_SPEED_STATUS) ? FALSE : TRUE;
+         if(status & PHYSTS_SPEED_STATUS)
+            interface->linkSpeed = NIC_LINK_SPEED_10MBPS;
+         else
+            interface->linkSpeed = NIC_LINK_SPEED_100MBPS;
+
          //Check duplex mode
-         interface->fullDuplex = (status & PHYSTS_DUPLEX_STATUS) ? TRUE : FALSE;
+         if(status & PHYSTS_DUPLEX_STATUS)
+            interface->duplexMode = NIC_FULL_DUPLEX_MODE;
+         else
+            interface->duplexMode = NIC_HALF_DUPLEX_MODE;
+
          //Update link state
          interface->linkState = TRUE;
 
-         //Display link state
-         TRACE_INFO("Link is up (%s)...\r\n", interface->name);
-
-         //Display actual speed and duplex mode
-         TRACE_INFO("%s %s\r\n",
-            interface->speed100 ? "100BASE-TX" : "10BASE-T",
-            interface->fullDuplex ? "Full-Duplex" : "Half-Duplex");
+         //Adjust MAC configuration parameters for proper operation
+         interface->nicDriver->updateMacConfig(interface);
       }
       else
       {
          //Update link state
          interface->linkState = FALSE;
-
-         //Display link state
-         TRACE_INFO("Link is down (%s)...\r\n", interface->name);
       }
 
-      //Notify the user that the link state has changed
-      return TRUE;
-   }
-   else
-   {
-      //No link state change...
-      return FALSE;
+      //Process link state change event
+      nicNotifyLinkChange(interface);
    }
 }
 

@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _DHCP_COMMON_H
@@ -39,9 +39,9 @@
 #define DHCP_CLIENT_PORT 68
 
 //Minimum size of DHCP messages
-#define DHCP_MSG_MIN_SIZE 300
+#define DHCP_MIN_MSG_SIZE 300
 //Maximum size of DHCP messages
-#define DHCP_MSG_MAX_SIZE 548
+#define DHCP_MAX_MSG_SIZE 548
 
 //Hardware type
 #define DHCP_HARDWARE_TYPE_ETH 1
@@ -176,8 +176,8 @@ typedef enum
 } DhcpOptionCode;
 
 
-//Win32 compiler?
-#if defined(_WIN32)
+//CodeWarrior or Win32 compiler?
+#if defined(__CWCC__) || defined(_WIN32)
    #pragma pack(push, 1)
 #endif
 
@@ -220,8 +220,8 @@ typedef __start_packed struct
 } __end_packed DhcpOption;
 
 
-//Win32 compiler?
-#if defined(_WIN32)
+//CodeWarrior or Win32 compiler?
+#if defined(__CWCC__) || defined(_WIN32)
    #pragma pack(pop)
 #endif
 

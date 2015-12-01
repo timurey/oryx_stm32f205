@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded (www.oryx-embedded.com)
- * @version 1.5.0
+ * @version 1.6.5
  **/
 
 #ifndef _OS_PORT_CONFIG_H

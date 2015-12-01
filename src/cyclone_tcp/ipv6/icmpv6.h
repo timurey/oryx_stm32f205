@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _ICMPV6_H
@@ -67,10 +67,11 @@ typedef enum
 
 typedef enum
 {
-   ICMPV6_CODE_NO_ROUTE_TO_DEST    = 0,
-   ICMPV6_CODE_ADMIN_PROHIBITED    = 1,
-   ICMPV6_CODE_ADDRESS_UNREACHABLE = 3,
-   ICMPV6_CODE_PORT_UNREACHABLE    = 4
+   ICMPV6_CODE_NO_ROUTE_TO_DEST         = 0,
+   ICMPV6_CODE_ADMIN_PROHIBITED         = 1,
+   ICMPV6_CODE_BEYOND_SCOPE_OF_SRC_ADDR = 2,
+   ICMPV6_CODE_ADDR_UNREACHABLE         = 3,
+   ICMPV6_CODE_PORT_UNREACHABLE         = 4
 } Icmpv6DestUnreachableCode;
 
 
@@ -96,8 +97,8 @@ typedef enum
 } Icmpv6ParamProblemCode;
 
 
-//Win32 compiler?
-#if defined(_WIN32)
+//CodeWarrior or Win32 compiler?
+#if defined(__CWCC__) || defined(_WIN32)
    #pragma pack(push, 1)
 #endif
 
@@ -223,23 +224,33 @@ typedef __start_packed struct
 } __end_packed Icmpv6EchoMessage;
 
 
-//Win32 compiler?
-#if defined(_WIN32)
+//CodeWarrior or Win32 compiler?
+#if defined(__CWCC__) || defined(_WIN32)
    #pragma pack(pop)
 #endif
 
 
 //ICMPv6 related functions
+error_t icmpv6EnableMulticastEchoRequest(NetInterface *interface, bool_t enable);
+
 void icmpv6ProcessMessage(NetInterface *interface, Ipv6PseudoHeader *pseudoHeader,
    const NetBuffer *buffer, size_t offset, uint8_t hopLimit);
+
+void icmpv6ProcessDestUnreachable(NetInterface *interface,
+   Ipv6PseudoHeader *pseudoHeader, const NetBuffer *buffer, size_t offset);
+
+void icmpv6ProcessPacketTooBig(NetInterface *interface,
+   Ipv6PseudoHeader *pseudoHeader, const NetBuffer *buffer, size_t offset);
 
 void icmpv6ProcessEchoRequest(NetInterface *interface, Ipv6PseudoHeader *requestPseudoHeader,
    const NetBuffer *request, size_t requestOffset);
 
-error_t icmpv6SendErrorMessage(NetInterface *interface, uint8_t type,
-   uint8_t code, uint32_t parameter, const NetBuffer *ipPacket);
+error_t icmpv6SendErrorMessage(NetInterface *interface, uint8_t type, uint8_t code,
+   uint32_t parameter, const NetBuffer *ipPacket, size_t ipPacketOffset);
 
 void icmpv6DumpMessage(const Icmpv6Header *message);
+void icmpv6DumpDestUnreachableMessage(const Icmpv6DestUnreachableMessage *message);
+void icmpv6DumpPacketTooBigMessage(const Icmpv6PacketTooBigMessage *message);
 void icmpv6DumpEchoMessage(const Icmpv6EchoMessage *message);
 void icmpv6DumpErrorMessage(const Icmpv6ErrorMessage *message);
 

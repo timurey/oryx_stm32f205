@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _MIB2_MODULE_H
@@ -42,7 +42,7 @@
 
 //Size of sysDescr object
 #ifndef MIB2_SYS_DESCR_SIZE
-   #define MIB2_SYS_DESCR_SIZE 32
+   #define MIB2_SYS_DESCR_SIZE 16
 #elif (MIB2_SYS_DESCR_SIZE < 1)
    #error MIB2_SYS_DESCR_SIZE parameter is not valid
 #endif
@@ -52,6 +52,27 @@
    #define MIB2_SYS_OBJECT_ID_SIZE 16
 #elif (MIB2_SYS_OBJECT_ID_SIZE < 1)
    #error MIB2_SYS_OBJECT_ID_SIZE parameter is not valid
+#endif
+
+//Size of sysContact object
+#ifndef MIB2_SYS_CONTACT_SIZE
+   #define MIB2_SYS_CONTACT_SIZE 16
+#elif (MIB2_SYS_CONTACT_SIZE < 1)
+   #error MIB2_SYS_CONTACT_SIZE parameter is not valid
+#endif
+
+//Size of sysName object
+#ifndef MIB2_SYS_NAME_SIZE
+   #define MIB2_SYS_NAME_SIZE 16
+#elif (MIB2_SYS_NAME_SIZE < 1)
+   #error MIB2_SYS_NAME_SIZE parameter is not valid
+#endif
+
+//Size of sysLocation object
+#ifndef MIB2_SYS_LOCATION_SIZE
+   #define MIB2_SYS_LOCATION_SIZE 16
+#elif (MIB2_SYS_LOCATION_SIZE < 1)
+   #error MIB2_SYS_LOCATION_SIZE parameter is not valid
 #endif
 
 //Size of ifDescr object
@@ -90,7 +111,8 @@ typedef enum
    MIB2_IF_TYPE_SLIP            = 28,
    MIB2_IF_TYPE_RS232           = 33,
    MIB2_IF_TYPE_PARA            = 34,
-   MIB2_IF_TYPE_USB             = 160
+   MIB2_IF_TYPE_USB             = 160,
+   MIB2_IF_TYPE_IEEE_802_15_4   = 259
 } Mib2IfType;
 
 
@@ -129,6 +151,13 @@ typedef struct
    uint8_t sysObjectID[MIB2_SYS_OBJECT_ID_SIZE];
    size_t sysObjectIDLen;
    uint32_t sysUpTime;
+   char_t sysContact[MIB2_SYS_CONTACT_SIZE];
+   size_t sysContactLen;
+   char_t sysName[MIB2_SYS_NAME_SIZE];
+   size_t sysNameLen;
+   char_t sysLocation[MIB2_SYS_LOCATION_SIZE];
+   size_t sysLocationLen;
+   int32_t sysServices;
 } Mib2SysGroup;
 
 

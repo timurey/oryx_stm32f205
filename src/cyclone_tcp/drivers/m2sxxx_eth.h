@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _M2SXXX_ETH_H
@@ -329,13 +329,14 @@ void m2sxxxEthEnableIrq(NetInterface *interface);
 void m2sxxxEthDisableIrq(NetInterface *interface);
 void m2sxxxEthEventHandler(NetInterface *interface);
 
-error_t m2sxxxEthSetMacFilter(NetInterface *interface);
-
 error_t m2sxxxEthSendPacket(NetInterface *interface,
    const NetBuffer *buffer, size_t offset);
 
 error_t m2sxxxEthReceivePacket(NetInterface *interface,
    uint8_t *buffer, size_t size, size_t *length);
+
+error_t m2sxxxEthSetMulticastFilter(NetInterface *interface);
+error_t m2sxxxEthUpdateMacConfig(NetInterface *interface);
 
 void m2sxxxEthWritePhyReg(uint8_t phyAddr, uint8_t regAddr, uint16_t data);
 uint16_t m2sxxxEthReadPhyReg(uint8_t phyAddr, uint8_t regAddr);

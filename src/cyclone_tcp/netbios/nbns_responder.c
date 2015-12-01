@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -65,7 +65,7 @@ void nbnsProcessQuery(NetInterface *interface, const Ipv4PseudoHeader *pseudoHea
    //Invalid name?
    if(!pos)
       return;
-   //Malformed mDNS message?
+   //Malformed NBNS query message?
    if((pos + sizeof(DnsQuestion)) > length)
       return;
 
@@ -115,7 +115,7 @@ error_t nbnsSendResponse(NetInterface *interface,
    NetBuffer *buffer;
    NbnsHeader *message;
    NbnsAddrEntry *addrEntry;
-   DnsResourceRecord *resourceRecord;
+   DnsResourceRecord *record;
 
    //Allocate a memory buffer to hold the NBNS response message
    buffer = udpAllocBuffer(DNS_MESSAGE_MAX_SIZE, &offset);
@@ -152,18 +152,18 @@ error_t nbnsSendResponse(NetInterface *interface,
    length += nbnsEncodeName(interface->hostname, (uint8_t *) message + length);
 
    //Point to the corresponding resource record
-   resourceRecord = DNS_GET_RESOURCE_RECORD(message, length);
+   record = DNS_GET_RESOURCE_RECORD(message, length);
    //Fill in resource record
-   resourceRecord->rtype = HTONS(DNS_RR_TYPE_NB);
-   resourceRecord->rclass = HTONS(DNS_RR_CLASS_IN);
-   resourceRecord->ttl = HTONL(NBNS_DEFAULT_RESOURCE_RECORD_TTL);
-   resourceRecord->rdlength = HTONS(sizeof(NbnsAddrEntry));
+   record->rtype = HTONS(DNS_RR_TYPE_NB);
+   record->rclass = HTONS(DNS_RR_CLASS_IN);
+   record->ttl = HTONL(NBNS_DEFAULT_RESOURCE_RECORD_TTL);
+   record->rdlength = HTONS(sizeof(NbnsAddrEntry));
 
    //Point to the address entry array
-   addrEntry = (NbnsAddrEntry *) resourceRecord->rdata;
+   addrEntry = (NbnsAddrEntry *) record->rdata;
    //Fill in address entry
    addrEntry->flags = HTONS(NBNS_G_UNIQUE | NBNS_ONT_BNODE);
-   addrEntry->addr = interface->ipv4Config.addr;
+   addrEntry->addr = interface->ipv4Context.addr;
 
    //Update the length of the NBNS response message
    length += sizeof(DnsResourceRecord) + sizeof(NbnsAddrEntry);

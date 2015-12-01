@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -75,6 +75,11 @@ error_t ksz9031Init(NetInterface *interface)
    //The PHY will generate interrupts when link status changes are detected
    ksz9031WritePhyReg(interface, KSZ9031_PHY_REG_ICSR, ICSR_LINK_DOWN_IE | ICSR_LINK_UP_IE);
 
+   //Force the TCP/IP stack to poll the link state at startup
+   interface->phyEvent = TRUE;
+   //Notify the TCP/IP stack of the event
+   osSetEvent(&netEvent);
+
    //Successful initialization
    return NO_ERROR;
 }
@@ -87,12 +92,12 @@ error_t ksz9031Init(NetInterface *interface)
 
 void ksz9031Tick(NetInterface *interface)
 {
+   uint16_t value;
+   bool_t linkState;
+
    //No external interrupt line driver?
    if(interface->extIntDriver == NULL)
    {
-      uint16_t value;
-      bool_t linkState;
-
       //Read basic status register
       value = ksz9031ReadPhyReg(interface, KSZ9031_PHY_REG_BMSR);
       //Retrieve current link state
@@ -101,18 +106,18 @@ void ksz9031Tick(NetInterface *interface)
       //Link up event?
       if(linkState && !interface->linkState)
       {
-         //A PHY event is pending...
+         //Set event flag
          interface->phyEvent = TRUE;
-         //Notify the user that the link state has changed
-         osSetEvent(&interface->nicRxEvent);
+         //Notify the TCP/IP stack of the event
+         osSetEvent(&netEvent);
       }
       //Link down event?
       else if(!linkState && interface->linkState)
       {
-         //A PHY event is pending...
+         //Set event flag
          interface->phyEvent = TRUE;
-         //Notify the user that the link state has changed
-         osSetEvent(&interface->nicRxEvent);
+         //Notify the TCP/IP stack of the event
+         osSetEvent(&netEvent);
       }
    }
 }
@@ -147,10 +152,9 @@ void ksz9031DisableIrq(NetInterface *interface)
 /**
  * @brief KSZ9031 event handler
  * @param[in] interface Underlying network interface
- * @return TRUE if a link state change notification is received
  **/
 
-bool_t ksz9031EventHandler(NetInterface *interface)
+void ksz9031EventHandler(NetInterface *interface)
 {
    uint16_t value;
 
@@ -160,7 +164,9 @@ bool_t ksz9031EventHandler(NetInterface *interface)
    //Link status change?
    if(value & (ICSR_LINK_DOWN_IF | ICSR_LINK_UP_IF))
    {
-      //Read basic status register
+      //Any link failure condition is latched in the BMSR register... Reading
+      //the register twice will always return the actual link status
+      value = ksz9031ReadPhyReg(interface, KSZ9031_PHY_REG_BMSR);
       value = ksz9031ReadPhyReg(interface, KSZ9031_PHY_REG_BMSR);
 
       //Link is up?
@@ -173,20 +179,17 @@ bool_t ksz9031EventHandler(NetInterface *interface)
          if(value & PHYCON_SPEED_1000BT)
          {
             //1000BASE-T
-            interface->speed100 = FALSE;
-            interface->speed1000 = TRUE;
+            interface->linkSpeed = NIC_LINK_SPEED_1GBPS;
          }
          else if(value & PHYCON_SPEED_100BTX)
          {
             //100BASE-TX
-            interface->speed100 = TRUE;
-            interface->speed1000 = FALSE;
+            interface->linkSpeed = NIC_LINK_SPEED_100MBPS;
          }
          else if(value & PHYCON_SPEED_10BT)
          {
             //10BASE-T
-            interface->speed100 = FALSE;
-            interface->speed1000 = FALSE;
+            interface->linkSpeed = NIC_LINK_SPEED_10MBPS;
          }
          else
          {
@@ -196,35 +199,24 @@ bool_t ksz9031EventHandler(NetInterface *interface)
 
          //Check current duplex mode
          if(value & PHYCON_DUPLEX_STATUS)
-            interface->fullDuplex = TRUE;
+            interface->duplexMode = NIC_FULL_DUPLEX_MODE;
          else
-            interface->fullDuplex = FALSE;
+            interface->duplexMode = NIC_HALF_DUPLEX_MODE;
 
          //Update link state
          interface->linkState = TRUE;
-         //Display link state
-         TRACE_INFO("Link is up (%s)...\r\n", interface->name);
 
-         //Display actual speed and duplex mode
-         TRACE_INFO("%s %s\r\n",
-            interface->speed1000 ? "1000BASE-T" : (interface->speed100 ? "100BASE-TX" : "10BASE-T"),
-            interface->fullDuplex ? "Full-Duplex" : "Half-Duplex");
+         //Adjust MAC configuration parameters for proper operation
+         interface->nicDriver->updateMacConfig(interface);
       }
       else
       {
          //Update link state
          interface->linkState = FALSE;
-         //Display link state
-         TRACE_INFO("Link is down (%s)...\r\n", interface->name);
       }
 
-      //Notify the user that the link state has changed
-      return TRUE;
-   }
-   else
-   {
-      //No link state change...
-      return FALSE;
+      //Process link state change event
+      nicNotifyLinkChange(interface);
    }
 }
 

@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _LAN8740_H
@@ -230,17 +230,17 @@
 #define TDRCSR_CH_LENGTH7           (1 << 7)
 #define TDRCSR_CH_LENGTH6           (1 << 6)
 #define TDRCSR_CH_LENGTH5           (1 << 5)
-#define TDRCSR_CHLENGTH4            (1 << 4)
+#define TDRCSR_CH_LENGTH4           (1 << 4)
 #define TDRCSR_CH_LENGTH3           (1 << 3)
 #define TDRCSR_CH_LENGTH2           (1 << 2)
 #define TDRCSR_CH_LENGTH1           (1 << 1)
 #define TDRCSR_CH_LENGTH0           (1 << 0)
 
 //SCSIR register
-#define SCSIR_AMDIXCTRL            (1 << 15)
-#define SCSIR_CH_SELECT            (1 << 13)
-#define SCSIR_SQEOFF               (1 << 11)
-#define SCSIR_XPOL                 (1 << 4)
+#define SCSIR_AMDIXCTRL             (1 << 15)
+#define SCSIR_CH_SELECT             (1 << 13)
+#define SCSIR_SQEOFF                (1 << 11)
+#define SCSIR_XPOL                  (1 << 4)
 
 //CLR register
 #define CLR_CBLN3                   (1 << 15)
@@ -293,7 +293,7 @@ void lan8740Tick(NetInterface *interface);
 void lan8740EnableIrq(NetInterface *interface);
 void lan8740DisableIrq(NetInterface *interface);
 
-bool_t lan8740EventHandler(NetInterface *interface);
+void lan8740EventHandler(NetInterface *interface);
 
 void lan8740WritePhyReg(NetInterface *interface, uint8_t address, uint16_t data);
 uint16_t lan8740ReadPhyReg(NetInterface *interface, uint8_t address);

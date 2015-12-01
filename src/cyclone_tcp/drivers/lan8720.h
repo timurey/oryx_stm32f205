@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _LAN8720_H
@@ -199,7 +199,7 @@ void lan8720Tick(NetInterface *interface);
 void lan8720EnableIrq(NetInterface *interface);
 void lan8720DisableIrq(NetInterface *interface);
 
-bool_t lan8720EventHandler(NetInterface *interface);
+void lan8720EventHandler(NetInterface *interface);
 
 void lan8720WritePhyReg(NetInterface *interface, uint8_t address, uint16_t data);
 uint16_t lan8720ReadPhyReg(NetInterface *interface, uint8_t address);

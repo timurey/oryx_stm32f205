@@ -23,18 +23,11 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _SAMA5D3_GIGABIT_ETH_H
 #define _SAMA5D3_GIGABIT_ETH_H
-
-//Network interface
-#ifndef SAMA5D3_GIGABIT_ETH_INTERFACE_ID
-   #define SAMA5D3_GIGABIT_ETH_INTERFACE_ID 0
-#elif (SAMA5D3_GIGABIT_ETH_INTERFACE_ID < 0)
-   #error SAMA5D3_GIGABIT_ETH_INTERFACE_ID parameter is not valid
-#endif
 
 //Number of TX buffers
 #ifndef SAMA5D3_GIGABIT_ETH_TX_BUFFER_COUNT
@@ -156,13 +149,14 @@ void sama5d3GigabitEthDisableIrq(NetInterface *interface);
 void sama5d3GigabitEthIrqHandler(void);
 void sama5d3GigabitEthEventHandler(NetInterface *interface);
 
-error_t sama5d3GigabitEthSetMacFilter(NetInterface *interface);
-
 error_t sama5d3GigabitEthSendPacket(NetInterface *interface,
    const NetBuffer *buffer, size_t offset);
 
 uint_t sama5d3GigabitEthReceivePacket(NetInterface *interface,
    uint8_t *buffer, size_t size);
+
+error_t sama5d3GigabitEthSetMulticastFilter(NetInterface *interface);
+error_t sama5d3GigabitEthUpdateMacConfig(NetInterface *interface);
 
 void sama5d3GigabitEthWritePhyReg(uint8_t phyAddr, uint8_t regAddr, uint16_t data);
 uint16_t sama5d3GigabitEthReadPhyReg(uint8_t phyAddr, uint8_t regAddr);

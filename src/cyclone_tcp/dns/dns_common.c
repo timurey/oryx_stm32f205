@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -31,7 +31,6 @@
 
 //Dependencies
 #include <string.h>
-#include <ctype.h>
 #include "core/net.h"
 #include "dns/dns_client.h"
 #include "dns/dns_common.h"
@@ -102,8 +101,8 @@ size_t dnsEncodeName(const char_t *src, uint8_t *dest)
          src += i + 1;
          i = 0;
       }
-      //Valid character detected?
-      else if(isalnum((uint8_t) src[i]) || src[i] == '-' || src[i] == '_' || src[i] == ' ')
+      //Any other character?
+      else
       {
          //Copy current character
          if(dest != NULL)
@@ -111,12 +110,6 @@ size_t dnsEncodeName(const char_t *src, uint8_t *dest)
 
          //Point to the next character
          i++;
-      }
-      //Invalid character detected?
-      else
-      {
-         //Stop parsing the input string
-         return 0;
       }
    }
 }
@@ -161,7 +154,7 @@ size_t dnsParseName(const DnsHeader *message,
          return (pos + 1);
       }
       //Compression tag found?
-      if(src[pos] >= DNS_COMPRESSION_TAG)
+      else if(src[pos] >= DNS_COMPRESSION_TAG)
       {
          //Malformed DNS message?
          if((pos + 1) >= length)
@@ -237,78 +230,230 @@ size_t dnsParseName(const DnsHeader *message,
  * @param[in] pos Offset of the encoded domain name
  * @param[in] name NULL-terminated string that holds a domain name
  * @param[in] level Current level of recursion
- * @return TRUE if the domain names match, else FALSE
+ * @return The function returns 0 if the domain names match, -1 if the first
+ *   domain name lexicographically precedes the second name, or 1 if the
+ *   second domain name lexicographically precedes the first name
  **/
 
-bool_t dnsCompareName(const DnsHeader *message,
-   size_t length, size_t pos, const char_t *name, uint_t level)
+int_t dnsCompareName(const DnsHeader *message, size_t length,
+   size_t pos, const char_t *name, uint_t level)
 {
+   int_t res;
    size_t n;
    size_t pointer;
-   uint8_t *src;
+   uint8_t *p;
 
    //Recursion limit exceeded?
    if(level >= DNS_NAME_MAX_RECURSION)
-      return FALSE;
+      return -2;
 
-   //Cast the input DNS message to byte array
-   src = (uint8_t *) message;
+   //Cast the DNS message to byte array
+   p = (uint8_t *) message;
 
    //Parse encoded domain name
    while(pos < length)
    {
+      //Retrieve the length of the current label
+      n = p[pos];
+
       //End marker found?
-      if(src[pos] == 0)
+      if(n == 0)
       {
-         //Return comparison result
-         return (*name == '\0') ? TRUE : FALSE;
+         //The domain name which still has remaining data is deemed
+         //lexicographically later
+         if(*name != '\0')
+            return -1;
+
+         //The domain names match each other
+         return 0;
       }
       //Compression tag found?
-      if(src[pos] >= DNS_COMPRESSION_TAG)
+      else if(n >= DNS_COMPRESSION_TAG)
       {
          //Malformed DNS message?
          if((pos + 1) >= length)
             return FALSE;
 
          //Read the most significant byte of the pointer
-         pointer = (src[pos] & ~DNS_COMPRESSION_TAG) << 8;
+         pointer = (p[pos] & ~DNS_COMPRESSION_TAG) << 8;
          //Read the least significant byte of the pointer
-         pointer |= src[pos + 1];
+         pointer |= p[pos + 1];
 
-         //Compare the remaining part of the domain name
-         return dnsCompareName(message, length, pointer, name, level + 1);
+         //Compare the remaining part
+         res = dnsCompareName(message, length, pointer, name, level + 1);
+
+         //Return comparison result
+         return res;
       }
-      //Valid label length?
-      else if(src[pos] < DNS_LABEL_MAX_SIZE)
+      else
       {
-         //Get the length of the current label
-         n = src[pos++];
+         //Advance data pointer
+         pos++;
 
          //Malformed DNS message?
          if((pos + n) > length)
-            return FALSE;
+            return -2;
+
          //Compare current label
-         if(strncasecmp((char_t *) src + pos, name, n))
-            return FALSE;
+         res = strncasecmp((char_t *) p + pos, name, n);
+         //Any mismatch?
+         if(res)
+            return res;
 
          //Advance data pointer
          pos += n;
          name += n;
 
-         //Any separator?
+         //The domain name which still has remaining data is deemed
+         //lexicographically later
+         if(*name != '\0' && *name != '.')
+            return -1;
+
+         //Skip the separator character, if any
          if(*name == '.')
             name++;
       }
-      //Invalid label length?
+   }
+
+   //Malformed DNS message
+   return -2;
+}
+
+
+/**
+ * @brief Compare domain names encoded with DNS notation
+ * @param[in] message1 Pointer to the first DNS message
+ * @param[in] length1 Length of the first DNS message
+ * @param[in] pos1 Offset of the encoded domain name within the first message
+ * @param[in] message2 Pointer to the second DNS message
+ * @param[in] length2 Length of the second DNS message
+ * @param[in] pos2 Offset of the encoded domain name within the second message
+ * @param[in] level Current level of recursion
+ * @return The function returns 0 if the domain names match, -1 if the first
+ *   domain name lexicographically precedes the second name, or 1 if the
+ *   second domain name lexicographically precedes the first name
+ **/
+
+int_t dnsCompareEncodedName(const DnsHeader *message1, size_t length1, size_t pos1,
+   const DnsHeader *message2, size_t length2, size_t pos2, uint_t level)
+{
+   int_t res;
+   size_t n;
+   size_t n1;
+   size_t n2;
+   size_t pointer1;
+   size_t pointer2;
+   uint8_t *p1;
+   uint8_t *p2;
+
+   //Recursion limit exceeded?
+   if(level >= DNS_NAME_MAX_RECURSION)
+      return -2;
+
+   //Cast DNS messages to byte array
+   p1 = (uint8_t *) message1;
+   p2 = (uint8_t *) message2;
+
+   //Compare encoded domain names
+   while(pos1 < length1 && pos2 < length2)
+   {
+      //Retrieve the length of each label
+      n1 = p1[pos1];
+      n2 = p2[pos2];
+
+      //End marker found?
+      if(n1 == 0 || n2 == 0)
+      {
+         //The domain name which still has remaining data is deemed
+         //lexicographically later
+         if(n1 < n2)
+            return -1;
+         else if(n1 > n2)
+            return 1;
+
+         //The domain names match each other
+         return 0;
+      }
+      //Compression tag found?
+      else if(n1 >= DNS_COMPRESSION_TAG || n2 >= DNS_COMPRESSION_TAG)
+      {
+         //First domain name compressed?
+         if(n1 >= DNS_COMPRESSION_TAG)
+         {
+            //Malformed DNS message?
+            if((pos1 + 1) >= length1)
+               return -2;
+
+            //Read the most significant byte of the pointer
+            pointer1 = (p1[pos1] & ~DNS_COMPRESSION_TAG) << 8;
+            //Read the least significant byte of the pointer
+            pointer1 |= p1[pos1 + 1];
+         }
+         else
+         {
+            //The first domain name is not compressed
+            pointer1 = pos1;
+         }
+
+         //Second domain name compressed?
+         if(n2 >= DNS_COMPRESSION_TAG)
+         {
+            //Malformed DNS message?
+            if((pos2 + 1) >= length2)
+               return -2;
+
+            //Read the most significant byte of the pointer
+            pointer2 = (p2[pos2] & ~DNS_COMPRESSION_TAG) << 8;
+            //Read the least significant byte of the pointer
+            pointer2 |= p2[pos2 + 1];
+         }
+         else
+         {
+            //The second domain name is not compressed
+            pointer2 = pos2;
+         }
+
+         //Compare the remaining part
+         res = dnsCompareEncodedName(message1, length1, pointer1,
+            message2, length2, pointer2, level + 1);
+
+         //Return comparison result
+         return res;
+      }
       else
       {
-         //Comparison failed
-         return FALSE;
+         //Advance data pointer
+         pos1++;
+         pos2++;
+
+         //Malformed DNS message?
+         if((pos1 + n1) > length1 || (pos2 + n2) > length2)
+            return -2;
+
+         //Compare as much data as possible
+         n = MIN(n1, n2);
+
+         //Compare labels
+         res = strncasecmp((char_t *) p1 + pos1, (char_t *) p2 + pos2, n);
+         //Any mismatch?
+         if(res)
+            return res;
+
+         //The domain name which still has remaining data is deemed
+         //lexicographically later
+         if(n1 < n2)
+            return -1;
+         else if(n1 > n2)
+            return 1;
+
+         //Advance data pointer
+         pos1 += n1;
+         pos2 += n2;
       }
    }
 
-   //Comparison failed
-   return FALSE;
+   //Malformed DNS message
+   return -2;
 }
 
 #endif

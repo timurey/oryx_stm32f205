@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -159,7 +159,7 @@ error_t snmpEncodeUnsignedInt64(uint64_t value, uint8_t *dest, size_t *length)
       return ERROR_INVALID_PARAMETER;
 
    //The integer is encoded MSB first
-   value = htobe32(value);
+   value = htobe64(value);
    //Cast the integer to byte array
    src = (uint8_t *) &value;
 

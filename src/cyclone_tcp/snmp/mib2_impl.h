@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _MIB2_IMPL_H
@@ -31,18 +31,26 @@
 
 //Dependencies
 #include "core/net.h"
-#include "snmp/mib_common.h"
+#include "snmp/mib2_module.h"
 
 //Macro definitions
-#define MIB2_LOCK() mib2Lock()
-#define MIB2_UNLOCK() mib2Unlock()
-#define MIB2_SET_INTEGER(name, value) name = value
-#define MIB2_SET_GAUGE32(name, value) name = value
-#define MIB2_SET_TIME_TICKS(name, value) name = value
-#define MIB2_SET_OCTET_STRING(name, value, length) memcpy(name, value, length)
-#define MIB2_SET_OCTET_STRING_LEN(name, length) name = length
-#define MIB2_INC_COUNTER32(name, value) name += value
-#define MIB2_INC_COUNTER64(name, value) name += value
+#if (MIB2_SUPPORT == ENABLED)
+   #define MIB2_SET_INTEGER(name, value) name = value
+   #define MIB2_SET_GAUGE32(name, value) name = value
+   #define MIB2_SET_TIME_TICKS(name, value) name = value
+   #define MIB2_SET_OCTET_STRING(name, value, length) memcpy(name, value, length)
+   #define MIB2_SET_OCTET_STRING_LEN(name, length) name = length
+   #define MIB2_INC_COUNTER32(name, value) name += value
+   #define MIB2_INC_COUNTER64(name, value) name += value
+#else
+   #define MIB2_SET_INTEGER(name, value)
+   #define MIB2_SET_GAUGE32(name, value)
+   #define MIB2_SET_TIME_TICKS(name, value)
+   #define MIB2_SET_OCTET_STRING(name, value, length)
+   #define MIB2_SET_OCTET_STRING_LEN(name, length)
+   #define MIB2_INC_COUNTER32(name, value)
+   #define MIB2_INC_COUNTER64(name, value)
+#endif
 
 //MIB-II related functions
 error_t mib2Init(void);

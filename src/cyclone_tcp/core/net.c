@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -42,22 +42,35 @@
 #include "ipv6/ipv6_routing.h"
 #include "ipv6/mld.h"
 #include "ipv6/ndp.h"
+#include "ipv6/ndp_router_adv.h"
+#include "dhcp/dhcp_client.h"
 #include "dns/dns_cache.h"
 #include "dns/dns_client.h"
 #include "mdns/mdns_client.h"
 #include "mdns/mdns_responder.h"
 #include "mdns/mdns_common.h"
+#include "dns_sd/dns_sd.h"
 #include "netbios/nbns_client.h"
 #include "netbios/nbns_responder.h"
 #include "netbios/nbns_common.h"
 #include "dns_sd/dns_sd.h"
 #include "snmp/mib2_module.h"
 #include "snmp/mib2_impl.h"
+#include "web_socket/web_socket.h"
+#include "str.h"
 #include "debug.h"
 
+//Mutex preventing simultaneous access to the TCP/IP stack
+OsMutex netMutex;
+//Event object to receive notifications from device drivers
+OsEvent netEvent;
 //Network interfaces
 NetInterface netInterface[NET_INTERFACE_COUNT];
 
+//TCP/IP process state
+static bool_t netTaskRunning;
+//Timestamp
+static systime_t netTimestamp;
 //Pseudo-random number generator state
 static uint32_t prngState = 0;
 
@@ -69,9 +82,9 @@ static LinkChangeCallbackDesc callbackTable[NET_CALLBACK_TABLE_SIZE];
 //Check TCP/IP stack configuration
 #if (NET_STATIC_OS_RESOURCES == ENABLED)
 
-//Task responsible for handling periodic operations
-static OsTask tickTask;
-static uint_t tickTaskStack[NET_TICK_STACK_SIZE];
+//Task responsible for handling TCP/IP events
+static OsTask netTaskInstance;
+static uint_t netTaskStack[NET_TASK_STACK_SIZE];
 
 #endif
 
@@ -86,12 +99,28 @@ error_t netInit(void)
    error_t error;
    uint_t i;
    NetInterface *interface;
-#if (MIB2_SUPPORT == ENABLED)
-   size_t n;
-#endif
 #if (NET_STATIC_OS_RESOURCES == DISABLED)
    OsTask *task;
 #endif
+
+   //The TCP/IP process is currently suspended
+   netTaskRunning = FALSE;
+   //Initialize timestamp
+   netTimestamp = 0;
+
+   //Create a mutex to prevent simultaneous access to the TCP/IP stack
+   if(!osCreateMutex(&netMutex))
+   {
+      //Failed to create mutex
+      return ERROR_OUT_OF_RESOURCES;
+   }
+
+   //Create a event object to receive notifications from device drivers
+   if(!osCreateEvent(&netEvent))
+   {
+      //Failed to create mutex
+      return ERROR_OUT_OF_RESOURCES;
+   }
 
    //Memory pool initialization
    error = memPoolInit();
@@ -101,10 +130,8 @@ error_t netInit(void)
    //Clear configuration data for each interface
    memset(netInterface, 0, sizeof(netInterface));
 
-#if (MIB2_SUPPORT == ENABLED)
    //Save the number of interfaces
    MIB2_SET_INTEGER(mib2Base.ifGroup.ifNumber, NET_INTERFACE_COUNT);
-#endif
 
    //Loop through network interfaces
    for(i = 0; i < NET_INTERFACE_COUNT; i++)
@@ -120,21 +147,18 @@ error_t netInit(void)
 #if (MIB2_SUPPORT == ENABLED)
       //MIB ifEntry object
       interface->mibIfEntry = &mib2Base.ifGroup.ifTable[i];
-
-      //Retrieve the length of the interface name
-      n = strlen(interface->name);
+#endif
 
       //Interface identifier
       MIB2_SET_INTEGER(interface->mibIfEntry->ifIndex, i + 1);
       //Interface name
-      MIB2_SET_OCTET_STRING(interface->mibIfEntry->ifDescr, interface->name, n);
-      MIB2_SET_OCTET_STRING_LEN(interface->mibIfEntry->ifDescrLen, n);
+      MIB2_SET_OCTET_STRING(interface->mibIfEntry->ifDescr, interface->name, strlen(interface->name));
+      MIB2_SET_OCTET_STRING_LEN(interface->mibIfEntry->ifDescrLen, strlen(interface->name));
       //Default interface type
       MIB2_SET_INTEGER(interface->mibIfEntry->ifType, MIB2_IF_TYPE_OTHER);
       //Default interface state
       MIB2_SET_INTEGER(interface->mibIfEntry->ifAdminStatus, MIB2_IF_ADMIN_STATUS_DOWN);
       MIB2_SET_INTEGER(interface->mibIfEntry->ifOperStatus, MIB2_IF_OPER_STATUS_DOWN);
-#endif
    }
 
    //Create a mutex to prevent simultaneous access to the callback table
@@ -152,9 +176,14 @@ error_t netInit(void)
    //Any error to report?
    if(error) return error;
 
+#if (WEB_SOCKET_SUPPORT == ENABLED)
+   //WebSocket related initialization
+   webSocketInit();
+#endif
+
 #if (IPV6_SUPPORT == ENABLED && IPV6_ROUTING_SUPPORT == ENABLED)
    //Initialize IPv6 routing table
-   error = ipv6InitRoutingTable();
+   error = ipv6InitRouting();
    //Any error to report?
    if(error) return error;
 #endif
@@ -181,22 +210,77 @@ error_t netInit(void)
    if(error) return error;
 #endif
 
+   //Initialize tick counters
+   nicTickCounter = 0;
+
+#if (PPP_SUPPORT == ENABLED)
+   pppTickCounter = 0;
+#endif
+#if (IPV4_SUPPORT == ENABLED && ETH_SUPPORT == ENABLED)
+   arpTickCounter = 0;
+#endif
+#if (IPV4_SUPPORT == ENABLED && IPV4_FRAG_SUPPORT == ENABLED)
+   ipv4FragTickCounter = 0;
+#endif
+#if (IPV4_SUPPORT == ENABLED && IGMP_SUPPORT == ENABLED)
+   igmpTickCounter = 0;
+#endif
+#if (IPV4_SUPPORT == ENABLED && AUTO_IP_SUPPORT == ENABLED)
+   autoIpTickCounter = 0;
+#endif
+#if (IPV4_SUPPORT == ENABLED && DHCP_CLIENT_SUPPORT == ENABLED)
+   dhcpClientTickCounter = 0;
+#endif
+#if (IPV6_SUPPORT == ENABLED && IPV6_FRAG_SUPPORT == ENABLED)
+   ipv6FragTickCounter = 0;
+#endif
+#if (IPV6_SUPPORT == ENABLED && MLD_SUPPORT == ENABLED)
+   mldTickCounter = 0;
+#endif
+#if (IPV6_SUPPORT == ENABLED && NDP_SUPPORT == ENABLED)
+   ndpTickCounter = 0;
+#endif
+#if (IPV6_SUPPORT == ENABLED && NDP_ROUTER_ADV_SUPPORT == ENABLED)
+   ndpRouterAdvTickCounter = 0;
+#endif
+#if (IPV6_SUPPORT == ENABLED && DHCPV6_CLIENT_SUPPORT == ENABLED)
+   dhcpv6ClientTickCounter = 0;
+#endif
+#if (TCP_SUPPORT == ENABLED)
+   tcpTickCounter = 0;
+#endif
+#if (DNS_CLIENT_SUPPORT == ENABLED || MDNS_CLIENT_SUPPORT == ENABLED || \
+   NBNS_CLIENT_SUPPORT == ENABLED)
+   dnsTickCounter = 0;
+#endif
+#if (MDNS_RESPONDER_SUPPORT == ENABLED)
+   mdnsResponderTickCounter = 0;
+#endif
+#if (DNS_SD_SUPPORT == ENABLED)
+   dnsSdTickCounter = 0;
+#endif
+
 #if (NET_STATIC_OS_RESOURCES == ENABLED)
-   //Create task to handle periodic operations
-   osCreateStaticTask(&tickTask, "TCP/IP Stack (Tick)", netTickTask,
-      NULL, tickTaskStack, NET_TICK_STACK_SIZE, NET_TICK_PRIORITY);
+   //Create a task to handle TCP/IP events
+   osCreateStaticTask(&netTaskInstance, "TCP/IP Stack", (OsTaskCode) netTask,
+      NULL, netTaskStack, NET_TASK_STACK_SIZE, NET_TASK_PRIORITY);
 #else
-   //Create task to handle periodic operations
-   task = osCreateTask("TCP/IP Stack (Tick)", netTickTask,
-      NULL, NET_TICK_STACK_SIZE, NET_TICK_PRIORITY);
+   //Create a task to handle TCP/IP events
+   task = osCreateTask("TCP/IP Stack", (OsTaskCode) netTask,
+      NULL, NET_TASK_STACK_SIZE, NET_TASK_PRIORITY);
 
    //Unable to create the task?
    if(task == OS_INVALID_HANDLE)
       return ERROR_OUT_OF_RESOURCES;
 #endif
 
-   //Return status code
-   return error;
+#if (NET_RTOS_SUPPORT == DISABLED)
+   //The TCP/IP process is now running
+   netTaskRunning = TRUE;
+#endif
+
+   //Successful initialization
+   return NO_ERROR;
 }
 
 
@@ -213,8 +297,23 @@ error_t netSetMacAddr(NetInterface *interface, const MacAddr *macAddr)
    if(interface == NULL || macAddr == NULL)
       return ERROR_INVALID_PARAMETER;
 
+#if (ETH_SUPPORT == ENABLED)
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
+
    //Set MAC address
    interface->macAddr = *macAddr;
+
+   //Generate the 64-bit interface identifier
+   macAddrToEui64(macAddr, &interface->eui64);
+
+   //Interface's physical address
+   MIB2_SET_OCTET_STRING(interface->mibIfEntry->ifPhysAddress, &interface->macAddr, 6);
+   MIB2_SET_OCTET_STRING_LEN(interface->mibIfEntry->ifPhysAddressLen, 6);
+
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
+#endif
 
    //Successful processing
    return NO_ERROR;
@@ -234,8 +333,64 @@ error_t netGetMacAddr(NetInterface *interface, MacAddr *macAddr)
    if(interface == NULL || macAddr == NULL)
       return ERROR_INVALID_PARAMETER;
 
+#if (ETH_SUPPORT == ENABLED)
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
    //Get MAC address
    *macAddr = interface->macAddr;
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
+#endif
+
+   //Successful processing
+   return NO_ERROR;
+}
+
+
+/**
+ * @brief Set EUI-64 interface identifier
+ * @param[in] interface Pointer to the desired network interface
+ * @param[in] eui64 Interface identifier
+ * @return Error code
+ **/
+
+error_t netSetEui64(NetInterface *interface, const Eui64 *eui64)
+{
+   //Check parameters
+   if(interface == NULL || eui64 == NULL)
+      return ERROR_INVALID_PARAMETER;
+
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
+   //Set interface identifier
+   interface->eui64 = *eui64;
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
+
+   //Successful processing
+   return NO_ERROR;
+}
+
+
+/**
+ * @brief Retrieve EUI-64 interface identifier
+ * @param[in] interface Pointer to the desired network interface
+ * @param[out] eui64 Interface identifier
+ * @return Error code
+ **/
+
+error_t netGetEui64(NetInterface *interface, Eui64 *eui64)
+{
+   //Check parameters
+   if(interface == NULL || eui64 == NULL)
+      return ERROR_INVALID_PARAMETER;
+
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
+   //Get interface identifier
+   *eui64 = interface->eui64;
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //Successful processing
    return NO_ERROR;
@@ -251,33 +406,31 @@ error_t netGetMacAddr(NetInterface *interface, MacAddr *macAddr)
 
 error_t netSetInterfaceName(NetInterface *interface, const char_t *name)
 {
+#if (MIB2_SUPPORT == ENABLED)
    size_t n;
+#endif
 
    //Check parameters
    if(interface == NULL || name == NULL)
       return ERROR_INVALID_PARAMETER;
 
-   //Get the length of the string
-   n = strlen(name);
-   //Limit the number of characters to be copied
-   n = MIN(n, NET_MAX_IF_NAME_LEN - 1);
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
 
    //Set interface name
-   strncpy(interface->name, name, n);
-   //Properly terminate the string with a NULL character
-   interface->name[n] = '\0';
+   strSafeCopy(interface->name, name, NET_MAX_IF_NAME_LEN);
 
 #if (MIB2_SUPPORT == ENABLED)
-   //Enter critical section
-   MIB2_LOCK();
+   //Get the length of the string
+   n = strlen(interface->name);
 
    //Text string containing information about the interface
-   MIB2_SET_OCTET_STRING(interface->mibIfEntry->ifDescr, name, n);
+   MIB2_SET_OCTET_STRING(interface->mibIfEntry->ifDescr, interface->name, n);
    MIB2_SET_OCTET_STRING_LEN(interface->mibIfEntry->ifDescrLen, n);
-
-   //Leave critical section
-   MIB2_UNLOCK();
 #endif
+
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //Successful processing
    return NO_ERROR;
@@ -293,21 +446,18 @@ error_t netSetInterfaceName(NetInterface *interface, const char_t *name)
 
 error_t netSetHostname(NetInterface *interface, const char_t *name)
 {
-   size_t n;
-
    //Check parameters
    if(interface == NULL || name == NULL)
       return ERROR_INVALID_PARAMETER;
 
-   //Get the length of the string
-   n = strlen(name);
-   //Limit the number of characters to be copied
-   n = MIN(n, NET_MAX_HOSTNAME_LEN - 1);
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
 
    //Set host name
-   strncpy(interface->hostname, name, n);
-   //Properly terminate the string with a NULL character
-   interface->hostname[n] = '\0';
+   strSafeCopy(interface->hostname, name, NET_MAX_HOSTNAME_LEN);
+
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //Successful processing
    return NO_ERROR;
@@ -324,24 +474,20 @@ error_t netSetHostname(NetInterface *interface, const char_t *name)
 
 error_t netSetProxy(NetInterface *interface, const char_t *name, uint16_t port)
 {
-   size_t n;
-
    //Check parameters
    if(interface == NULL || name == NULL)
       return ERROR_INVALID_PARAMETER;
 
-   //Get the length of the string
-   n = strlen(name);
-   //Limit the number of characters to be copied
-   n = MIN(n, NET_MAX_PROXY_NAME_LEN - 1);
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
 
    //Set proxy server name
-   strncpy(interface->proxyName, name, n);
-   //Properly terminate the string with a NULL character
-   interface->proxyName[n] = '\0';
-
+   strSafeCopy(interface->proxyName, name, NET_MAX_PROXY_NAME_LEN);
    //Set proxy server port
    interface->proxyPort = port;
+
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //Successful processing
    return NO_ERROR;
@@ -361,12 +507,11 @@ error_t netSetDriver(NetInterface *interface, const NicDriver *driver)
    if(interface == NULL || driver == NULL)
       return ERROR_INVALID_PARAMETER;
 
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
+
    //Set Ethernet MAC driver
    interface->nicDriver = driver;
-
-#if (MIB2_SUPPORT == ENABLED)
-   //Enter critical section
-   MIB2_LOCK();
 
    //Set interface type
    if(driver->type == NIC_TYPE_ETHERNET)
@@ -379,6 +524,11 @@ error_t netSetDriver(NetInterface *interface, const NicDriver *driver)
       //PPP interface
       MIB2_SET_INTEGER(interface->mibIfEntry->ifType, MIB2_IF_TYPE_PPP);
    }
+   else if(driver->type == NIC_TYPE_6LOWPAN)
+   {
+      //IEEE 802.15.4 WPAN interface
+      MIB2_SET_INTEGER(interface->mibIfEntry->ifType, MIB2_IF_TYPE_IEEE_802_15_4);
+   }
    else
    {
       //Unknown interface type
@@ -390,9 +540,8 @@ error_t netSetDriver(NetInterface *interface, const NicDriver *driver)
    //Update interface state
    MIB2_SET_INTEGER(interface->mibIfEntry->ifAdminStatus, MIB2_IF_ADMIN_STATUS_UP);
 
-   //Leave critical section
-   MIB2_UNLOCK();
-#endif
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //Successful processing
    return NO_ERROR;
@@ -412,8 +561,12 @@ error_t netSetPhyDriver(NetInterface *interface, const PhyDriver *driver)
    if(interface == NULL || driver == NULL)
       return ERROR_INVALID_PARAMETER;
 
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
    //Set Ethernet PHY driver
    interface->phyDriver = driver;
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //Successful processing
    return NO_ERROR;
@@ -433,8 +586,12 @@ error_t netSetSpiDriver(NetInterface *interface, const SpiDriver *driver)
    if(interface == NULL || driver == NULL)
       return ERROR_INVALID_PARAMETER;
 
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
    //Set SPI driver
    interface->spiDriver = driver;
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //Successful processing
    return NO_ERROR;
@@ -454,8 +611,12 @@ error_t netSetUartDriver(NetInterface *interface, const UartDriver *driver)
    if(interface == NULL || driver == NULL)
       return ERROR_INVALID_PARAMETER;
 
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
    //Set UART driver
    interface->uartDriver = driver;
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //Successful processing
    return NO_ERROR;
@@ -475,8 +636,12 @@ error_t netSetExtIntDriver(NetInterface *interface, const ExtIntDriver *driver)
    if(interface == NULL || driver == NULL)
       return ERROR_INVALID_PARAMETER;
 
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
    //Set external interrupt line driver
    interface->extIntDriver = driver;
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //Successful processing
    return NO_ERROR;
@@ -491,12 +656,21 @@ error_t netSetExtIntDriver(NetInterface *interface, const ExtIntDriver *driver)
 
 bool_t netGetLinkState(NetInterface *interface)
 {
+   bool_t linkState;
+
    //Check parameter
    if(interface == NULL)
       return FALSE;
 
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
+   //Retrieve link state
+   linkState = interface->linkState;
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
+
    //Return link state
-   return interface->linkState;
+   return linkState;
 }
 
 
@@ -514,7 +688,10 @@ error_t netConfigInterface(NetInterface *interface)
    if(interface == NULL)
       return ERROR_INVALID_PARAMETER;
 
-   //Disable Ethernet controller interrupts
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
+
+   //Disable hardware interrupts
    interface->nicDriver->disableIrq(interface);
 
    //Start of exception handling block
@@ -529,60 +706,34 @@ error_t netConfigInterface(NetInterface *interface)
          break;
       }
 
-      //Receive notifications when a Ethernet frame has been received,
-      //or the link status has changed
-      if(!osCreateEvent(&interface->nicRxEvent))
-      {
-         //Failed to create event object
-         error = ERROR_OUT_OF_RESOURCES;
-         //Stop immediately
-         break;
-      }
-
-      //Create a mutex to prevent simultaneous access to the NIC driver
-      if(!osCreateMutex(&interface->nicDriverMutex))
-      {
-         //Failed to create mutex
-         error = ERROR_OUT_OF_RESOURCES;
-         //Stop immediately
-         break;
-      }
-
       //Network controller initialization
       error = interface->nicDriver->init(interface);
       //Any error to report?
       if(error) break;
-
-#if (MIB2_SUPPORT == ENABLED)
-      //Enter critical section
-      MIB2_LOCK();
-
-      //Interface's physical address
-      MIB2_SET_OCTET_STRING(interface->mibIfEntry->ifPhysAddress, &interface->macAddr, 6);
-      MIB2_SET_OCTET_STRING_LEN(interface->mibIfEntry->ifPhysAddressLen, 6);
-
-      //Leave critical section
-      MIB2_UNLOCK();
-#endif
 
 #if (ETH_SUPPORT == ENABLED)
       //Ethernet related initialization
       error = ethInit(interface);
       //Any error to report?
       if(error) break;
+
+      //Interface's physical address
+      MIB2_SET_OCTET_STRING(interface->mibIfEntry->ifPhysAddress, &interface->macAddr, 6);
+      MIB2_SET_OCTET_STRING_LEN(interface->mibIfEntry->ifPhysAddressLen, 6);
 #endif
 
-//IPv4 specific initialization
 #if (IPV4_SUPPORT == ENABLED)
-      //Network layer initialization
+      //IPv4 initialization
       error = ipv4Init(interface);
       //Any error to report?
       if(error) break;
 
+#if (ETH_SUPPORT == ENABLED)
       //ARP cache initialization
       error = arpInit(interface);
       //Any error to report?
       if(error) break;
+#endif
 
 #if (IGMP_SUPPORT == ENABLED)
       //IGMP related initialization
@@ -597,29 +748,28 @@ error_t netConfigInterface(NetInterface *interface)
 #endif
 
 #if (NBNS_CLIENT_SUPPORT == ENABLED || NBNS_RESPONDER_SUPPORT == ENABLED)
-   //NetBIOS Name Service related initialization
-   error = nbnsInit(interface);
-   //Any error to report?
-   if(error) break;
+      //NetBIOS Name Service related initialization
+      error = nbnsInit(interface);
+      //Any error to report?
+      if(error) break;
 #endif
 #endif
 
-//IPv6 specific initialization
 #if (IPV6_SUPPORT == ENABLED)
-      //Network layer initialization
+      //IPv6 initialization
       error = ipv6Init(interface);
       //Any error to report?
       if(error) break;
 
 #if (NDP_SUPPORT == ENABLED)
-      //Neighbor cache initialization
+      //NDP related initialization
       error = ndpInit(interface);
       //Any error to report?
       if(error) break;
 #endif
 
 #if (MLD_SUPPORT == ENABLED)
-      ///MLD related initialization
+      //MLD related initialization
       error = mldInit(interface);
       //Any error to report?
       if(error) break;
@@ -632,44 +782,36 @@ error_t netConfigInterface(NetInterface *interface)
 #endif
 
 #if (MDNS_CLIENT_SUPPORT == ENABLED || MDNS_RESPONDER_SUPPORT == ENABLED)
-   //mDNS related initialization
-   error = mdnsInit(interface);
-   //Any error to report?
-   if(error) break;
-#endif
-
-#if (DNS_SD_SUPPORT == ENABLED)
-   //DNS-SD initialization
-   error = dnsSdInit(interface);
-   //Any error to report?
-   if(error) return error;
-#endif
-
-#if (NET_STATIC_OS_RESOURCES == ENABLED)
-      //Create a task to process incoming frames
-      osCreateStaticTask(&interface->rxTask, "TCP/IP Stack (RX)", netRxTask,
-         interface, interface->rxTaskStack, NET_TICK_STACK_SIZE, NET_TICK_PRIORITY);
-#else
-      //Create a task to process incoming frames
-      interface->rxTask = osCreateTask("TCP/IP Stack (RX)", netRxTask,
-         interface, NET_RX_STACK_SIZE, NET_RX_PRIORITY);
-
-      //Unable to create the task?
-      if(interface->rxTask == OS_INVALID_HANDLE)
-         error = ERROR_OUT_OF_RESOURCES;
+      //mDNS related initialization
+      error = mdnsInit(interface);
+      //Any error to report?
+      if(error) break;
 #endif
 
       //End of exception handling block
    } while(0);
 
-   //Configuration failed?
-   if(error)
+   //Check status code
+   if(!error)
+   {
+      //The network interface is now fully configured
+      interface->configured = TRUE;
+
+      //Check whether the TCP/IP process is running
+      if(netTaskRunning)
+      {
+         //Interrupts can be safely enabled
+         interface->nicDriver->enableIrq(interface);
+      }
+   }
+   else
    {
       //Clean up side effects before returning
       osDeleteEvent(&interface->nicTxEvent);
-      osDeleteEvent(&interface->nicRxEvent);
-      osDeleteMutex(&interface->nicDriverMutex);
    }
+
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //Return status code
    return error;
@@ -677,355 +819,412 @@ error_t netConfigInterface(NetInterface *interface)
 
 
 /**
- * @brief Task responsible for handling periodic operations
+ * @brief TCP/IP events handling
  **/
 
-void netTickTask(void *param)
+void netTask(void)
 {
    uint_t i;
-
-   //Initialize prescalers
-   uint_t nicTickPrescaler = 0;
-#if (PPP_SUPPORT == ENABLED)
-   uint_t pppTickPrescaler = 0;
-#endif
-#if (IPV4_SUPPORT == ENABLED)
-   uint_t arpTickPrescaler = 0;
-#endif
-#if (IPV4_SUPPORT == ENABLED && IPV4_FRAG_SUPPORT == ENABLED)
-   uint_t ipv4FragTickPrescaler = 0;
-#endif
-#if (IPV4_SUPPORT == ENABLED && IGMP_SUPPORT == ENABLED)
-   uint_t igmpTickPrescaler = 0;
-#endif
-#if (IPV4_SUPPORT == ENABLED && AUTO_IP_SUPPORT == ENABLED)
-   uint_t autoIpTickPrescaler = 0;
-#endif
-#if (IPV6_SUPPORT == ENABLED && NDP_SUPPORT == ENABLED)
-   uint_t ndpTickPrescaler = 0;
-#endif
-#if (IPV6_SUPPORT == ENABLED && IPV6_FRAG_SUPPORT == ENABLED)
-   uint_t ipv6FragTickPrescaler = 0;
-#endif
-#if (IPV6_SUPPORT == ENABLED && MLD_SUPPORT == ENABLED)
-   uint_t mldTickPrescaler = 0;
-#endif
-#if (IPV6_SUPPORT == ENABLED && SLAAC_SUPPORT == ENABLED)
-   uint_t slaacTickPrescaler = 0;
-#endif
-#if (TCP_SUPPORT == ENABLED)
-   uint_t tcpTickPrescaler = 0;
-#endif
-#if (DNS_CLIENT_SUPPORT == ENABLED || MDNS_CLIENT_SUPPORT == ENABLED || \
-   NBNS_CLIENT_SUPPORT == ENABLED)
-   uint_t dnsTickPrescaler = 0;
-#endif
-#if (MDNS_RESPONDER_SUPPORT == ENABLED)
-   uint_t mdnsTickPrescaler = 0;
-#endif
-
-   //Main loop
-   while(1)
-   {
-      //Wait for the TCP/IP stack tick interval
-      osDelayTask(NET_TICK_INTERVAL);
-
-      //Update prescaler
-      nicTickPrescaler += NET_TICK_INTERVAL;
-
-      //Handle periodic operations such as polling the link state
-      if(nicTickPrescaler >= NIC_TICK_INTERVAL)
-      {
-         //Loop through network interfaces
-         for(i = 0; i < NET_INTERFACE_COUNT; i++)
-         {
-            //Make sure the interface has been properly configured
-            if(netInterface[i].configured)
-               nicTick(&netInterface[i]);
-         }
-
-         //Clear prescaler
-         nicTickPrescaler = 0;
-      }
-
-#if (PPP_SUPPORT == ENABLED)
-      //Update prescaler
-      pppTickPrescaler += NET_TICK_INTERVAL;
-
-      //Manage PPP related timers
-      if(pppTickPrescaler >= PPP_TICK_INTERVAL)
-      {
-         //Loop through network interfaces
-         for(i = 0; i < NET_INTERFACE_COUNT; i++)
-         {
-            //Make sure the interface has been properly configured
-            if(netInterface[i].configured)
-               pppTick(&netInterface[i]);
-         }
-
-         //Clear prescaler
-         pppTickPrescaler = 0;
-      }
-#endif
-
-#if (IPV4_SUPPORT == ENABLED)
-      //Update prescaler
-      arpTickPrescaler += NET_TICK_INTERVAL;
-
-      //Manage ARP cache
-      if(arpTickPrescaler >= ARP_TICK_INTERVAL)
-      {
-         //Loop through network interfaces
-         for(i = 0; i < NET_INTERFACE_COUNT; i++)
-         {
-            //Make sure the interface has been properly configured
-            if(netInterface[i].configured)
-               arpTick(&netInterface[i]);
-         }
-
-         //Clear prescaler
-         arpTickPrescaler = 0;
-      }
-#endif
-
-#if (IPV4_SUPPORT == ENABLED && IPV4_FRAG_SUPPORT == ENABLED)
-      //Update prescaler
-      ipv4FragTickPrescaler += NET_TICK_INTERVAL;
-
-      //Handle IPv4 fragment reassembly timeout
-      if(ipv4FragTickPrescaler >= IPV4_FRAG_TICK_INTERVAL)
-      {
-         //Loop through network interfaces
-         for(i = 0; i < NET_INTERFACE_COUNT; i++)
-         {
-            //Make sure the interface has been properly configured
-            if(netInterface[i].configured)
-               ipv4FragTick(&netInterface[i]);
-         }
-
-         //Clear prescaler
-         ipv4FragTickPrescaler = 0;
-      }
-#endif
-
-#if (IPV4_SUPPORT == ENABLED && IGMP_SUPPORT == ENABLED)
-      //Update prescaler
-      igmpTickPrescaler += NET_TICK_INTERVAL;
-
-      //Handle IGMP related timers
-      if(igmpTickPrescaler >= IGMP_TICK_INTERVAL)
-      {
-         //Loop through network interfaces
-         for(i = 0; i < NET_INTERFACE_COUNT; i++)
-         {
-            //Make sure the interface has been properly configured
-            if(netInterface[i].configured)
-               igmpTick(&netInterface[i]);
-         }
-
-         //Clear prescaler
-         igmpTickPrescaler = 0;
-      }
-#endif
-
-#if (IPV4_SUPPORT == ENABLED && AUTO_IP_SUPPORT == ENABLED)
-      //Update prescaler
-      autoIpTickPrescaler += NET_TICK_INTERVAL;
-
-      //Handle Auto-IP related timers
-      if(autoIpTickPrescaler >= AUTO_IP_TICK_INTERVAL)
-      {
-         //Loop through network interfaces
-         for(i = 0; i < NET_INTERFACE_COUNT; i++)
-         {
-            //Auto-IP is currently used?
-            if(netInterface[i].autoIpContext != NULL)
-               autoIpTick(netInterface[i].autoIpContext);
-         }
-
-         //Clear prescaler
-         autoIpTickPrescaler = 0;
-      }
-#endif
-
-#if (IPV6_SUPPORT == ENABLED && NDP_SUPPORT == ENABLED)
-      //Update prescaler
-      ndpTickPrescaler += NET_TICK_INTERVAL;
-
-      //Manage Neighbor cache
-      if(ndpTickPrescaler >= NDP_TICK_INTERVAL)
-      {
-         //Loop through network interfaces
-         for(i = 0; i < NET_INTERFACE_COUNT; i++)
-         {
-            //Make sure the interface has been properly configured
-            if(netInterface[i].configured)
-               ndpTick(&netInterface[i]);
-         }
-
-         //Clear prescaler
-         ndpTickPrescaler = 0;
-      }
-#endif
-
-#if (IPV6_SUPPORT == ENABLED && IPV6_FRAG_SUPPORT == ENABLED)
-      //Update prescaler
-      ipv6FragTickPrescaler += NET_TICK_INTERVAL;
-
-      //Handle IPv4 fragment reassembly timeout
-      if(ipv6FragTickPrescaler >= IPV6_FRAG_TICK_INTERVAL)
-      {
-         //Loop through network interfaces
-         for(i = 0; i < NET_INTERFACE_COUNT; i++)
-         {
-            //Make sure the interface has been properly configured
-            if(netInterface[i].configured)
-               ipv6FragTick(&netInterface[i]);
-         }
-
-         //Clear prescaler
-         ipv6FragTickPrescaler = 0;
-      }
-#endif
-
-#if (IPV6_SUPPORT == ENABLED && MLD_SUPPORT == ENABLED)
-      //Update prescaler
-      mldTickPrescaler += NET_TICK_INTERVAL;
-
-      //Handle MLD related timers
-      if(mldTickPrescaler >= MLD_TICK_INTERVAL)
-      {
-         //Loop through network interfaces
-         for(i = 0; i < NET_INTERFACE_COUNT; i++)
-         {
-            //Make sure the interface has been properly configured
-            if(netInterface[i].configured)
-               mldTick(&netInterface[i]);
-         }
-
-         //Clear prescaler
-         mldTickPrescaler = 0;
-      }
-#endif
-
-#if (IPV6_SUPPORT == ENABLED && SLAAC_SUPPORT == ENABLED)
-      //Update prescaler
-      slaacTickPrescaler += NET_TICK_INTERVAL;
-
-      //Handle SLAAC related timers
-      if(slaacTickPrescaler >= SLAAC_TICK_INTERVAL)
-      {
-         //Loop through network interfaces
-         for(i = 0; i < NET_INTERFACE_COUNT; i++)
-         {
-            //Stateless Address Autoconfiguration is currently used?
-            if(netInterface[i].slaacContext != NULL)
-               slaacTick(netInterface[i].slaacContext);
-         }
-
-         //Clear prescaler
-         slaacTickPrescaler = 0;
-      }
-#endif
-
-#if (TCP_SUPPORT == ENABLED)
-      //Update TCP tick prescaler
-      tcpTickPrescaler += NET_TICK_INTERVAL;
-
-      //Manage TCP related timers
-      if(tcpTickPrescaler >= TCP_TICK_INTERVAL)
-      {
-         //TCP timer handler
-         tcpTick();
-         //Clear prescaler
-         tcpTickPrescaler = 0;
-      }
-#endif
-
-#if (DNS_CLIENT_SUPPORT == ENABLED || MDNS_CLIENT_SUPPORT == ENABLED || \
-   NBNS_CLIENT_SUPPORT == ENABLED)
-      //Update DNS tick prescaler
-      dnsTickPrescaler += NET_TICK_INTERVAL;
-
-      //Manage DNS cache
-      if(dnsTickPrescaler >= DNS_TICK_INTERVAL)
-      {
-         //DNS timer handler
-         dnsTick();
-         //Clear prescaler
-         dnsTickPrescaler = 0;
-      }
-#endif
-
-#if (MDNS_RESPONDER_SUPPORT == ENABLED)
-      //Update mDNS tick prescaler
-      mdnsTickPrescaler += NET_TICK_INTERVAL;
-
-      //Manage mDNS probing and announcing
-      if(mdnsTickPrescaler >= MDNS_TICK_INTERVAL)
-      {
-         //Loop through network interfaces
-         for(i = 0; i < NET_INTERFACE_COUNT; i++)
-         {
-            //mDNS timer handler
-            mdnsTick(&netInterface[i]);
-            //Clear prescaler
-            mdnsTickPrescaler = 0;
-         }
-      }
-#endif
-   }
-}
-
-
-/**
- * @brief Task in charge of processing incoming frames
- * @param[in] param Underlying network interface
- **/
-
-void netRxTask(void *param)
-{
    bool_t status;
+   systime_t time;
+   systime_t timeout;
    NetInterface *interface;
 
-   //Point to the structure describing the network interface
-   interface = (NetInterface *) param;
+#if (NET_RTOS_SUPPORT == ENABLED)
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
 
-   //Get exclusive access to the device
-   osAcquireMutex(&interface->nicDriverMutex);
+   //The TCP/IP process is now running
+   netTaskRunning = TRUE;
 
-   //Interrupts can be safely enabled
-   interface->nicDriver->enableIrq(interface);
-   //The network interface is now fully configured
-   interface->configured = TRUE;
+   //Loop through network interfaces
+   for(i = 0; i < NET_INTERFACE_COUNT; i++)
+   {
+      //Point to the current network interface
+      interface = &netInterface[i];
 
-   //Release exclusive access to the device
-   osReleaseMutex(&interface->nicDriverMutex);
+      //Check whether the interface is fully configured
+      if(interface->configured)
+      {
+         //Interrupts can be safely enabled
+         interface->nicDriver->enableIrq(interface);
+      }
+   }
+
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //Main loop
    while(1)
    {
-      //Receive notifications when a Ethernet frame has been received,
-      //or the link status has changed
-      status = osWaitForEvent(&interface->nicRxEvent, INFINITE_DELAY);
+#endif
+      //Get current time
+      time = osGetSystemTime();
+
+      //Compute the maximum blocking time when waiting for an event
+      if(timeCompare(time, netTimestamp) < 0)
+         timeout = netTimestamp - time;
+      else
+         timeout = 0;
+
+      //Receive notifications when a frame has been received, or the
+      //link state of any network interfaces has changed
+      status = osWaitForEvent(&netEvent, timeout);
 
       //Check whether the specified event is in signaled state
       if(status)
       {
-         //Get exclusive access to the device
-         osAcquireMutex(&interface->nicDriverMutex);
-         //Disable Ethernet controller interrupts
-         interface->nicDriver->disableIrq(interface);
+         //Get exclusive access
+         osAcquireMutex(&netMutex);
 
-         //Handle incoming packets and link state changes
-         interface->nicDriver->eventHandler(interface);
+         //Process events
+         for(i = 0; i < NET_INTERFACE_COUNT; i++)
+         {
+            //Point to the current network interface
+            interface = &netInterface[i];
 
-         //Re-enable Ethernet controller interrupts
-         interface->nicDriver->enableIrq(interface);
-         //Release exclusive access to the device
-         osReleaseMutex(&interface->nicDriverMutex);
+            //Check whether a NIC event is pending
+            if(interface->nicEvent)
+            {
+               //Acknowledge the event by clearing the flag
+               interface->nicEvent = FALSE;
+
+               //Disable hardware interrupts
+               interface->nicDriver->disableIrq(interface);
+               //Handle NIC events
+               interface->nicDriver->eventHandler(interface);
+               //Re-enable hardware interrupts
+               interface->nicDriver->enableIrq(interface);
+            }
+
+            //Check whether a PHY event is pending
+            if(interface->phyEvent)
+            {
+               //Acknowledge the event by clearing the flag
+               interface->phyEvent = FALSE;
+
+               //Disable hardware interrupts
+               interface->nicDriver->disableIrq(interface);
+               //Handle PHY events
+               interface->phyDriver->eventHandler(interface);
+               //Re-enable hardware interrupts
+               interface->nicDriver->enableIrq(interface);
+            }
+         }
+
+         //Release exclusive access
+         osReleaseMutex(&netMutex);
       }
+
+      //Check current time
+      if(timeCompare(time, netTimestamp) > 0)
+      {
+         //Get exclusive access
+         osAcquireMutex(&netMutex);
+         //Handle periodic operations
+         netTick();
+         //Release exclusive access
+         osReleaseMutex(&netMutex);
+
+         //Next event
+         netTimestamp = time + NET_TICK_INTERVAL;
+      }
+#if (NET_RTOS_SUPPORT == ENABLED)
    }
+#endif
+}
+
+
+/**
+ * @brief Manage TCP/IP timers
+ **/
+
+void netTick(void)
+{
+   uint_t i;
+
+   //Increment tick counter
+   nicTickCounter += NET_TICK_INTERVAL;
+
+   //Handle periodic operations such as polling the link state
+   if(nicTickCounter >= NIC_TICK_INTERVAL)
+   {
+      //Loop through network interfaces
+      for(i = 0; i < NET_INTERFACE_COUNT; i++)
+      {
+         //Make sure the interface has been properly configured
+         if(netInterface[i].configured)
+            nicTick(&netInterface[i]);
+      }
+
+      //Reset tick counter
+      nicTickCounter = 0;
+   }
+
+#if (PPP_SUPPORT == ENABLED)
+   //Increment tick counter
+   pppTickCounter += NET_TICK_INTERVAL;
+
+   //Manage PPP related timers
+   if(pppTickCounter >= PPP_TICK_INTERVAL)
+   {
+      //Loop through network interfaces
+      for(i = 0; i < NET_INTERFACE_COUNT; i++)
+      {
+         //Make sure the interface has been properly configured
+         if(netInterface[i].configured)
+            pppTick(&netInterface[i]);
+      }
+
+      //Reset tick counter
+      pppTickCounter = 0;
+   }
+#endif
+
+#if (IPV4_SUPPORT == ENABLED && ETH_SUPPORT == ENABLED)
+   //Increment tick counter
+   arpTickCounter += NET_TICK_INTERVAL;
+
+   //Manage ARP cache
+   if(arpTickCounter >= ARP_TICK_INTERVAL)
+   {
+      //Loop through network interfaces
+      for(i = 0; i < NET_INTERFACE_COUNT; i++)
+      {
+         //Make sure the interface has been properly configured
+         if(netInterface[i].configured)
+            arpTick(&netInterface[i]);
+      }
+
+      //Reset tick counter
+      arpTickCounter = 0;
+   }
+#endif
+
+#if (IPV4_SUPPORT == ENABLED && IPV4_FRAG_SUPPORT == ENABLED)
+   //Increment tick counter
+   ipv4FragTickCounter += NET_TICK_INTERVAL;
+
+   //Handle IPv4 fragment reassembly timeout
+   if(ipv4FragTickCounter >= IPV4_FRAG_TICK_INTERVAL)
+   {
+      //Loop through network interfaces
+      for(i = 0; i < NET_INTERFACE_COUNT; i++)
+      {
+         //Make sure the interface has been properly configured
+         if(netInterface[i].configured)
+            ipv4FragTick(&netInterface[i]);
+      }
+
+      //Reset tick counter
+      ipv4FragTickCounter = 0;
+   }
+#endif
+
+#if (IPV4_SUPPORT == ENABLED && IGMP_SUPPORT == ENABLED)
+   //Increment tick counter
+   igmpTickCounter += NET_TICK_INTERVAL;
+
+   //Handle IGMP related timers
+   if(igmpTickCounter >= IGMP_TICK_INTERVAL)
+   {
+      //Loop through network interfaces
+      for(i = 0; i < NET_INTERFACE_COUNT; i++)
+      {
+         //Make sure the interface has been properly configured
+         if(netInterface[i].configured)
+            igmpTick(&netInterface[i]);
+      }
+
+      //Reset tick counter
+      igmpTickCounter = 0;
+   }
+#endif
+
+#if (IPV4_SUPPORT == ENABLED && AUTO_IP_SUPPORT == ENABLED)
+   //Increment tick counter
+   autoIpTickCounter += NET_TICK_INTERVAL;
+
+   //Handle Auto-IP related timers
+   if(autoIpTickCounter >= AUTO_IP_TICK_INTERVAL)
+   {
+      //Loop through network interfaces
+      for(i = 0; i < NET_INTERFACE_COUNT; i++)
+         autoIpTick(netInterface[i].autoIpContext);
+
+      //Reset tick counter
+      autoIpTickCounter = 0;
+   }
+#endif
+
+#if (IPV4_SUPPORT == ENABLED && DHCP_CLIENT_SUPPORT == ENABLED)
+   //Increment tick counter
+   dhcpClientTickCounter += NET_TICK_INTERVAL;
+
+   //Handle DHCP client related timers
+   if(dhcpClientTickCounter >= DHCP_CLIENT_TICK_INTERVAL)
+   {
+      //Loop through network interfaces
+      for(i = 0; i < NET_INTERFACE_COUNT; i++)
+         dhcpClientTick(netInterface[i].dhcpClientContext);
+
+      //Reset tick counter
+      dhcpClientTickCounter = 0;
+   }
+#endif
+
+#if (IPV6_SUPPORT == ENABLED && IPV6_FRAG_SUPPORT == ENABLED)
+   //Increment tick counter
+   ipv6FragTickCounter += NET_TICK_INTERVAL;
+
+   //Handle IPv6 fragment reassembly timeout
+   if(ipv6FragTickCounter >= IPV6_FRAG_TICK_INTERVAL)
+   {
+      //Loop through network interfaces
+      for(i = 0; i < NET_INTERFACE_COUNT; i++)
+      {
+         //Make sure the interface has been properly configured
+         if(netInterface[i].configured)
+            ipv6FragTick(&netInterface[i]);
+      }
+
+      //Reset tick counter
+      ipv6FragTickCounter = 0;
+   }
+#endif
+
+#if (IPV6_SUPPORT == ENABLED && MLD_SUPPORT == ENABLED)
+   //Increment tick counter
+   mldTickCounter += NET_TICK_INTERVAL;
+
+   //Handle MLD related timers
+   if(mldTickCounter >= MLD_TICK_INTERVAL)
+   {
+      //Loop through network interfaces
+      for(i = 0; i < NET_INTERFACE_COUNT; i++)
+      {
+         //Make sure the interface has been properly configured
+         if(netInterface[i].configured)
+            mldTick(&netInterface[i]);
+      }
+
+      //Reset tick counter
+      mldTickCounter = 0;
+   }
+#endif
+
+#if (IPV6_SUPPORT == ENABLED && NDP_SUPPORT == ENABLED)
+   //Increment tick counter
+   ndpTickCounter += NET_TICK_INTERVAL;
+
+   //Handle NDP related timers
+   if(ndpTickCounter >= NDP_TICK_INTERVAL)
+   {
+      //Loop through network interfaces
+      for(i = 0; i < NET_INTERFACE_COUNT; i++)
+      {
+         //Make sure the interface has been properly configured
+         if(netInterface[i].configured)
+            ndpTick(&netInterface[i]);
+      }
+
+      //Reset tick counter
+      ndpTickCounter = 0;
+   }
+#endif
+
+#if (IPV6_SUPPORT == ENABLED && NDP_ROUTER_ADV_SUPPORT == ENABLED)
+   //Increment tick counter
+   ndpRouterAdvTickCounter += NET_TICK_INTERVAL;
+
+   //Handle RA service related timers
+   if(ndpRouterAdvTickCounter >= NDP_ROUTER_ADV_TICK_INTERVAL)
+   {
+      //Loop through network interfaces
+      for(i = 0; i < NET_INTERFACE_COUNT; i++)
+         ndpRouterAdvTick(netInterface[i].ndpRouterAdvContext);
+
+      //Reset tick counter
+      ndpRouterAdvTickCounter = 0;
+   }
+#endif
+
+#if (IPV6_SUPPORT == ENABLED && DHCPV6_CLIENT_SUPPORT == ENABLED)
+   //Increment tick counter
+   dhcpv6ClientTickCounter += NET_TICK_INTERVAL;
+
+   //Handle DHCPv6 client related timers
+   if(dhcpv6ClientTickCounter >= DHCPV6_CLIENT_TICK_INTERVAL)
+   {
+      //Loop through network interfaces
+      for(i = 0; i < NET_INTERFACE_COUNT; i++)
+         dhcpv6ClientTick(netInterface[i].dhcpv6ClientContext);
+
+      //Reset tick counter
+      dhcpv6ClientTickCounter = 0;
+   }
+#endif
+
+#if (TCP_SUPPORT == ENABLED)
+   //Increment tick counter
+   tcpTickCounter += NET_TICK_INTERVAL;
+
+   //Manage TCP related timers
+   if(tcpTickCounter >= TCP_TICK_INTERVAL)
+   {
+      //TCP timer handler
+      tcpTick();
+      //Reset tick counter
+      tcpTickCounter = 0;
+   }
+#endif
+
+#if (DNS_CLIENT_SUPPORT == ENABLED || MDNS_CLIENT_SUPPORT == ENABLED || \
+NBNS_CLIENT_SUPPORT == ENABLED)
+   //Increment tick counter
+   dnsTickCounter += NET_TICK_INTERVAL;
+
+   //Manage DNS cache
+   if(dnsTickCounter >= DNS_TICK_INTERVAL)
+   {
+      //DNS timer handler
+      dnsTick();
+      //Reset tick counter
+      dnsTickCounter = 0;
+   }
+#endif
+
+#if (MDNS_RESPONDER_SUPPORT == ENABLED)
+   //Increment tick counter
+   mdnsResponderTickCounter += NET_TICK_INTERVAL;
+
+   //Manage mDNS probing and announcing
+   if(mdnsResponderTickCounter >= MDNS_RESPONDER_TICK_INTERVAL)
+   {
+      //Loop through network interfaces
+      for(i = 0; i < NET_INTERFACE_COUNT; i++)
+         mdnsResponderTick(netInterface[i].mdnsResponderContext);
+
+      //Reset tick counter
+      mdnsResponderTickCounter = 0;
+   }
+#endif
+
+#if (DNS_SD_SUPPORT == ENABLED)
+   //Increment tick counter
+   dnsSdTickCounter += NET_TICK_INTERVAL;
+
+   //Manage DNS-SD probing and announcing
+   if(dnsSdTickCounter >= DNS_SD_TICK_INTERVAL)
+   {
+      //Loop through network interfaces
+      for(i = 0; i < NET_INTERFACE_COUNT; i++)
+         dnsSdTick(netInterface[i].dnsSdContext);
+
+      //Reset tick counter
+      dnsSdTickCounter = 0;
+   }
+#endif
 }
 
 

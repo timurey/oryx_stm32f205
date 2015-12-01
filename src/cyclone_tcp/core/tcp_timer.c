@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -59,9 +59,6 @@ void tcpTick(void)
    uint_t n;
    uint_t u;
 
-   //Enter critical section
-   osAcquireMutex(&socketMutex);
-
    //Loop through opened sockets
    for(i = 0; i < SOCKET_MAX_COUNT; i++)
    {
@@ -80,6 +77,7 @@ void tcpTick(void)
          //Retransmission timeout?
          if(tcpTimerElapsed(&socket->retransmitTimer))
          {
+#if (TCP_CONGESTION_CONTROL_SUPPORT == ENABLED)
             //When a TCP sender detects segment loss using the retransmission
             //timer and the given segment has not yet been resent by way of
             //the retransmission timer, the value of ssthresh must be updated
@@ -94,6 +92,7 @@ void tcpTick(void)
             //Furthermore, upon a timeout cwnd must be set to no more than
             //the loss window, LW, which equals 1 full-sized segment
             socket->cwnd = MIN(TCP_LOSS_WINDOW * socket->mss, socket->txBufferSize);
+#endif
 
             //Make sure the maximum number of retransmissions has not been reached
             if(socket->retransmitCount < TCP_MAX_RETRIES)
@@ -173,9 +172,12 @@ void tcpTick(void)
          {
             //The amount of data that can be sent at any given time is
             //limited by the receiver window and the congestion window
-            n = MIN(socket->sndWnd, socket->cwnd);
-            n = MIN(n, socket->txBufferSize);
+            n = MIN(socket->sndWnd, socket->txBufferSize);
 
+#if (TCP_CONGESTION_CONTROL_SUPPORT == ENABLED)
+            //Check the congestion window
+            n = MIN(n, socket->cwnd);
+#endif
             //Retrieve the size of the usable window
             u = n - (socket->sndNxt - socket->sndUna);
 
@@ -247,9 +249,6 @@ void tcpTick(void)
          }
       }
    }
-
-   //Leave critical section
-   osReleaseMutex(&socketMutex);
 }
 
 

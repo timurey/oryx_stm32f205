@@ -33,7 +33,7 @@
  * - RFC 5227: IPv4 Address Conflict Detection
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -44,10 +44,14 @@
 #include "core/ethernet.h"
 #include "ipv4/arp.h"
 #include "ipv4/auto_ip.h"
+#include "mdns/mdns_responder.h"
 #include "debug.h"
 
 //Check TCP/IP stack configuration
 #if (IPV4_SUPPORT == ENABLED && AUTO_IP_SUPPORT == ENABLED)
+
+//Tick counter to handle periodic operations
+systime_t autoIpTickCounter;
 
 
 /**
@@ -58,9 +62,14 @@
 void autoIpGetDefaultSettings(AutoIpSettings *settings)
 {
    //Use default interface
-   settings->interface = NULL;
-   //Default link-local address
+   settings->interface = netGetDefaultInterface();
+
+   //Initial link-local address to be used
    settings->linkLocalAddr = IPV4_UNSPECIFIED_ADDR;
+   //Link state change event
+   settings->linkChangeEvent = NULL;
+   //FSM state change event
+   settings->stateChangeEvent = NULL;
 }
 
 
@@ -79,35 +88,30 @@ error_t autoIpInit(AutoIpContext *context, const AutoIpSettings *settings)
    TRACE_INFO("Initializing Auto-IP...\r\n");
 
    //Ensure the parameters are valid
-   if(!context || !settings)
+   if(context == NULL || settings == NULL)
       return ERROR_INVALID_PARAMETER;
+
    //A valid pointer to the interface being configured is required
-   if(!settings->interface)
+   if(settings->interface == NULL)
       return ERROR_INVALID_PARAMETER;
 
    //Point to the underlying network interface
    interface = settings->interface;
+
    //Clear the Auto-IP context
    memset(context, 0, sizeof(AutoIpContext));
+   //Save user settings
+   context->settings = *settings;
 
-   //Save the network interface to configure
-   context->interface = settings->interface;
    //Use default link-local address
    context->linkLocalAddr = settings->linkLocalAddr;
-
-   //Initialize mutex object
-   if(!osCreateMutex(&context->mutex))
-   {
-      //Failed to create mutex
-      return ERROR_OUT_OF_RESOURCES;
-   }
+   //Reset conflict counter
+   context->conflictCount = 0;
 
    //Auto-IP operation is currently suspended
    context->running = FALSE;
    //Initialize state machine
    context->state = AUTO_IP_STATE_INIT;
-   //Reset conflict counter
-   context->conflictCount = 0;
 
    //Attach the Auto-IP context to the network interface
    interface->autoIpContext = context;
@@ -125,8 +129,15 @@ error_t autoIpInit(AutoIpContext *context, const AutoIpSettings *settings)
 
 error_t autoIpStart(AutoIpContext *context)
 {
-   //Enter critical section
-   osAcquireMutex(&context->mutex);
+   //Check parameter
+   if(context == NULL)
+      return ERROR_INVALID_PARAMETER;
+
+   //Debug message
+   TRACE_INFO("Starting Auto-IP...\r\n");
+
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
 
    //Start Auto-IP operation
    context->running = TRUE;
@@ -135,8 +146,8 @@ error_t autoIpStart(AutoIpContext *context)
    //Reset conflict counter
    context->conflictCount = 0;
 
-   //Leave critical section
-   osReleaseMutex(&context->mutex);
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //Successful processing
    return NO_ERROR;
@@ -151,16 +162,23 @@ error_t autoIpStart(AutoIpContext *context)
 
 error_t autoIpStop(AutoIpContext *context)
 {
-   //Enter critical section
-   osAcquireMutex(&context->mutex);
+   //Check parameter
+   if(context == NULL)
+      return ERROR_INVALID_PARAMETER;
+
+   //Debug message
+   TRACE_INFO("Stopping Auto-IP...\r\n");
+
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
 
    //Suspend Auto-IP operation
    context->running = FALSE;
    //Reinitialize state machine
    context->state = AUTO_IP_STATE_INIT;
 
-   //Leave critical section
-   osReleaseMutex(&context->mutex);
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //Successful processing
    return NO_ERROR;
@@ -177,12 +195,12 @@ AutoIpState autoIpGetState(AutoIpContext *context)
 {
    AutoIpState state;
 
-   //Enter critical section
-   osAcquireMutex(&context->mutex);
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
    //Get current state
    state = context->state;
-   //Leave critical section
-   osReleaseMutex(&context->mutex);
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //Return current state
    return state;
@@ -201,21 +219,27 @@ AutoIpState autoIpGetState(AutoIpContext *context)
 void autoIpTick(AutoIpContext *context)
 {
    systime_t time;
+   systime_t delay;
+   NetInterface *interface;
+
+   //Make sure Auto-IP has been properly instantiated
+   if(context == NULL)
+      return;
+
+   //Point to the underlying network interface
+   interface = context->settings.interface;
 
    //Get current time
    time = osGetSystemTime();
 
-   //Enter critical section
-   osAcquireMutex(&context->mutex);
-
    //Check current state
    if(context->state == AUTO_IP_STATE_INIT)
    {
-      //Check link state
-      if(context->running && context->interface->linkState)
+      //Wait for the link to be up before starting Auto-IP
+      if(context->running && interface->linkState)
       {
          //Configure subnet mask
-         ipv4SetSubnetMask(context->interface, AUTO_IP_SUBNET_MASK);
+         interface->ipv4Context.subnetMask = AUTO_IP_MASK;
 
          //The address must be in the range from 169.54.1.0 to 169.254.254.255
          if(ntohl(context->linkLocalAddr) < ntohl(AUTO_IP_ADDR_MIN) ||
@@ -226,107 +250,102 @@ void autoIpTick(AutoIpContext *context)
          }
 
          //Use the link-local address as a tentative address
-         ipv4SetHostAddrEx(context->interface,
-            context->linkLocalAddr, IPV4_ADDR_STATE_TENTATIVE);
+         interface->ipv4Context.addr = context->linkLocalAddr;
+         interface->ipv4Context.addrState = IPV4_ADDR_STATE_TENTATIVE;
 
-         //Set time stamp
-         context->timestamp = time;
+         //Clear conflict flag
+         interface->ipv4Context.addrConflict = FALSE;
+
          //Initial random delay
-         context->timeout = netGetRandRange(0, AUTO_IP_PROBE_WAIT);
-         //Reset retransmission counter
-         context->retransmitCount = 0;
+         delay = netGetRandRange(0, AUTO_IP_PROBE_WAIT);
 
          //The number of conflicts exceeds the maximum acceptable value?
          if(context->conflictCount >= AUTO_IP_MAX_CONFLICTS)
          {
             //The host must limit the rate at which it probes for new addresses
-            context->timeout += AUTO_IP_RATE_LIMIT_INTERVAL;
+            delay += AUTO_IP_RATE_LIMIT_INTERVAL;
          }
 
          //Verify the uniqueness of the link-local address
-         context->state = AUTO_IP_STATE_PROBING;
+         autoIpChangeState(context, AUTO_IP_STATE_PROBING, delay);
       }
    }
    else if(context->state == AUTO_IP_STATE_PROBING)
    {
-      //Check current time
-      if((time - context->timestamp) >= context->timeout)
+      //Any conflict detected?
+      if(interface->ipv4Context.addrConflict)
       {
-         //Address Conflict Detection failed?
-         if(context->interface->ipv4Config.addrConflict)
+         //The address is already in use by some other host and
+         //must not be assigned to the interface
+         interface->ipv4Context.addr = IPV4_UNSPECIFIED_ADDR;
+         interface->ipv4Context.addrState = IPV4_ADDR_STATE_INVALID;
+
+         //The host should maintain a counter of the number of address
+         //conflicts it has experienced
+         context->conflictCount++;
+
+         //The host must pick a new random address...
+         autoIpGenerateAddr(&context->linkLocalAddr);
+         //...and repeat the process
+         autoIpChangeState(context, AUTO_IP_STATE_INIT, 0);
+      }
+      else
+      {
+         //Check current time
+         if(timeCompare(time, context->timestamp + context->timeout) >= 0)
          {
-            //The address is already in use by some other host and
-            //must not be assigned to the interface
-            ipv4SetHostAddrEx(context->interface,
-               IPV4_UNSPECIFIED_ADDR, IPV4_ADDR_STATE_INVALID);
-
-            //The host should maintain a counter of the number of address
-            //conflicts it has experienced
-            context->conflictCount++;
-
-            //The host must select a new pseudo-random address...
-            autoIpGenerateAddr(&context->linkLocalAddr);
-            //...and repeat the process
-            context->state = AUTO_IP_STATE_INIT;
-         }
-         //Address Conflict Detection is on-going?
-         else if(context->retransmitCount < AUTO_IP_PROBE_NUM)
-         {
-            //Conflict detection is done using ARP probes
-            arpSendRequest(context->interface, IPV4_UNSPECIFIED_ADDR,
-               context->linkLocalAddr, &MAC_BROADCAST_ADDR);
-
-            //Save the time at which the packet was sent
-            context->timestamp = time;
-            //Increment retransmission counter
-            context->retransmitCount++;
-
-            //Last probe packet sent?
-            if(context->retransmitCount == AUTO_IP_PROBE_NUM)
+            //Address Conflict Detection is on-going?
+            if(context->retransmitCount < AUTO_IP_PROBE_NUM)
             {
-               //Delay before announcing
-               context->timeout = AUTO_IP_ANNOUNCE_WAIT;
+               //Conflict detection is done using ARP probes
+               arpSendProbe(interface, context->linkLocalAddr);
+
+               //Save the time at which the packet was sent
+               context->timestamp = time;
+               //Increment retransmission counter
+               context->retransmitCount++;
+
+               //Last probe packet sent?
+               if(context->retransmitCount == AUTO_IP_PROBE_NUM)
+               {
+                  //Delay before announcing
+                  context->timeout = AUTO_IP_ANNOUNCE_WAIT;
+               }
+               else
+               {
+                  //Maximum delay till repeated probe
+                  context->timeout = netGetRandRange(AUTO_IP_PROBE_MIN,
+                     AUTO_IP_PROBE_MAX);
+               }
             }
             else
             {
-               //Maximum delay till repeated probe
-               context->timeout = netGetRandRange(AUTO_IP_PROBE_MIN,
-                  AUTO_IP_PROBE_MAX);
+               //The use of the IPv4 address is now unrestricted
+               interface->ipv4Context.addrState = IPV4_ADDR_STATE_VALID;
+
+#if (MDNS_RESPONDER_SUPPORT == ENABLED)
+               //Restart mDNS probing process
+               mdnsResponderStartProbing(interface->mdnsResponderContext);
+#endif
+               //The host must then announce its claimed address
+               autoIpChangeState(context, AUTO_IP_STATE_ANNOUNCING, 0);
             }
-         }
-         //Address Conflict Detection is complete?
-         else
-         {
-            //The use of the IPv4 address is now unrestricted
-            ipv4SetHostAddrEx(context->interface,
-               context->linkLocalAddr, IPV4_ADDR_STATE_VALID);
-
-            //Set time stamp
-            context->timestamp = time;
-            //Reset timeout value
-            context->timeout = 0;
-            //Reset retransmission counter
-            context->retransmitCount = 0;
-
-            //The host must then announce its claimed address
-            context->state = AUTO_IP_STATE_ANNOUNCING;
          }
       }
    }
    else if(context->state == AUTO_IP_STATE_ANNOUNCING)
    {
       //Check current time
-      if((time - context->timestamp) >= context->timeout)
+      if(timeCompare(time, context->timestamp + context->timeout) >= 0)
       {
          //An ARP announcement is identical to an ARP probe, except that
          //now the sender and target IP addresses are both set to the
          //host's newly selected IPv4 address
-         arpSendRequest(context->interface, context->linkLocalAddr,
-            context->linkLocalAddr, &MAC_BROADCAST_ADDR);
+         arpSendRequest(interface, context->linkLocalAddr, &MAC_BROADCAST_ADDR);
 
          //Save the time at which the packet was sent
          context->timestamp = time;
-         //Time between announcement packets
+         //Time interval between announcement packets
          context->timeout = AUTO_IP_ANNOUNCE_INTERVAL;
          //Increment retransmission counter
          context->retransmitCount++;
@@ -335,7 +354,7 @@ void autoIpTick(AutoIpContext *context)
          if(context->retransmitCount >= AUTO_IP_ANNOUNCE_NUM)
          {
             //Successful address autoconfiguration
-            context->state = AUTO_IP_STATE_CONFIGURED;
+            autoIpChangeState(context, AUTO_IP_STATE_CONFIGURED, 0);
             //Reset conflict counter
             context->conflictCount = 0;
 
@@ -346,23 +365,58 @@ void autoIpTick(AutoIpContext *context)
    }
    else if(context->state == AUTO_IP_STATE_CONFIGURED)
    {
-      //Upon receiving a conflicting ARP packet, a host may elect to
-      //immediately configure a new IPv4 link-local address
-      if(context->interface->ipv4Config.addrConflict)
+      //Address Conflict Detection is an ongoing process that is in effect
+      //for as long as a host is using an IPv4 link-local address
+      if(interface->ipv4Context.addrConflict)
       {
-         //The link-local address cannot be used anymore
-         ipv4SetHostAddrEx(context->interface,
-            IPV4_UNSPECIFIED_ADDR, IPV4_ADDR_STATE_INVALID);
+         //The host may elect to attempt to defend its address by recording
+         //the time that the conflicting ARP packet was received, and then
+         //broadcasting one single ARP announcement, giving its own IP and
+         //hardware addresses as the sender addresses of the ARP
+#if (AUTO_IP_BCT_SUPPORT == ENABLED)
+         arpSendProbe(interface, context->linkLocalAddr);
+#else
+         arpSendRequest(interface, context->linkLocalAddr, &MAC_BROADCAST_ADDR);
+#endif
+         //Clear conflict flag
+         interface->ipv4Context.addrConflict = FALSE;
 
-         //The host must select a new pseudo-random address...
-         autoIpGenerateAddr(&context->linkLocalAddr);
-         //...and force address reconfiguration
-         context->state = AUTO_IP_STATE_INIT;
+         //The host can then continue to use the address normally without
+         //any further special action
+         autoIpChangeState(context, AUTO_IP_STATE_DEFENDING, 0);
       }
    }
+   else if(context->state == AUTO_IP_STATE_DEFENDING)
+   {
+      //if this is not the first conflicting ARP packet the host has seen, and
+      //the time recorded for the previous conflicting ARP packet is recent,
+      //within DEFEND_INTERVAL seconds, then the host must immediately cease
+      //using this address
+      if(interface->ipv4Context.addrConflict)
+      {
+         //The link-local address cannot be used anymore
+         interface->ipv4Context.addr = IPV4_UNSPECIFIED_ADDR;
+         interface->ipv4Context.addrState = IPV4_ADDR_STATE_INVALID;
 
-   //Leave critical section
-   osReleaseMutex(&context->mutex);
+#if (MDNS_RESPONDER_SUPPORT == ENABLED)
+         //Restart mDNS probing process
+         mdnsResponderStartProbing(interface->mdnsResponderContext);
+#endif
+         //The host must pick a new random address...
+         autoIpGenerateAddr(&context->linkLocalAddr);
+         //...and probes/announces again
+         autoIpChangeState(context, AUTO_IP_STATE_INIT, 0);
+      }
+      else
+      {
+         //Check whether the DEFEND_INTERVAL has elapsed
+         if(timeCompare(time, context->timestamp + AUTO_IP_DEFEND_INTERVAL) >= 0)
+         {
+            //The host can continue to use its link-local address
+            autoIpChangeState(context, AUTO_IP_STATE_CONFIGURED, 0);
+         }
+      }
+   }
 }
 
 
@@ -373,18 +427,29 @@ void autoIpTick(AutoIpContext *context)
 
 void autoIpLinkChangeEvent(AutoIpContext *context)
 {
-   //Enter critical section
-   osAcquireMutex(&context->mutex);
+   NetInterface *interface;
+
+   //Make sure Auto-IP has been properly instantiated
+   if(context == NULL)
+      return;
+
+   //Point to the underlying network interface
+   interface = context->settings.interface;
 
    //Check whether Auto-IP is enabled
    if(context->running)
    {
       //The host address is not longer valid
-      ipv4SetHostAddrEx(context->interface,
-         IPV4_UNSPECIFIED_ADDR, IPV4_ADDR_STATE_INVALID);
+      interface->ipv4Context.addr = IPV4_UNSPECIFIED_ADDR;
+      interface->ipv4Context.addrState = IPV4_ADDR_STATE_INVALID;
+
+#if (MDNS_RESPONDER_SUPPORT == ENABLED)
+      //Restart mDNS probing process
+      mdnsResponderStartProbing(interface->mdnsResponderContext);
+#endif
 
       //Clear subnet mask
-      ipv4SetSubnetMask(context->interface, IPV4_UNSPECIFIED_ADDR);
+      interface->ipv4Context.subnetMask = IPV4_UNSPECIFIED_ADDR;
    }
 
    //Reinitialize state machine
@@ -392,30 +457,53 @@ void autoIpLinkChangeEvent(AutoIpContext *context)
    //Reset conflict counter
    context->conflictCount = 0;
 
-   //Leave critical section
-   osReleaseMutex(&context->mutex);
+   //Any registered callback?
+   if(context->settings.linkChangeEvent != NULL)
+   {
+      //Release exclusive access
+      osReleaseMutex(&netMutex);
+      //Invoke user callback function
+      context->settings.linkChangeEvent(context, interface, interface->linkState);
+      //Get exclusive access
+      osAcquireMutex(&netMutex);
+   }
 }
 
 
 /**
- * @brief Dump Auto-IP configuration for debugging purpose
+ * @brief Update Auto-IP FSM state
  * @param[in] context Pointer to the Auto-IP context
+ * @param[in] newState New Auto-IP state to switch to
+ * @param[in] delay Initial delay
  **/
 
-void autoIpDumpConfig(AutoIpContext *context)
+void autoIpChangeState(AutoIpContext *context,
+   AutoIpState newState, systime_t delay)
 {
-   Ipv4Addr ipv4Addr;
+   NetInterface *interface;
 
-   //Debug message
-   TRACE_INFO("\r\nAuto-IP configuration:\r\n");
+   //Point to the underlying network interface
+   interface = context->settings.interface;
 
-   //Link-local address
-   ipv4GetHostAddr(context->interface, &ipv4Addr);
-   TRACE_INFO("  Link-local Address = %s\r\n", ipv4AddrToString(ipv4Addr, NULL));
+   //Set time stamp
+   context->timestamp = osGetSystemTime();
+   //Set initial delay
+   context->timeout = delay;
+   //Reset retransmission counter
+   context->retransmitCount = 0;
+   //Switch to the new state
+   context->state = newState;
 
-   //Subnet mask
-   ipv4GetSubnetMask(context->interface, &ipv4Addr);
-   TRACE_INFO("  Subnet Mask = %s\r\n", ipv4AddrToString(ipv4Addr, NULL));
+   //Any registered callback?
+   if(context->settings.stateChangeEvent != NULL)
+   {
+      //Release exclusive access
+      osReleaseMutex(&netMutex);
+      //Invoke user callback function
+      context->settings.stateChangeEvent(context, interface, newState);
+      //Get exclusive access
+      osAcquireMutex(&netMutex);
+   }
 }
 
 
@@ -434,6 +522,40 @@ void autoIpGenerateAddr(Ipv4Addr *ipAddr)
 
    //Convert the resulting address to network byte order
    *ipAddr = htonl(n);
+}
+
+
+/**
+ * @brief Dump Auto-IP configuration for debugging purpose
+ * @param[in] context Pointer to the Auto-IP context
+ **/
+
+void autoIpDumpConfig(AutoIpContext *context)
+{
+#if (AUTO_IP_TRACE_LEVEL >= TRACE_LEVEL_INFO)
+   NetInterface *interface;
+   Ipv4Context *ipv4Context;
+
+   //Point to the underlying network interface
+   interface = context->settings.interface;
+   //Point to the IPv4 context
+   ipv4Context = &interface->ipv4Context;
+
+   //Debug message
+   TRACE_INFO("\r\n");
+   TRACE_INFO("Auto-IP configuration:\r\n");
+
+   //Link-local address
+   TRACE_INFO("  Link-local Address = %s\r\n",
+      ipv4AddrToString(ipv4Context->addr, NULL));
+
+   //Subnet mask
+   TRACE_INFO("  Subnet Mask = %s\r\n",
+      ipv4AddrToString(ipv4Context->subnetMask, NULL));
+
+   //Debug message
+   TRACE_INFO("\r\n");
+#endif
 }
 
 #endif

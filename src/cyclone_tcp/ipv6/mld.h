@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _MLD_H
@@ -42,7 +42,7 @@
 //MLD tick interval
 #ifndef MLD_TICK_INTERVAL
    #define MLD_TICK_INTERVAL 1000
-#elif (MLD_TICK_INTERVAL < 100)
+#elif (MLD_TICK_INTERVAL < 10)
    #error MLD_TICK_INTERVAL parameter is not valid
 #endif
 
@@ -69,8 +69,8 @@ typedef enum
 } MldState;
 
 
-//Win32 compiler?
-#if defined(_WIN32)
+//CodeWarrior or Win32 compiler?
+#if defined(__CWCC__) || defined(_WIN32)
    #pragma pack(push, 1)
 #endif
 
@@ -90,11 +90,14 @@ typedef __start_packed struct
 } __end_packed MldMessage;
 
 
-//Win32 compiler?
-#if defined(_WIN32)
+//CodeWarrior or Win32 compiler?
+#if defined(__CWCC__) || defined(_WIN32)
    #pragma pack(pop)
 #endif
 
+
+//Tick counter to handle periodic operations
+extern systime_t mldTickCounter;
 
 //MLD related functions
 error_t mldInit(NetInterface *interface);

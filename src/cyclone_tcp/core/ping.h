@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _PING_H
@@ -31,10 +31,15 @@
 
 #include "core/ip.h"
 
-//Number of data bytes in Echo Request messages
-#define PING_DATA_SIZE 64
+//Maximum size of ping requests
+#ifndef PING_MAX_DATA_SIZE
+   #define PING_MAX_DATA_SIZE 8192
+#elif (PING_MAX_DATA_SIZE < 0)
+   #error PING_MAX_DATA_SIZE parameter is not valid
+#endif
 
 //Ping related functions
-error_t ping(NetInterface *interface, const IpAddr *ipAddr, systime_t timeout, systime_t *rtt);
+error_t ping(NetInterface *interface, const IpAddr *ipAddr,
+   size_t size, uint8_t ttl, systime_t timeout, systime_t *rtt);
 
 #endif

@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -37,6 +37,9 @@
 #include "core/net.h"
 #include "drivers/avr32_eth.h"
 #include "debug.h"
+
+//Underlying network interface
+static NetInterface *nicDriverInterface;
 
 //TX buffer
 static uint8_t txBuffer[AVR32_ETH_TX_BUFFER_COUNT][AVR32_ETH_TX_BUFFER_SIZE]
@@ -70,8 +73,9 @@ const NicDriver avr32EthDriver =
    avr32EthEnableIrq,
    avr32EthDisableIrq,
    avr32EthEventHandler,
-   avr32EthSetMacFilter,
    avr32EthSendPacket,
+   avr32EthSetMulticastFilter,
+   avr32EthUpdateMacConfig,
    avr32EthWritePhyReg,
    avr32EthReadPhyReg,
    TRUE,
@@ -93,6 +97,9 @@ error_t avr32EthInit(NetInterface *interface)
 
    //Debug message
    TRACE_INFO("Initializing AVR32 Ethernet MAC...\r\n");
+
+   //Save underlying network interface
+   nicDriverInterface = interface;
 
    //GPIO configuration
    avr32EthInitGpio(interface);
@@ -147,9 +154,7 @@ error_t avr32EthInit(NetInterface *interface)
    //Enable the EMAC to transmit and receive data
    AVR32_MACB.ncr |= AVR32_MACB_NCR_TE_MASK | AVR32_MACB_NCR_RE_MASK;
 
-   //Force the TCP/IP stack to check the link state
-   osSetEvent(&interface->nicRxEvent);
-   //AVR32 Ethernet MAC is now ready to send
+   //Accept any packets from the upper layer
    osSetEvent(&interface->nicTxEvent);
 
    //Successful initialization
@@ -302,10 +307,7 @@ bool_t avr32EthIrqHandler(void)
    volatile uint32_t isr;
    volatile uint32_t tsr;
    volatile uint32_t rsr;
-   NetInterface *interface;
 
-   //Point to the structure describing the network interface
-   interface = &netInterface[0];
    //This flag will be set if a higher priority task must be woken
    flag = FALSE;
 
@@ -325,15 +327,18 @@ bool_t avr32EthIrqHandler(void)
       //Check whether the TX buffer is available for writing
       if(txBufferDesc[txBufferIndex].status & MACB_TX_USED)
       {
-         //Notify the user that the transmitter is ready to send
-         flag |= osSetEventFromIsr(&interface->nicTxEvent);
+         //Notify the TCP/IP stack that the transmitter is ready to send
+         flag |= osSetEventFromIsr(&nicDriverInterface->nicTxEvent);
       }
    }
+
    //A packet has been received?
    if(rsr & (AVR32_MACB_RSR_OVR_MASK | AVR32_MACB_RSR_REC_MASK | AVR32_MACB_RSR_BNA_MASK))
    {
-      //Notify the user that a packet has been received
-      flag |= osSetEventFromIsr(&interface->nicRxEvent);
+      //Set event flag
+      nicDriverInterface->nicEvent = TRUE;
+      //Notify the TCP/IP stack of the event
+      flag |= osSetEventFromIsr(&netEvent);
    }
 
    //A higher priority task must be woken?
@@ -349,49 +354,10 @@ bool_t avr32EthIrqHandler(void)
 void avr32EthEventHandler(NetInterface *interface)
 {
    uint32_t rsr;
-   uint_t length;
-   bool_t linkStateChange;
+   size_t length;
 
    //Read receive status
    rsr = AVR32_MACB.rsr;
-
-   //PHY event is pending?
-   if(interface->phyEvent)
-   {
-      //Acknowledge the event by clearing the flag
-      interface->phyEvent = FALSE;
-      //Handle PHY specific events
-      linkStateChange = interface->phyDriver->eventHandler(interface);
-
-      //Check whether the link state has changed?
-      if(linkStateChange)
-      {
-         //Set speed and duplex mode for proper operation
-         if(interface->linkState)
-         {
-            //Read network configuration register
-            uint32_t config = AVR32_MACB.ncfgr;
-
-            //10BASE-T or 100BASE-TX operation mode?
-            if(interface->speed100)
-               config |= AVR32_MACB_NCFGR_SPD_MASK;
-            else
-               config &= ~AVR32_MACB_NCFGR_SPD_MASK;
-
-            //Half-duplex or full-duplex mode?
-            if(interface->fullDuplex)
-               config |= AVR32_MACB_NCFGR_FD_MASK;
-            else
-               config &= ~AVR32_MACB_NCFGR_FD_MASK;
-
-            //Write configuration value back to NCFGR register
-            AVR32_MACB.ncfgr = config;
-         }
-
-         //Process link state change event
-         nicNotifyLinkChange(interface);
-      }
-   }
 
    //Packet received?
    if(rsr & (AVR32_MACB_RSR_OVR_MASK | AVR32_MACB_RSR_REC_MASK | AVR32_MACB_RSR_BNA_MASK))
@@ -410,67 +376,6 @@ void avr32EthEventHandler(NetInterface *interface)
          nicProcessPacket(interface, interface->ethFrame, length);
       }
    }
-}
-
-
-/**
- * @brief Configure multicast MAC address filtering
- * @param[in] interface Underlying network interface
- * @return Error code
- **/
-
-error_t avr32EthSetMacFilter(NetInterface *interface)
-{
-   uint_t i;
-   uint_t j;
-   uint32_t hashTable[2];
-
-   //Debug message
-   TRACE_INFO("Updating AVR32 hash table...\r\n");
-
-   //Clear hash table
-   hashTable[0] = 0;
-   hashTable[1] = 0;
-
-   //The MAC filter table contains the multicast MAC addresses
-   //to accept when receiving an Ethernet frame
-   for(i = 0; i < interface->macFilterSize; i++)
-   {
-      //Point to the current address
-      MacAddr *addr = &interface->macFilter[i].addr;
-      //Reset hash value
-      uint_t hashIndex = 0;
-
-      //Apply the hash function
-      for(j = 0; j < 48; j += 6)
-      {
-         //Calculate the shift count
-         uint_t n = j / 8;
-         uint_t m = j % 8;
-
-         //Update hash value
-         if(!m)
-            hashIndex ^= addr->b[n];
-         else
-            hashIndex ^= (addr->b[n] >> m) | (addr->b[n + 1] << (8 - m));
-      }
-
-      //The hash value is reduced to a 6-bit index
-      hashIndex &= 0x3F;
-      //Update hash table contents
-      hashTable[hashIndex / 32] |= (1 << (hashIndex % 32));
-   }
-
-   //Write the hash table
-   AVR32_MACB.hrb = hashTable[0];
-   AVR32_MACB.hrt = hashTable[1];
-
-   //Debug message
-   TRACE_INFO("  HRB = %08" PRIX32 "\r\n", AVR32_MACB.hrb);
-   TRACE_INFO("  HRT = %08" PRIX32 "\r\n", AVR32_MACB.hrt);
-
-   //Successful processing
-   return NO_ERROR;
 }
 
 
@@ -633,6 +538,109 @@ uint_t avr32EthReceivePacket(NetInterface *interface,
 
    //Return the number of bytes that have been received
    return length;
+}
+
+
+/**
+ * @brief Configure multicast MAC address filtering
+ * @param[in] interface Underlying network interface
+ * @return Error code
+ **/
+
+error_t avr32EthSetMulticastFilter(NetInterface *interface)
+{
+   uint_t i;
+   uint_t j;
+   uint_t k;
+   uint_t m;
+   uint_t n;
+   uint32_t hashTable[2];
+   MacFilterEntry *entry;
+
+   //Debug message
+   TRACE_DEBUG("Updating AVR32 hash table...\r\n");
+
+   //Clear hash table
+   hashTable[0] = 0;
+   hashTable[1] = 0;
+
+   //The MAC filter table contains the multicast MAC addresses
+   //to accept when receiving an Ethernet frame
+   for(i = 0; i < MAC_MULTICAST_FILTER_SIZE; i++)
+   {
+      //Point to the current entry
+      entry = &interface->macMulticastFilter[i];
+
+      //Valid entry?
+      if(entry->refCount > 0)
+      {
+         //Reset hash value
+         k = 0;
+
+         //Apply the hash function
+         for(j = 0; j < 48; j += 6)
+         {
+            //Calculate the shift count
+            n = j / 8;
+            m = j % 8;
+
+            //Update hash value
+            if(!m)
+               k ^= entry->addr.b[n];
+            else
+               k ^= (entry->addr.b[n] >> m) | (entry->addr.b[n + 1] << (8 - m));
+         }
+
+         //The hash value is reduced to a 6-bit index
+         k &= 0x3F;
+         //Update hash table contents
+         hashTable[k / 32] |= (1 << (k % 32));
+      }
+   }
+
+   //Write the hash table
+   AVR32_MACB.hrb = hashTable[0];
+   AVR32_MACB.hrt = hashTable[1];
+
+   //Debug message
+   TRACE_DEBUG("  HRB = %08" PRIX32 "\r\n", AVR32_MACB.hrb);
+   TRACE_DEBUG("  HRT = %08" PRIX32 "\r\n", AVR32_MACB.hrt);
+
+   //Successful processing
+   return NO_ERROR;
+}
+
+
+/**
+ * @brief Adjust MAC configuration parameters for proper operation
+ * @param[in] interface Underlying network interface
+ * @return Error code
+ **/
+
+error_t avr32EthUpdateMacConfig(NetInterface *interface)
+{
+   uint32_t config;
+
+   //Read network configuration register
+   config = AVR32_MACB.ncfgr;
+
+   //10BASE-T or 100BASE-TX operation mode?
+   if(interface->linkSpeed == NIC_LINK_SPEED_100MBPS)
+      config |= AVR32_MACB_NCFGR_SPD_MASK;
+   else
+      config &= ~AVR32_MACB_NCFGR_SPD_MASK;
+
+   //Half-duplex or full-duplex mode?
+   if(interface->duplexMode == NIC_FULL_DUPLEX_MODE)
+      config |= AVR32_MACB_NCFGR_FD_MASK;
+   else
+      config &= ~AVR32_MACB_NCFGR_FD_MASK;
+
+   //Write configuration value back to NCFGR register
+   AVR32_MACB.ncfgr = config;
+
+   //Successful processing
+   return NO_ERROR;
 }
 
 

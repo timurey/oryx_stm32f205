@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _DHCP_DEBUG_H
@@ -39,20 +39,18 @@
 //Check current trace level
 #if (PPP_TRACE_LEVEL >= TRACE_LEVEL_DEBUG)
 
-//Related functions
-void pppDumpFrameHeader(const PppFrame *header);
-
+//PPP related functions
 error_t pppDumpPacket(const PppPacket *packet, size_t length, PppProtocol protocol);
 error_t lcpDumpPacket(const PppPacket *packet, size_t length);
 error_t ncpDumpPacket(const PppPacket *packet, size_t length, PppProtocol protocol);
 error_t papDumpPacket(const PppPacket *packet, size_t length);
+error_t chapDumpPacket(const PppPacket *packet, size_t length);
 
 error_t lcpDumpOptions(const PppOption *option, size_t length);
 error_t ipcpDumpOptions(const PppOption *option, size_t length);
 error_t ipv6cpDumpOptions(const PppOption *option, size_t length);
 
 #else
-   #define pppDumpFrameHeader(header)
    #define pppDumpPacket(packet, length, protocol)
 #endif
 

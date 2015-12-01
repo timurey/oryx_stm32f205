@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _SNMP_AGENT_H
@@ -62,6 +62,20 @@
    #error SNMP_AGENT_MAX_MIB_COUNT parameter is not valid
 #endif
 
+//Maximum OID size
+#ifndef SNMP_AGENT_MAX_OID_SIZE
+   #define SNMP_AGENT_MAX_OID_SIZE 16
+#elif (SNMP_AGENT_MAX_OID_SIZE < 1)
+   #error SNMP_AGENT_MAX_OID_SIZE parameter is not valid
+#endif
+
+//Maximum number of trap destination IP addresses
+#ifndef SNMP_AGENT_MAX_TRAP_DEST_ADDRS
+   #define SNMP_AGENT_MAX_TRAP_DEST_ADDRS 2
+#elif (SNMP_AGENT_MAX_TRAP_DEST_ADDRS < 1)
+   #error SNMP_AGENT_MAX_TRAP_DEST_ADDRS parameter is not valid
+#endif
+
 
 /**
  * @brief SNMP agent settings
@@ -71,6 +85,8 @@ typedef struct
 {
    NetInterface *interface;                           ///<Network interface to configure
    SnmpVersion version;                               ///<SNMP version identifier
+   uint8_t enterpriseOid[SNMP_AGENT_MAX_OID_SIZE];    ///<Enterprise OID
+   size_t enterpriseOidLen;                           ///<Length of the enterprise OID
    char_t readOnlyCommunity[SNMP_MAX_COMMUNITY_LEN];  ///<Read-only community string
    char_t readWriteCommunity[SNMP_MAX_COMMUNITY_LEN]; ///<Read-write community string
    char_t trapCommunity[SNMP_MAX_COMMUNITY_LEN];      ///<Trap community string
@@ -113,6 +129,8 @@ typedef struct
    int32_t requestId;                 ///<Request identifier
    int32_t errorStatus;               ///<Error status
    int32_t errorIndex;                ///<Error index
+   int32_t genericTrapType;           ///<Generic trap type
+   int32_t specificTrapCode;          ///<Specific trap code
    uint8_t *varBindList;              ///<List of variable bindings
    size_t varBindListLen;             ///<Length of the list in bytes
    size_t bytesAvailable;             ///<Number of bytes available in the buffer
@@ -127,10 +145,14 @@ typedef struct
 typedef struct
 {
    NetInterface *interface;                              ///<Underlying network interface
+   OsMutex mutex;                                        ///<Mutex preventing simultaneous access to SNMP agent context
    uint_t version;                                       ///<SNMP version identifier
+   uint8_t enterpriseOid[SNMP_AGENT_MAX_OID_SIZE];       ///<Enterprise OID
+   size_t enterpriseOidLen;                              ///<Length of the enterprise OID
    char_t readOnlyCommunity[SNMP_MAX_COMMUNITY_LEN];     ///<Read-only community string
    char_t readWriteCommunity[SNMP_MAX_COMMUNITY_LEN];    ///<Read-write community string
    char_t trapCommunity[SNMP_MAX_COMMUNITY_LEN];         ///<Trap community string
+   IpAddr trapDestAddr[SNMP_AGENT_MAX_TRAP_DEST_ADDRS];  ///<Trap destination IP addresses
    const MibModule *mibModule[SNMP_AGENT_MAX_MIB_COUNT]; ///<MIB modules
    uint_t mibModuleCount;                                ///<Number of MIB modules
    Socket *socket;                                       ///<Underlying socket
@@ -141,12 +163,29 @@ typedef struct
 } SnmpAgentContext;
 
 
+/**
+ * @brief Object descriptor
+ **/
+
+typedef struct
+{
+   uint8_t oid[SNMP_AGENT_MAX_OID_SIZE];
+   size_t oidLen;
+} SnmpTrapObject;
+
+
 //SNMP agent related functions
 void snmpAgentGetDefaultSettings(SnmpAgentSettings *settings);
 error_t snmpAgentInit(SnmpAgentContext *context, const SnmpAgentSettings *settings);
 error_t snmpAgentLoadMib(SnmpAgentContext *context, const MibModule *module);
 error_t snmpAgentStart(SnmpAgentContext *context);
 
-void snmpAgentTask(void *param);
+error_t snmpAgentSetTrapDestAddr(SnmpAgentContext *context,
+   uint_t index, const IpAddr *ipAddr);
+
+error_t snmpSendTrap(SnmpAgentContext *context, uint_t genericTrapType,
+   uint_t specificTrapCode, const SnmpTrapObject *objectList, uint_t objectListSize);
+
+void snmpAgentTask(SnmpAgentContext *context);
 
 #endif

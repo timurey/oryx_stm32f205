@@ -83,10 +83,10 @@
 									<listOptionValue builtIn="false" value="&quot;../include&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;../src/my_cyclone&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;../src/my_cyclone/common&quot;"/>
+									<listOptionValue builtIn="false" value="&quot;../src/common&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;../src/fatfs&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;../src/fatfs/driver&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;../src/stuff&quot;"/>
-									<listOptionValue builtIn="false" value="&quot;../src/common&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;../src/cyclone_tcp&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;../src/freertos/include&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;../system/include&quot;"/>
@@ -96,6 +96,7 @@
 									<listOptionValue builtIn="false" value="&quot;../src/usb/class/cdc/inc&quot;"/>
 									<listOptionValue builtIn="false" value="../src/jsmn"/>
 									<listOptionValue builtIn="false" value="../src/onewire"/>
+									<listOptionValue builtIn="false" value="&quot;../src/cyclone_crypto&quot;"/>
 								</option>
 								<option id="ilg.gnuarmeclipse.managedbuild.cross.option.c.compiler.warning.missingprototypes.176744479" name="Warn if a global function has no prototype (-Wmissing-prototypes)" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.c.compiler.warning.missingprototypes" useByScannerDiscovery="true" value="true" valueType="boolean"/>
 								<option id="ilg.gnuarmeclipse.managedbuild.cross.option.c.compiler.warning.strictprototypes.1499493906" name="Warn if a function has no arg type (-Wstrict-prototypes)" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.c.compiler.warning.strictprototypes" useByScannerDiscovery="true" value="true" valueType="boolean"/>
@@ -301,7 +302,7 @@
 						</toolChain>
 					</folderInfo>
 					<sourceEntries>
-						<entry excluding="stuff/FreeRTOS_CLI.c|stuff/CLI-commands.c|stuff/cli_hal.c|cyclone_tcp/ftp|common/path.c|common/resource_manager.c|cyclone_tcp/http|cyclone_tcp/mdns|cyclone_tcp/dhcp|common/date_time.c|freertos/heap_3.c|fatfs/option/unicode.c|fatfs/option/cc950.c|fatfs/option/cc949.c|fatfs/option/cc936.c|fatfs/option/cc932.c|fatfs/drivers/usbh_diskio.c|fatfs/drivers/sram_diskio.c|fatfs/drivers/sdram_diskio.c|common/os_port_ucos2.c|cyclone/dns|cyclone/http|cyclone/icecast|cyclone_tcp/drivers|freertos/heap_2.c|cyclone_tcp/std_services|freertos/heap_1.c|my_cyclone/cyclone_crypto|cyclone_tcp/snmp|cyclone_tcp/smtp|common/fs_port_fatfs.c|common/os_port_ucos3.c|common/os_port_rtx.c|common/os_port_cmsis_rtos.c|cyclone_tcp/icecast|common/os_port_chibios.c|common/os_port_windows.c|freertos/heap_5.c" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="src"/>
+						<entry excluding="cyclone_crypto|my_cyclone/mdns|my_cyclone/dhcp|stuff/FreeRTOS_CLI.c|stuff/CLI-commands.c|stuff/cli_hal.c|cyclone_tcp/ftp|common/path.c|common/resource_manager.c|cyclone_tcp/http|common/date_time.c|freertos/heap_3.c|fatfs/option/unicode.c|fatfs/option/cc950.c|fatfs/option/cc949.c|fatfs/option/cc936.c|fatfs/option/cc932.c|fatfs/drivers/usbh_diskio.c|fatfs/drivers/sram_diskio.c|fatfs/drivers/sdram_diskio.c|common/os_port_ucos2.c|cyclone/dns|cyclone/http|cyclone/icecast|cyclone_tcp/drivers|freertos/heap_2.c|cyclone_tcp/std_services|freertos/heap_1.c|my_cyclone/cyclone_crypto|cyclone_tcp/snmp|cyclone_tcp/smtp|common/fs_port_fatfs.c|common/os_port_ucos3.c|common/os_port_rtx.c|common/os_port_cmsis_rtos.c|cyclone_tcp/icecast|common/os_port_chibios.c|common/os_port_windows.c|freertos/heap_5.c" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="src"/>
 						<entry excluding="src/stm32f1-usb_fs|src/stm32f1-stdperiph/stm32f10x_flash.c" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="system"/>
 					</sourceEntries>
 				</configuration>
@@ -389,12 +390,12 @@
 							<tool errorParsers="org.eclipse.cdt.core.GLDErrorParser;org.eclipse.cdt.core.GCCErrorParser" id="ilg.gnuarmeclipse.managedbuild.cross.tool.c.compiler.721628964" name="Cross ARM C Compiler" superClass="ilg.gnuarmeclipse.managedbuild.cross.tool.c.compiler">
 								<option id="ilg.gnuarmeclipse.managedbuild.cross.option.c.compiler.include.paths.246720350" name="Include paths (-I)" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.c.compiler.include.paths" useByScannerDiscovery="false" valueType="includePath">
 									<listOptionValue builtIn="false" value="&quot;../include&quot;"/>
+									<listOptionValue builtIn="false" value="&quot;../src/common&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;../src/my_cyclone&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;../src/my_cyclone/common&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;../src/fatfs&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;../src/fatfs/driver&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;../src/stuff&quot;"/>
-									<listOptionValue builtIn="false" value="&quot;../src/common&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;../src/cyclone_tcp&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;../src/freertos/include&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;../system/include&quot;"/>
@@ -404,6 +405,7 @@
 									<listOptionValue builtIn="false" value="&quot;../src/usb/class/cdc/inc&quot;"/>
 									<listOptionValue builtIn="false" value="../src/jsmn"/>
 									<listOptionValue builtIn="false" value="../src/onewire"/>
+									<listOptionValue builtIn="false" value="&quot;../src/cyclone_crypto&quot;"/>
 								</option>
 								<option id="ilg.gnuarmeclipse.managedbuild.cross.option.c.compiler.warning.missingprototypes.981446534" name="Warn if a global function has no prototype (-Wmissing-prototypes)" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.c.compiler.warning.missingprototypes" useByScannerDiscovery="true" value="true" valueType="boolean"/>
 								<option id="ilg.gnuarmeclipse.managedbuild.cross.option.c.compiler.warning.strictprototypes.337381502" name="Warn if a function has no arg type (-Wstrict-prototypes)" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.c.compiler.warning.strictprototypes" useByScannerDiscovery="true" value="true" valueType="boolean"/>
@@ -488,7 +490,7 @@
 						</toolChain>
 					</folderInfo>
 					<sourceEntries>
-						<entry excluding="stuff/FreeRTOS_CLI.c|stuff/CLI-commands.c|stuff/cli_hal.c|cyclone_tcp/ftp|common/path.c|common/resource_manager.c|cyclone_tcp/http|cyclone_tcp/mdns|cyclone_tcp/dhcp|common/date_time.c|freertos/heap_3.c|fatfs/option/unicode.c|fatfs/option/cc950.c|fatfs/option/cc949.c|fatfs/option/cc936.c|fatfs/option/cc932.c|fatfs/drivers/usbh_diskio.c|fatfs/drivers/sram_diskio.c|fatfs/drivers/sdram_diskio.c|common/os_port_ucos2.c|cyclone/dns|cyclone/http|cyclone/icecast|cyclone_tcp/drivers|freertos/heap_2.c|cyclone_tcp/std_services|freertos/heap_1.c|my_cyclone/cyclone_crypto|cyclone_tcp/snmp|cyclone_tcp/smtp|common/fs_port_fatfs.c|common/os_port_ucos3.c|common/os_port_rtx.c|common/os_port_cmsis_rtos.c|cyclone_tcp/icecast|common/os_port_chibios.c|common/os_port_windows.c|freertos/heap_5.c" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="src"/>
+						<entry excluding="cyclone_crypto|my_cyclone/mdns|my_cyclone/dhcp|stuff/FreeRTOS_CLI.c|stuff/CLI-commands.c|stuff/cli_hal.c|cyclone_tcp/ftp|common/path.c|common/resource_manager.c|cyclone_tcp/http|common/date_time.c|freertos/heap_3.c|fatfs/option/unicode.c|fatfs/option/cc950.c|fatfs/option/cc949.c|fatfs/option/cc936.c|fatfs/option/cc932.c|fatfs/drivers/usbh_diskio.c|fatfs/drivers/sram_diskio.c|fatfs/drivers/sdram_diskio.c|common/os_port_ucos2.c|cyclone/dns|cyclone/http|cyclone/icecast|cyclone_tcp/drivers|freertos/heap_2.c|cyclone_tcp/std_services|freertos/heap_1.c|my_cyclone/cyclone_crypto|cyclone_tcp/snmp|cyclone_tcp/smtp|common/fs_port_fatfs.c|common/os_port_ucos3.c|common/os_port_rtx.c|common/os_port_cmsis_rtos.c|cyclone_tcp/icecast|common/os_port_chibios.c|common/os_port_windows.c|freertos/heap_5.c" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="src"/>
 						<entry excluding="src/stm32f1-usb_fs|src/stm32f1-stdperiph/stm32f10x_flash.c" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="system"/>
 					</sourceEntries>
 				</configuration>

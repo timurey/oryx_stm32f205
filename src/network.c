@@ -28,8 +28,19 @@ AutoIpContext autoIpContext;
 
 DhcpClientSettings dhcpClientSettings;
 DhcpClientCtx dhcpClientContext;
+
+#if IPV6_SUPPORT == ENABLED
+
+static Ipv6Addr ipv6Addr;
+
+#if (SLAAC_SUPPORT == ENABLED)
 SlaacSettings slaacSettings;
 SlaacContext slaacContext;
+#endif //SLAAC_SUPPORT
+
+#endif //IPV6_SUPPORT
+
+
 static bool_t useDhcp = FALSE;
 
 static Ipv4Addr ipv4Addr;
@@ -40,8 +51,17 @@ static Ipv4Addr ipv4Dns2;
 static char sMacAddr[18];
 static    MacAddr macAddr;
 static char hostname[NET_MAX_HOSTNAME_LEN];
-#if IPV6_SUPPORT == ENABLED
-static Ipv6Addr ipv6Addr;
+
+
+
+#if (DNS_SD_SUPPORT == ENABLED)
+DnsSdContext dnsSdContext;
+DnsSdSettings dnsSdSettings;
+#endif
+
+#if (MDNS_CLIENT_SUPPORT == ENABLED | MDNS_RESPONDER_SUPPORT == ENABLED)
+MdnsResponderContext mdnsResponderContext;
+MdnsResponderSettings mdnsResponderSettings;
 #endif
 
 static void ipv4UseDefaultConfigs(void)
@@ -486,6 +506,10 @@ error_t networkStart(void)
 {
 
    error_t error; //for debugging
+   char name[NET_MAX_HOSTNAME_LEN + 9];
+   char *aurora = "aurora - ";
+   char *pHostname = &hostname[0];
+   char *pName  = &name[0];
 
    xprintf("System clock: %uHz\n", SystemCoreClock);
    xprintf("**********************************\r\n");
@@ -501,7 +525,7 @@ error_t networkStart(void)
    //Set interface name
    netSetInterfaceName(interface, "eth0");
    //Set host name
-   netSetHostname(interface, &hostname);
+   netSetHostname(interface, pHostname);
    //Select the relevant network adapter
    netSetDriver(interface, &enc28j60Driver);
    //Underlying SPI driver
@@ -565,26 +589,109 @@ error_t networkStart(void)
    //	autoIpInit(&autoIpContext, &autoIpSettings);
    //	autoIpStart(&autoIpContext);
 
-   error = dnsSdSetInstanceName(&netInterface[0], (char *)&hostname);
-   if (error)
-      return error;
-   DnsSdServices[0].name="_http._tcp";
-   DnsSdServices[0].priority=0;
-   DnsSdServices[0].weight=0;
-   DnsSdServices[0].port=80;
-   DnsSdServices[0].info="path=/";
 
-   DnsSdServices[1].name="_ftp._tcp";
-   DnsSdServices[1].priority=0;
-   DnsSdServices[1].weight=0;
-   DnsSdServices[1].port=21;
-   DnsSdServices[1].info="";
+#if (MDNS_RESPONDER_SUPPORT == ENABLED)
+   //Get default settings
+   mdnsResponderGetDefaultSettings(&mdnsResponderSettings);
+   //Underlying network interface
+   mdnsResponderSettings.interface = &netInterface[0];
 
-   error = dnsSdRegisterServices(&netInterface[0], &DnsSdServices[0], 2);
+   //mDNS responder initialization
+   error = mdnsResponderInit(&mdnsResponderContext, &mdnsResponderSettings);
+   //Failed to initialize mDNS responder?
+   if(error)
+   {
+      //Debug message
+      TRACE_ERROR("Failed to initialize mDNS responder!\r\n");
+   }
 
-   return error;
-   //
-   //	dnsSdSetInstanceName(&netInterface[0], "Web Server");
+   //Set mDNS hostname
+   error = mdnsResponderSetHostname(&mdnsResponderContext, pHostname);
+   //Any error to report?
+   if(error)
+   {
+      //Debug message
+      TRACE_ERROR("Failed to set hostname!\r\n");
+   }
+
+   //Start mDNS responder
+   error = mdnsResponderStart(&mdnsResponderContext);
+   //Failed to start mDNS responder?
+   if(error)
+   {
+      //Debug message
+      TRACE_ERROR("Failed to start mDNS responder!\r\n");
+   }
+#endif
+#if (DNS_SD_SUPPORT == ENABLED)
+   //Get default settings
+   dnsSdGetDefaultSettings(&dnsSdSettings);
+   //Underlying network interface
+   dnsSdSettings.interface = &netInterface[0];
+
+   //DNS-SD initialization
+   error = dnsSdInit(&dnsSdContext, &dnsSdSettings);
+   //Failed to initialize DNS-SD?
+   if(error)
+   {
+      //Debug message
+      TRACE_ERROR("Failed to initialize DNS-SD!\r\n");
+   }
+
+   //Unregister service
+   error = dnsSdUnregisterService(&dnsSdContext, "_http._tcp");
+   error = dnsSdUnregisterService(&dnsSdContext, "_ftp._tcp");
+
+   strcpy(name, aurora);
+   strcat(name, pHostname);
+
+   //Set instance name
+   error = dnsSdSetInstanceName(&dnsSdContext, pName);
+
+   //Any error to report?
+   if(error)
+   {
+      //Debug message
+      TRACE_ERROR("Failed to set instance name!\r\n");
+   }
+   //Register DNS-SD service
+   error = dnsSdRegisterService(&dnsSdContext,
+               "_http._tcp",
+               0,
+               0,
+               80,
+               "txtvers=1;"
+               "path=/");
+
+   error = dnsSdRegisterService(&dnsSdContext,
+               "_ftp._tcp",
+               0,
+               0,
+               21,
+               "");
+//   error = dnsSdRegisterService(&dnsSdContext,
+//      "_hap._tcp",
+//      0,
+//      0,
+//      80,
+//      "c#=5;"
+//      "ff=0x1;"
+//      "id=00:11:22:33:44:55;"
+//      "md=AcmeFan;"
+//      "pv=1.0;"
+//      "s#=1;"
+//      "sf=0x0;"
+//      "ci=5");
+   //Start DNS-SD
+   error = dnsSdStart(&dnsSdContext);
+   //Failed to start DNS-SD?
+   if(error)
+   {
+      //Debug message
+      TRACE_ERROR("Failed to start DNS-SD!\r\n");
+   }
+#endif
+   return NO_ERROR;
 }
 
 
@@ -610,7 +717,7 @@ void networkServices(void *pvParametrs)
 #endif
    httpdStart();
 
-   vTaskDelay(1000);
+//   vTaskDelay(1000);
 
    vTaskDelete(NULL);
 }

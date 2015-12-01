@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -34,6 +34,9 @@
 #include "core/net.h"
 #include "drivers/lpc176x_eth.h"
 #include "debug.h"
+
+//Underlying network interface
+static NetInterface *nicDriverInterface;
 
 //IAR EWARM compiler?
 #if defined(__ICCARM__)
@@ -95,8 +98,9 @@ const NicDriver lpc176xEthDriver =
    lpc176xEthEnableIrq,
    lpc176xEthDisableIrq,
    lpc176xEthEventHandler,
-   lpc176xEthSetMacFilter,
    lpc176xEthSendPacket,
+   lpc176xEthSetMulticastFilter,
+   lpc176xEthUpdateMacConfig,
    lpc176xEthWritePhyReg,
    lpc176xEthReadPhyReg,
    TRUE,
@@ -117,6 +121,9 @@ error_t lpc176xEthInit(NetInterface *interface)
 
    //Debug message
    TRACE_INFO("Initializing LPC176x Ethernet MAC...\r\n");
+
+   //Save underlying network interface
+   nicDriverInterface = interface;
 
    //Power up EMAC controller
    LPC_SC->PCONP |= PCONP_PCENET;
@@ -187,9 +194,7 @@ error_t lpc176xEthInit(NetInterface *interface)
    //Allow frames to be received
    LPC_EMAC->MAC1 |= MAC1_RECEIVE_ENABLE;
 
-   //Force the TCP/IP stack to check the link state
-   osSetEvent(&interface->nicRxEvent);
-   //LPC176x Ethernet MAC is now ready to send
+   //Accept any packets from the upper layer
    osSetEvent(&interface->nicTxEvent);
 
    //Successful initialization
@@ -197,7 +202,7 @@ error_t lpc176xEthInit(NetInterface *interface)
 }
 
 
-//LPC-1766STK evaluation board?
+//LPC1766-STK evaluation board?
 #if defined(USE_LPC1766_STK)
 
 /**
@@ -325,13 +330,10 @@ void ENET_IRQHandler(void)
    uint_t i;
    bool_t flag;
    uint32_t status;
-   NetInterface *interface;
 
    //Enter interrupt service routine
    osEnterIsr();
 
-   //Point to the structure describing the network interface
-   interface = &netInterface[0];
    //This flag will be set if a higher priority task must be woken
    flag = FALSE;
 
@@ -346,24 +348,29 @@ void ENET_IRQHandler(void)
 
       //Get the index of the next descriptor
       i = LPC_EMAC->TxProduceIndex + 1;
+
       //Wrap around if necessary
-      if(i >= LPC176X_ETH_TX_BUFFER_COUNT) i = 0;
+      if(i >= LPC176X_ETH_TX_BUFFER_COUNT)
+         i = 0;
 
       //Check whether the TX buffer is available for writing
       if(i != LPC_EMAC->TxConsumeIndex)
       {
-         //Notify the user that the transmitter is ready to send
-         flag |= osSetEventFromIsr(&interface->nicTxEvent);
+         //Notify the TCP/IP stack that the transmitter is ready to send
+         flag |= osSetEventFromIsr(&nicDriverInterface->nicTxEvent);
       }
    }
+
    //A packet has been received?
    if(status & INT_RX_DONE)
    {
       //Disable RxDone interrupts
       LPC_EMAC->IntEnable &= ~INT_RX_DONE;
 
-      //Notify the user that a packet has been received
-      flag |= osSetEventFromIsr(&interface->nicRxEvent);
+      //Set event flag
+      nicDriverInterface->nicEvent = TRUE;
+      //Notify the TCP/IP stack of the event
+      flag |= osSetEventFromIsr(&netEvent);
    }
 
    //Leave interrupt service routine
@@ -379,52 +386,7 @@ void ENET_IRQHandler(void)
 void lpc176xEthEventHandler(NetInterface *interface)
 {
    error_t error;
-   uint_t length;
-   bool_t linkStateChange;
-
-   //PHY event is pending?
-   if(interface->phyEvent)
-   {
-      //Acknowledge the event by clearing the flag
-      interface->phyEvent = FALSE;
-      //Handle PHY specific events
-      linkStateChange = interface->phyDriver->eventHandler(interface);
-
-      //Check whether the link state has changed?
-      if(linkStateChange)
-      {
-         //Set speed and duplex mode for proper operation
-         if(interface->linkState)
-         {
-            //10BASE-T or 100BASE-TX operation mode?
-            if(interface->speed100)
-               LPC_EMAC->SUPP = SUPP_SPEED;
-            else
-               LPC_EMAC->SUPP = 0;
-
-            //Half-duplex or full-duplex mode?
-            if(interface->fullDuplex)
-            {
-               //The MAC operates in full-duplex mode
-               LPC_EMAC->MAC2 |= MAC2_FULL_DUPLEX;
-               LPC_EMAC->Command |= COMMAND_FULL_DUPLEX;
-               //Configure Back-to-Back Inter-Packet Gap
-               LPC_EMAC->IPGT = IPGT_FULL_DUPLEX;
-            }
-            else
-            {
-               //The MAC operates in half-duplex mode
-               LPC_EMAC->MAC2 &= ~MAC2_FULL_DUPLEX;
-               LPC_EMAC->Command &= ~COMMAND_FULL_DUPLEX;
-               //Configure Back-to-Back Inter-Packet Gap
-               LPC_EMAC->IPGT = IPGT_HALF_DUPLEX;
-            }
-         }
-
-         //Process link state change event
-         nicNotifyLinkChange(interface);
-      }
-   }
+   size_t length;
 
    //Packet received?
    if(LPC_EMAC->IntStatus & INT_RX_DONE)
@@ -452,51 +414,6 @@ void lpc176xEthEventHandler(NetInterface *interface)
 
    //Re-enable TxDone and RxDone interrupts
    LPC_EMAC->IntEnable = INT_TX_DONE | INT_RX_DONE;
-}
-
-
-/**
- * @brief Configure multicast MAC address filtering
- * @param[in] interface Underlying network interface
- * @return Error code
- **/
-
-error_t lpc176xEthSetMacFilter(NetInterface *interface)
-{
-   uint_t i;
-   uint_t k;
-   uint32_t crc;
-   uint32_t hashTable[2];
-
-   //Debug message
-   TRACE_INFO("Updating LPC176x hash table...\r\n");
-
-   //Clear hash table
-   hashTable[0] = 0;
-   hashTable[1] = 0;
-
-   //The MAC filter table contains the multicast MAC addresses
-   //to accept when receiving an Ethernet frame
-   for(i = 0; i < interface->macFilterSize; i++)
-   {
-      //Compute CRC over the current MAC address
-      crc = lpc176xEthCalcCrc(&interface->macFilter[i].addr, sizeof(MacAddr));
-      //Bits [28:23] are used to form the hash
-      k = (crc >> 23) & 0x3F;
-      //Update hash table contents
-      hashTable[k / 32] |= (1 << (k % 32));
-   }
-
-   //Write the hash table
-   LPC_EMAC->HashFilterL = hashTable[0];
-   LPC_EMAC->HashFilterH = hashTable[1];
-
-   //Debug message
-   TRACE_INFO("  HashFilterL = %08" PRIX32 "\r\n", LPC_EMAC->HashFilterL);
-   TRACE_INFO("  HashFilterH = %08" PRIX32 "\r\n", LPC_EMAC->HashFilterH);
-
-   //Successful processing
-   return NO_ERROR;
 }
 
 
@@ -537,8 +454,10 @@ error_t lpc176xEthSendPacket(NetInterface *interface,
    i = LPC_EMAC->TxProduceIndex;
    //Get the index of the next descriptor
    j = i + 1;
+
    //Wrap around if necessary
-   if(j >= LPC176X_ETH_TX_BUFFER_COUNT) j = 0;
+   if(j >= LPC176X_ETH_TX_BUFFER_COUNT)
+      j = 0;
 
    //Check whether the transmit descriptor array is full
    if(j == LPC_EMAC->TxConsumeIndex)
@@ -552,14 +471,18 @@ error_t lpc176xEthSendPacket(NetInterface *interface,
       TX_CTRL_CRC | TX_CTRL_PAD | ((length - 1) & TX_CTRL_SIZE);
 
    //Increment index and wrap around if necessary
-   if(++i >= LPC176X_ETH_TX_BUFFER_COUNT) i = 0;
+   if(++i >= LPC176X_ETH_TX_BUFFER_COUNT)
+      i = 0;
+
    //Save the resulting value
    LPC_EMAC->TxProduceIndex = i;
 
    //Get the index of the next descriptor
    j = i + 1;
+
    //Wrap around if necessary
-   if(j >= LPC176X_ETH_TX_BUFFER_COUNT) j = 0;
+   if(j >= LPC176X_ETH_TX_BUFFER_COUNT)
+      j = 0;
 
    //Check whether the next buffer is available for writing
    if(j != LPC_EMAC->TxConsumeIndex)
@@ -604,7 +527,9 @@ error_t lpc176xEthReceivePacket(NetInterface *interface,
       memcpy(buffer, (uint8_t *) rxDesc[i].packet, n);
 
       //Increment index and wrap around if necessary
-      if(++i >= LPC176X_ETH_RX_BUFFER_COUNT) i = 0;
+      if(++i >= LPC176X_ETH_RX_BUFFER_COUNT)
+         i = 0;
+
       //Save the resulting value
       LPC_EMAC->RxConsumeIndex = i;
 
@@ -621,6 +546,96 @@ error_t lpc176xEthReceivePacket(NetInterface *interface,
 
    //Return status code
    return error;
+}
+
+
+/**
+ * @brief Configure multicast MAC address filtering
+ * @param[in] interface Underlying network interface
+ * @return Error code
+ **/
+
+error_t lpc176xEthSetMulticastFilter(NetInterface *interface)
+{
+   uint_t i;
+   uint_t k;
+   uint32_t crc;
+   uint32_t hashTable[2];
+   MacFilterEntry *entry;
+
+   //Debug message
+   TRACE_DEBUG("Updating LPC176x hash table...\r\n");
+
+   //Clear hash table
+   hashTable[0] = 0;
+   hashTable[1] = 0;
+
+   //The MAC filter table contains the multicast MAC addresses
+   //to accept when receiving an Ethernet frame
+   for(i = 0; i < MAC_MULTICAST_FILTER_SIZE; i++)
+   {
+      //Point to the current entry
+      entry = &interface->macMulticastFilter[i];
+
+      //Valid entry?
+      if(entry->refCount > 0)
+      {
+         //Compute CRC over the current MAC address
+         crc = lpc176xEthCalcCrc(&entry->addr, sizeof(MacAddr));
+         //Bits [28:23] are used to form the hash
+         k = (crc >> 23) & 0x3F;
+         //Update hash table contents
+         hashTable[k / 32] |= (1 << (k % 32));
+      }
+   }
+
+   //Write the hash table
+   LPC_EMAC->HashFilterL = hashTable[0];
+   LPC_EMAC->HashFilterH = hashTable[1];
+
+   //Debug message
+   TRACE_DEBUG("  HashFilterL = %08" PRIX32 "\r\n", LPC_EMAC->HashFilterL);
+   TRACE_DEBUG("  HashFilterH = %08" PRIX32 "\r\n", LPC_EMAC->HashFilterH);
+
+   //Successful processing
+   return NO_ERROR;
+}
+
+
+/**
+ * @brief Adjust MAC configuration parameters for proper operation
+ * @param[in] interface Underlying network interface
+ * @return Error code
+ **/
+
+error_t lpc176xEthUpdateMacConfig(NetInterface *interface)
+{
+   //10BASE-T or 100BASE-TX operation mode?
+   if(interface->linkSpeed == NIC_LINK_SPEED_100MBPS)
+      LPC_EMAC->SUPP = SUPP_SPEED;
+   else
+      LPC_EMAC->SUPP = 0;
+
+   //Half-duplex or full-duplex mode?
+   if(interface->duplexMode == NIC_FULL_DUPLEX_MODE)
+   {
+      //The MAC operates in full-duplex mode
+      LPC_EMAC->MAC2 |= MAC2_FULL_DUPLEX;
+      LPC_EMAC->Command |= COMMAND_FULL_DUPLEX;
+      //Configure Back-to-Back Inter-Packet Gap
+      LPC_EMAC->IPGT = IPGT_FULL_DUPLEX;
+   }
+   else
+   {
+      //The MAC operates in half-duplex mode
+      LPC_EMAC->MAC2 &= ~MAC2_FULL_DUPLEX;
+      LPC_EMAC->Command &= ~COMMAND_FULL_DUPLEX;
+      //Configure Back-to-Back Inter-Packet Gap
+      LPC_EMAC->IPGT = IPGT_HALF_DUPLEX;
+   }
+
+   //Successful processing
+   return NO_ERROR;
 }
 
 

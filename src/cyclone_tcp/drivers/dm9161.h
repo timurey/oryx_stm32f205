@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _DM9161_H
@@ -210,7 +210,7 @@ void dm9161Tick(NetInterface *interface);
 void dm9161EnableIrq(NetInterface *interface);
 void dm9161DisableIrq(NetInterface *interface);
 
-bool_t dm9161EventHandler(NetInterface *interface);
+void dm9161EventHandler(NetInterface *interface);
 
 void dm9161WritePhyReg(NetInterface *interface, uint8_t address, uint16_t data);
 uint16_t dm9161ReadPhyReg(NetInterface *interface, uint8_t address);

@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _ENC624J600_H
@@ -446,7 +446,7 @@
 
 typedef struct
 {
-   uint16_t nextPacketPointer;  ///<Next packet in the receive buffer
+   uint16_t nextPacket; ///<Next packet in the receive buffer
 } Enc624j600Context;
 
 
@@ -455,7 +455,6 @@ extern const NicDriver enc624j600Driver;
 
 //ENC624J600 related functions
 error_t enc624j600Init(NetInterface *interface);
-error_t enc624j600SoftReset(NetInterface *interface);
 
 void enc624j600Tick(NetInterface *interface);
 
@@ -464,15 +463,16 @@ void enc624j600DisableIrq(NetInterface *interface);
 bool_t enc624j600IrqHandler(NetInterface *interface);
 void enc624j600EventHandler(NetInterface *interface);
 
-error_t enc624j600SetMacFilter(NetInterface *interface);
-
 error_t enc624j600SendPacket(NetInterface *interface,
    const NetBuffer *buffer, size_t offset);
 
 error_t enc624j600ReceivePacket(NetInterface *interface,
    uint8_t *buffer, size_t size, size_t *length);
 
-void enc624j600ConfigureDuplexMode(NetInterface *interface);
+error_t enc624j600SetMulticastFilter(NetInterface *interface);
+void enc624j600UpdateMacConfig(NetInterface *interface);
+
+error_t enc624j600SoftReset(NetInterface *interface);
 
 void enc624j600WriteReg(NetInterface *interface, uint8_t address, uint16_t data);
 uint16_t enc624j600ReadReg(NetInterface *interface, uint8_t address);

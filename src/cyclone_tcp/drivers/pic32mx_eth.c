@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -35,6 +35,9 @@
 #include "core/net.h"
 #include "drivers/pic32mx_eth.h"
 #include "debug.h"
+
+//Underlying network interface
+static NetInterface *nicDriverInterface;
 
 //Transmit buffer
 static uint8_t txBuffer[PIC32MX_ETH_TX_BUFFER_COUNT][PIC32MX_ETH_TX_BUFFER_SIZE]
@@ -68,8 +71,9 @@ const NicDriver pic32mxEthDriver =
    pic32mxEthEnableIrq,
    pic32mxEthDisableIrq,
    pic32mxEthEventHandler,
-   pic32mxEthSetMacFilter,
    pic32mxEthSendPacket,
+   pic32mxEthSetMulticastFilter,
+   pic32mxEthUpdateMacConfig,
    pic32mxEthWritePhyReg,
    pic32mxEthReadPhyReg,
    TRUE,
@@ -90,6 +94,9 @@ error_t pic32mxEthInit(NetInterface *interface)
 
    //Debug message
    TRACE_INFO("Initializing PIC32MX Ethernet MAC...\r\n");
+
+   //Save underlying network interface
+   nicDriverInterface = interface;
 
    //GPIO configuration
    pic32mxEthInitGpio(interface);
@@ -141,6 +148,9 @@ error_t pic32mxEthInit(NetInterface *interface)
       interface->macAddr.w[0] = EMAC1SA2;
       interface->macAddr.w[1] = EMAC1SA1;
       interface->macAddr.w[2] = EMAC1SA0;
+
+      //Generate the 64-bit interface identifier
+      macAddrToEui64(&interface->macAddr, &interface->eui64);
    }
    else
    {
@@ -181,9 +191,7 @@ error_t pic32mxEthInit(NetInterface *interface)
    //Enable the reception by setting the RXEN bit
    ETHCON1SET = _ETHCON1_RXEN_MASK;
 
-   //Force the TCP/IP stack to check the link state
-   osSetEvent(&interface->nicRxEvent);
-   //PIC32MX Ethernet MAC is now ready to send
+   //Accept any packets from the upper layer
    osSetEvent(&interface->nicTxEvent);
 
    //Successful initialization
@@ -219,40 +227,46 @@ void pic32mxEthInitBufferDesc(NetInterface *interface)
    //Initialize TX descriptor list
    for(i = 0; i < PIC32MX_ETH_TX_BUFFER_COUNT; i++)
    {
+      //Point to the current descriptor
+      txCurBufferDesc = KVA0_TO_KVA1(&txBufferDesc[i]);
+
       //Use linked list rather than linear list
-      txBufferDesc[i].control = ETH_TX_CTRL_NPV;
+      txCurBufferDesc->control = ETH_TX_CTRL_NPV;
       //Transmit buffer address
-      txBufferDesc[i].address = (uint32_t) KVA_TO_PA(txBuffer[i]);
+      txCurBufferDesc->address = (uint32_t) KVA_TO_PA(txBuffer[i]);
       //Transmit status vector
-      txBufferDesc[i].status1 = 0;
-      txBufferDesc[i].status2 = 0;
+      txCurBufferDesc->status1 = 0;
+      txCurBufferDesc->status2 = 0;
       //Next descriptor address
-      txBufferDesc[i].next = (uint32_t) KVA_TO_PA(&txBufferDesc[i + 1]);
+      txCurBufferDesc->next = (uint32_t) KVA_TO_PA(&txBufferDesc[i + 1]);
    }
 
    //The last descriptor is chained to the first entry
-   txBufferDesc[i - 1].next = (uint32_t) KVA_TO_PA(&txBufferDesc[0]);
+   txCurBufferDesc->next = (uint32_t) KVA_TO_PA(&txBufferDesc[0]);
    //Point to the very first descriptor
-   txCurBufferDesc = &txBufferDesc[0];
+   txCurBufferDesc = KVA0_TO_KVA1(&txBufferDesc[0]);
 
    //Initialize RX descriptor list
    for(i = 0; i < PIC32MX_ETH_RX_BUFFER_COUNT; i++)
    {
+      //Point to the current descriptor
+      rxCurBufferDesc = KVA0_TO_KVA1(&rxBufferDesc[i]);
+
       //The descriptor is initially owned by the DMA
-      rxBufferDesc[i].control = ETH_RX_CTRL_NPV | ETH_RX_CTRL_EOWN;
+      rxCurBufferDesc->control = ETH_RX_CTRL_NPV | ETH_RX_CTRL_EOWN;
       //Receive buffer address
-      rxBufferDesc[i].address = (uint32_t) KVA_TO_PA(rxBuffer[i]);
+      rxCurBufferDesc->address = (uint32_t) KVA_TO_PA(rxBuffer[i]);
       //Receive status vector
-      rxBufferDesc[i].status1 = 0;
-      rxBufferDesc[i].status2 = 0;
+      rxCurBufferDesc->status1 = 0;
+      rxCurBufferDesc->status2 = 0;
       //Next descriptor address
-      rxBufferDesc[i].next = (uint32_t) KVA_TO_PA(&rxBufferDesc[i + 1]);
+      rxCurBufferDesc->next = (uint32_t) KVA_TO_PA(&rxBufferDesc[i + 1]);
    }
 
    //The last descriptor is chained to the first entry
-   rxBufferDesc[i - 1].next = (uint32_t) KVA_TO_PA(&rxBufferDesc[0]);
+   rxCurBufferDesc->next = (uint32_t) KVA_TO_PA(&rxBufferDesc[0]);
    //Point to the very first descriptor
-   rxCurBufferDesc = &rxBufferDesc[0];
+   rxCurBufferDesc = KVA0_TO_KVA1(&rxBufferDesc[0]);
 
    //Starting address of TX descriptor table
    ETHTXST = (uint32_t) KVA_TO_PA(&txBufferDesc[0]);
@@ -315,13 +329,10 @@ void pic32mxEthIrqHandler(void)
 {
    bool_t flag;
    uint32_t status;
-   NetInterface *interface;
 
    //Enter interrupt service routine
    osEnterIsr();
 
-   //Point to the structure describing the network interface
-   interface = &netInterface[0];
    //This flag will be set if a higher priority task must be woken
    flag = FALSE;
 
@@ -337,18 +348,21 @@ void pic32mxEthIrqHandler(void)
       //Check whether the TX buffer is available for writing
       if(!(txCurBufferDesc->control & ETH_TX_CTRL_EOWN))
       {
-         //Notify the user that the transmitter is ready to send
-         flag |= osSetEventFromIsr(&interface->nicTxEvent);
+         //Notify the TCP/IP stack that the transmitter is ready to send
+         flag |= osSetEventFromIsr(&nicDriverInterface->nicTxEvent);
       }
    }
+
    //A packet has been received?
    if(status & _ETHIRQ_PKTPEND_MASK)
    {
       //Disable PKTPEND interrupt
       ETHIENCLR = _ETHIEN_PKTPENDIE_MASK;
 
-      //Notify the user that a packet has been received
-      flag |= osSetEventFromIsr(&interface->nicRxEvent);
+      //Set event flag
+      nicDriverInterface->nicEvent = TRUE;
+      //Notify the TCP/IP stack of the event
+      flag |= osSetEventFromIsr(&netEvent);
    }
 
    //Clear ETHIF interrupt flag before exiting the service routine
@@ -368,55 +382,6 @@ void pic32mxEthEventHandler(NetInterface *interface)
 {
    error_t error;
    size_t length;
-   bool_t linkStateChange;
-
-   //PHY event is pending?
-   if(interface->phyEvent)
-   {
-      //Acknowledge the event by clearing the flag
-      interface->phyEvent = FALSE;
-      //Handle PHY specific events
-      linkStateChange = interface->phyDriver->eventHandler(interface);
-
-      //Check whether the link state has changed?
-      if(linkStateChange)
-      {
-         //Set speed and duplex mode for proper operation
-         if(interface->linkState)
-         {
-            //Check current operating speed
-            if(interface->speed100)
-            {
-               //100BASE-TX operation mode
-               EMAC1SUPPSET = _EMAC1SUPP_SPEEDRMII_MASK;
-            }
-            else
-            {
-               //10BASE-T operation mode
-               EMAC1SUPPCLR = _EMAC1SUPP_SPEEDRMII_MASK;
-            }
-
-            //Half-duplex or full-duplex mode?
-            if(interface->fullDuplex)
-            {
-               //Configure FULLDPLX bit to match the current duplex mode
-               EMAC1CFG2SET = _EMAC1CFG2_FULLDPLX_MASK;
-               //Configure the Back-to-Back Inter-Packet Gap register
-               EMAC1IPGT = 0x15;
-            }
-            else
-            {
-               //Configure FULLDPLX bit to match the current duplex mode
-               EMAC1CFG2CLR = _EMAC1CFG2_FULLDPLX_MASK;
-               //Configure the Back-to-Back Inter-Packet Gap register
-               EMAC1IPGT = 0x12;
-            }
-         }
-
-         //Process link state change event
-         nicNotifyLinkChange(interface);
-      }
-   }
 
    //Packet received?
    if(ETHIRQ & _ETHIRQ_PKTPEND_MASK)
@@ -441,51 +406,6 @@ void pic32mxEthEventHandler(NetInterface *interface)
 
    //Re-enable PKTPEND interrupt
    ETHIENSET = _ETHIEN_PKTPENDIE_MASK;
-}
-
-
-/**
- * @brief Configure multicast MAC address filtering
- * @param[in] interface Underlying network interface
- * @return Error code
- **/
-
-error_t pic32mxEthSetMacFilter(NetInterface *interface)
-{
-   uint_t i;
-   uint_t k;
-   uint32_t crc;
-   uint32_t hashTable[2];
-
-   //Debug message
-   TRACE_INFO("Updating PIC32MX hash table...\r\n");
-
-   //Clear hash table
-   hashTable[0] = 0;
-   hashTable[1] = 0;
-
-   //The MAC filter table contains the multicast MAC addresses
-   //to accept when receiving an Ethernet frame
-   for(i = 0; i < interface->macFilterSize; i++)
-   {
-      //Compute CRC over the current MAC address
-      crc = pic32mxEthCalcCrc(&interface->macFilter[i].addr, sizeof(MacAddr));
-      //Calculate the corresponding index in the table
-      k = (crc >> 23) & 0x3F;
-      //Update hash table contents
-      hashTable[k / 32] |= (1 << (k % 32));
-   }
-
-   //Write the hash table
-   ETHHT0 = hashTable[0];
-   ETHHT1 = hashTable[1];
-
-   //Debug message
-   TRACE_INFO("  ETHHT0 = %08" PRIX32 "\r\n", ETHHT0);
-   TRACE_INFO("  ETHHT1 = %08" PRIX32 "\r\n", ETHHT1);
-
-   //Successful processing
-   return NO_ERROR;
 }
 
 
@@ -614,6 +534,100 @@ error_t pic32mxEthReceivePacket(NetInterface *interface,
 
    //Return status code
    return error;
+}
+
+
+/**
+ * @brief Configure multicast MAC address filtering
+ * @param[in] interface Underlying network interface
+ * @return Error code
+ **/
+
+error_t pic32mxEthSetMulticastFilter(NetInterface *interface)
+{
+   uint_t i;
+   uint_t k;
+   uint32_t crc;
+   uint32_t hashTable[2];
+   MacFilterEntry *entry;
+
+   //Debug message
+   TRACE_DEBUG("Updating PIC32MX hash table...\r\n");
+
+   //Clear hash table
+   hashTable[0] = 0;
+   hashTable[1] = 0;
+
+   //The MAC filter table contains the multicast MAC addresses
+   //to accept when receiving an Ethernet frame
+   for(i = 0; i < MAC_MULTICAST_FILTER_SIZE; i++)
+   {
+      //Point to the current entry
+      entry = &interface->macMulticastFilter[i];
+
+      //Valid entry?
+      if(entry->refCount > 0)
+      {
+         //Compute CRC over the current MAC address
+         crc = pic32mxEthCalcCrc(&entry->addr, sizeof(MacAddr));
+         //Calculate the corresponding index in the table
+         k = (crc >> 23) & 0x3F;
+         //Update hash table contents
+         hashTable[k / 32] |= (1 << (k % 32));
+      }
+   }
+
+   //Write the hash table
+   ETHHT0 = hashTable[0];
+   ETHHT1 = hashTable[1];
+
+   //Debug message
+   TRACE_DEBUG("  ETHHT0 = %08" PRIX32 "\r\n", ETHHT0);
+   TRACE_DEBUG("  ETHHT1 = %08" PRIX32 "\r\n", ETHHT1);
+
+   //Successful processing
+   return NO_ERROR;
+}
+
+
+/**
+ * @brief Adjust MAC configuration parameters for proper operation
+ * @param[in] interface Underlying network interface
+ * @return Error code
+ **/
+
+error_t pic32mxEthUpdateMacConfig(NetInterface *interface)
+{
+   //Check current operating speed
+   if(interface->linkSpeed == NIC_LINK_SPEED_100MBPS)
+   {
+      //100BASE-TX operation mode
+      EMAC1SUPPSET = _EMAC1SUPP_SPEEDRMII_MASK;
+   }
+   else
+   {
+      //10BASE-T operation mode
+      EMAC1SUPPCLR = _EMAC1SUPP_SPEEDRMII_MASK;
+   }
+
+   //Half-duplex or full-duplex mode?
+   if(interface->duplexMode == NIC_FULL_DUPLEX_MODE)
+   {
+      //Configure FULLDPLX bit to match the current duplex mode
+      EMAC1CFG2SET = _EMAC1CFG2_FULLDPLX_MASK;
+      //Configure the Back-to-Back Inter-Packet Gap register
+      EMAC1IPGT = 0x15;
+   }
+   else
+   {
+      //Configure FULLDPLX bit to match the current duplex mode
+      EMAC1CFG2CLR = _EMAC1CFG2_FULLDPLX_MASK;
+      //Configure the Back-to-Back Inter-Packet Gap register
+      EMAC1IPGT = 0x12;
+   }
+
+   //Successful processing
+   return NO_ERROR;
 }
 
 

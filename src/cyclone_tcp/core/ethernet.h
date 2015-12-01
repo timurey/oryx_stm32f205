@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _ETHERNET_H
@@ -39,11 +39,11 @@
    #error ETH_SUPPORT parameter is not valid
 #endif
 
-//Maximum size of the MAC filter table
-#ifndef MAC_FILTER_MAX_SIZE
-   #define MAC_FILTER_MAX_SIZE 8
-#elif (MAC_FILTER_MAX_SIZE < 4)
-   #error MAC_FILTER_MAX_SIZE parameter is not valid
+//Size of the multicast MAC filter
+#ifndef MAC_MULTICAST_FILTER_SIZE
+   #define MAC_MULTICAST_FILTER_SIZE 12
+#elif (MAC_MULTICAST_FILTER_SIZE < 1)
+   #error MAC_MULTICAST_FILTER_SIZE parameter is not valid
 #endif
 
 //CRC32 calculation using a pre-calculated lookup table
@@ -96,8 +96,8 @@ typedef enum
 } EthType;
 
 
-//Win32 compiler?
-#if defined(_WIN32)
+//CodeWarrior or Win32 compiler?
+#if defined(__CWCC__) || defined(_WIN32)
    #pragma pack(push, 1)
 #endif
 
@@ -117,6 +117,21 @@ typedef __start_packed struct
 
 
 /**
+ * @brief EUI-64 identifier
+ **/
+
+typedef __start_packed struct
+{
+   __start_packed union
+   {
+      uint8_t b[8];
+      uint16_t w[4];
+      uint32_t dw[2];
+   };
+} __end_packed Eui64;
+
+
+/**
  * @brief Ethernet frame header
  **/
 
@@ -129,8 +144,8 @@ typedef __start_packed struct
 } __end_packed EthHeader;
 
 
-//Win32 compiler?
-#if defined(_WIN32)
+//CodeWarrior or Win32 compiler?
+#if defined(__CWCC__) || defined(_WIN32)
    #pragma pack(pop)
 #endif
 
@@ -143,6 +158,8 @@ typedef struct
 {
    MacAddr addr;    ///<MAC address
    uint_t refCount; ///<Reference count for the current entry
+   bool_t addFlag;
+   bool_t deleteFlag;
 } MacFilterEntry;
 
 
@@ -170,6 +187,8 @@ NetBuffer *ethAllocBuffer(size_t length, size_t *offset);
 
 error_t macStringToAddr(const char_t *str, MacAddr *macAddr);
 char_t *macAddrToString(const MacAddr *macAddr, char_t *str);
+
+void macAddrToEui64(const MacAddr *macAddr, Eui64 *interfaceId);
 
 void ethDumpHeader(const EthHeader *ethHeader);
 

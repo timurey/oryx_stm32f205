@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _LPC176X_ETH_H
@@ -375,13 +375,14 @@ void lpc176xEthEnableIrq(NetInterface *interface);
 void lpc176xEthDisableIrq(NetInterface *interface);
 void lpc176xEthEventHandler(NetInterface *interface);
 
-error_t lpc176xEthSetMacFilter(NetInterface *interface);
-
 error_t lpc176xEthSendPacket(NetInterface *interface,
    const NetBuffer *buffer, size_t offset);
 
 error_t lpc176xEthReceivePacket(NetInterface *interface,
    uint8_t *buffer, size_t size, size_t *length);
+
+error_t lpc176xEthSetMulticastFilter(NetInterface *interface);
+error_t lpc176xEthUpdateMacConfig(NetInterface *interface);
 
 void lpc176xEthWritePhyReg(uint8_t phyAddr, uint8_t regAddr, uint16_t data);
 uint16_t lpc176xEthReadPhyReg(uint8_t phyAddr, uint8_t regAddr);

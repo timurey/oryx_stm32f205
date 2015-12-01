@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -37,10 +37,15 @@
 #include "ppp/lcp.h"
 #include "ppp/ipcp.h"
 #include "ppp/pap.h"
+#include "ppp/chap.h"
+#include "str.h"
 #include "debug.h"
 
 //Check TCP/IP stack configuration
 #if (PPP_SUPPORT == ENABLED)
+
+//Tick counter to handle periodic operations
+systime_t pppTickCounter;
 
 //FCS lookup table
 static const uint16_t fcsTable[256] =
@@ -88,11 +93,16 @@ static const uint16_t fcsTable[256] =
 void pppGetDefaultSettings(PppSettings *settings)
 {
    //Use default interface
-   settings->interface = NULL;
+   settings->interface = netGetDefaultInterface();
+
    //Default MRU
    settings->mru = PPP_DEFAULT_MRU;
    //Default async control character map
    settings->accm = PPP_DEFAULT_ACCM;
+   //Allowed authentication protocols
+   settings->authProtocol = PPP_AUTH_PROTOCOL_PAP | PPP_AUTH_PROTOCOL_CHAP_MD5;
+   //PPP authentication callback
+   settings->authCallback = NULL;
 }
 
 
@@ -120,12 +130,15 @@ error_t pppInit(PppContext *context, const PppSettings *settings)
    //Save user settings
    context->settings = *settings;
 
-   //Initialize mutex object
-   if(!osCreateMutex(&context->mutex))
-   {
-      //Failed to create mutex
-      return ERROR_OUT_OF_RESOURCES;
-   }
+#if (PAP_SUPPORT == DISABLED)
+   //PAP authentication is not supported
+   context->settings.authProtocol &= ~PPP_AUTH_PROTOCOL_PAP;
+#endif
+
+#if (PAP_SUPPORT == DISABLED)
+   //CHAP with MD5 authentication is not supported
+   context->settings.authProtocol &= ~PPP_AUTH_PROTOCOL_CHAP_MD5;
+#endif
 
    //Attach the PPP context to the network interface
    interface->pppContext = context;
@@ -138,7 +151,18 @@ error_t pppInit(PppContext *context, const PppSettings *settings)
    context->pppPhase = PPP_PHASE_DEAD;
    context->lcpFsm.state = PPP_STATE_0_INITIAL;
    context->ipcpFsm.state = PPP_STATE_0_INITIAL;
-   context->papFsm.state = PAP_STATE_0_INITIAL;
+
+#if (PAP_SUPPORT == ENABLED)
+   //Initialize PAP finite state machine
+   context->papFsm.localState = PAP_STATE_0_INITIAL;
+   context->papFsm.peerState = PAP_STATE_0_INITIAL;
+#endif
+
+#if (CHAP_SUPPORT == ENABLED)
+   //Initialize CHAP finite state machine
+   context->chapFsm.localState = CHAP_STATE_0_INITIAL;
+   context->chapFsm.peerState = CHAP_STATE_0_INITIAL;
+#endif
 
    //Attach PPP HDLC driver
    error = netSetDriver(interface, &pppHdlcDriver);
@@ -168,16 +192,104 @@ error_t pppSetTimeout(NetInterface *interface, systime_t timeout)
 
    //Point to the PPP context
    context = interface->pppContext;
-   //Enter critical section
-   osAcquireMutex(&context->mutex);
+
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
 
    //Set timeout value
    context->timeout = timeout;
 
-   //Leave critical section
-   osReleaseMutex(&context->mutex);
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
+
    //No error to report
    return NO_ERROR;
+}
+
+
+/**
+ * @brief Set PPP authentication information
+ * @param[in] interface Underlying network interface
+ * @param[in] username NULL-terminated string containing the user name to be used
+ * @param[in] password NULL-terminated string containing the password to be used
+ * @return Error code
+ **/
+
+error_t pppSetAuthInfo(NetInterface *interface,
+   const char_t *username, const char_t *password)
+{
+   PppContext *context;
+
+   //Check parameters
+   if(interface == NULL || username == NULL || password == NULL)
+      return ERROR_INVALID_PARAMETER;
+   //Make sure PPP has been properly configured
+   if(interface->pppContext == NULL)
+      return ERROR_NOT_CONFIGURED;
+
+   //Point to the PPP context
+   context = interface->pppContext;
+
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
+
+   //Save user name
+   strSafeCopy(context->username, username, PPP_MAX_USERNAME_LEN);
+   //Save password
+   strSafeCopy(context->password, password, PPP_MAX_PASSWORD_LEN);
+
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
+
+   //No error to report
+   return NO_ERROR;
+}
+
+
+/**
+ * @brief Password verification
+ * @param[in] interface Underlying network interface
+ * @param[in] password NULL-terminated string containing the password to be checked
+ * @return TRUE if the password is valid, else FALSE
+ **/
+
+bool_t pppCheckPassword(NetInterface *interface, const char_t *password)
+{
+   bool_t status;
+   PppContext *context;
+
+   //Debug message
+   TRACE_DEBUG("PPP password verification...\r\n");
+
+   //The password has not been verified yet
+   status = FALSE;
+
+   //Point to the PPP context
+   context = interface->pppContext;
+
+   //Make sure PPP has been properly configured
+   if(context != NULL)
+   {
+      //Check authentication protocol
+      if(context->localConfig.authProtocol == PPP_PROTOCOL_PAP)
+      {
+#if (PAP_SUPPORT == ENABLED)
+         //PAP authentication protocol
+         status = papCheckPassword(context, password);
+#endif
+      }
+      //CHAP authentication protocol?
+      else if(context->localConfig.authProtocol == PPP_PROTOCOL_CHAP)
+      {
+#if (CHAP_SUPPORT == ENABLED)
+         //CHAP authentication protocol
+         status = chapCheckPassword(context, password);
+#endif
+      }
+   }
+
+   //Return TRUE is the password is valid, else FALSE
+   return status;
 }
 
 
@@ -210,8 +322,8 @@ error_t pppSendAtCommand(NetInterface *interface, const char_t *data)
    //Check status
    if(status)
    {
-      //Get exclusive access to the device
-      osAcquireMutex(&interface->nicDriverMutex);
+      //Get exclusive access
+      osAcquireMutex(&netMutex);
 
       //Check current PPP state
       if(context->pppPhase == PPP_PHASE_DEAD)
@@ -229,8 +341,8 @@ error_t pppSendAtCommand(NetInterface *interface, const char_t *data)
          error = ERROR_ALREADY_CONNECTED;
       }
 
-      //Release exclusive access to the device
-      osReleaseMutex(&interface->nicDriverMutex);
+      //Release exclusive access
+      osReleaseMutex(&netMutex);
    }
    else
    {
@@ -273,8 +385,8 @@ error_t pppReceiveAtCommand(NetInterface *interface, char_t *data, size_t size)
    //Wait for an incoming AT command
    while(1)
    {
-      //Get exclusive access to the device
-      osAcquireMutex(&interface->nicDriverMutex);
+      //Get exclusive access
+      osAcquireMutex(&netMutex);
 
       //Check current PPP state
       if(context->pppPhase == PPP_PHASE_DEAD)
@@ -288,8 +400,8 @@ error_t pppReceiveAtCommand(NetInterface *interface, char_t *data, size_t size)
          error = ERROR_ALREADY_CONNECTED;
       }
 
-      //Release exclusive access to the device
-      osReleaseMutex(&interface->nicDriverMutex);
+      //Release exclusive access
+      osReleaseMutex(&netMutex);
 
       //No data received?
       if(error == ERROR_BUFFER_EMPTY || data[0] == '\0')
@@ -332,9 +444,11 @@ error_t pppReceiveAtCommand(NetInterface *interface, char_t *data, size_t size)
 error_t pppConnect(NetInterface *interface)
 {
    error_t error;
+   PppContext *context;
+#if (NET_RTOS_SUPPORT == ENABLED)
    systime_t time;
    systime_t start;
-   PppContext *context;
+#endif
 
    //Check parameters
    if(interface == NULL)
@@ -345,11 +459,9 @@ error_t pppConnect(NetInterface *interface)
 
    //Point to the PPP context
    context = interface->pppContext;
-   //Save current time
-   start = osGetSystemTime();
 
-   //Enter critical section
-   osAcquireMutex(&context->mutex);
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
 
    //Default PPP phase
    context->pppPhase = PPP_PHASE_DEAD;
@@ -366,11 +478,25 @@ error_t pppConnect(NetInterface *interface)
    context->ipcpFsm.restartCounter = 0;
    context->ipcpFsm.failureCounter = 0;
 
+   //Authentication has not been completed
+   context->localAuthDone = FALSE;
+   context->peerAuthDone = FALSE;
+
+#if (PAP_SUPPORT == ENABLED)
    //Initialize PAP FSM
-   context->papFsm.state = PAP_STATE_0_INITIAL;
+   context->papFsm.localState = PAP_STATE_0_INITIAL;
+   context->papFsm.peerState = PAP_STATE_0_INITIAL;
    context->papFsm.identifier = 0;
    context->papFsm.restartCounter = 0;
-   context->papFsm.failureCounter = 0;
+#endif
+
+#if (CHAP_SUPPORT == ENABLED)
+   //Initialize CHAP FSM
+   context->chapFsm.localState = CHAP_STATE_0_INITIAL;
+   context->chapFsm.localIdentifier = 0;
+   context->chapFsm.peerState = CHAP_STATE_0_INITIAL;
+   context->chapFsm.peerIdentifier = 0;
+#endif
 
    //Default local configuration
    context->localConfig.mru = context->settings.mru;
@@ -378,78 +504,159 @@ error_t pppConnect(NetInterface *interface)
    context->localConfig.accm = context->settings.accm;
    context->localConfig.accmRejected = FALSE;
    context->localConfig.authProtocol = 0;
+   context->localConfig.authAlgo = 0;
    context->localConfig.authProtocolRejected = FALSE;
    context->localConfig.magicNumber = PPP_DEFAULT_MAGIC_NUMBER;
    context->localConfig.magicNumberRejected = FALSE;
+   context->localConfig.pfc = TRUE;
+   context->localConfig.pfcRejected = FALSE;
+   context->localConfig.acfc = TRUE;
+   context->localConfig.acfcRejected = FALSE;
+
+   //Check whether the other end of the PPP link must be authenticated
+   if(context->settings.authCallback != NULL)
+   {
+#if (PAP_SUPPORT == ENABLED)
+      //PAP provides an easy implementation of peer authentication
+      if(context->settings.authProtocol & PPP_AUTH_PROTOCOL_PAP)
+      {
+         //Select PAP authentication protocol
+         context->localConfig.authProtocol = PPP_PROTOCOL_PAP;
+      }
+#endif
+#if (CHAP_SUPPORT == ENABLED)
+      //CHAP with MD5 ensures greater security in the implementation
+      if(context->settings.authProtocol & PPP_AUTH_PROTOCOL_CHAP_MD5)
+      {
+         //Select CHAP with MD5 authentication protocol
+         context->localConfig.authProtocol = PPP_PROTOCOL_CHAP;
+         context->localConfig.authAlgo = CHAP_ALGO_ID_CHAP_MD5;
+      }
+#endif
+   }
 
    //Default peer's configuration
    context->peerConfig.mru = PPP_DEFAULT_MRU;
    context->peerConfig.accm = PPP_DEFAULT_ACCM;
-   context->localConfig.authProtocol = 0;
+   context->peerConfig.authProtocol = 0;
    context->peerConfig.magicNumber = PPP_DEFAULT_MAGIC_NUMBER;
+   context->peerConfig.pfc = FALSE;
+   context->peerConfig.acfc = FALSE;
 
 #if (IPV4_SUPPORT == ENABLED)
-   //Use default IPv4 addresses
-   ipv4GetHostAddr(interface, &context->localConfig.ipAddr);
+   //Default local configuration
+   context->localConfig.ipAddr = interface->ipv4Context.addr;
    context->localConfig.ipAddrRejected = FALSE;
-   ipv4GetDefaultGateway(interface, &context->peerConfig.ipAddr);
-   context->peerConfig.ipAddrRejected = FALSE;
+   context->localConfig.primaryDns = interface->ipv4Context.dnsServerList[0];
+   context->localConfig.primaryDnsRejected = FALSE;
+
+#if (IPV4_DNS_SERVER_LIST_SIZE >= 2)
+   context->localConfig.secondaryDns = interface->ipv4Context.dnsServerList[1];
+   context->localConfig.secondaryDnsRejected = FALSE;
+#else
+   context->localConfig.secondaryDns = IPV4_UNSPECIFIED_ADDR;
+   context->localConfig.secondaryDnsRejected = FALSE;
+#endif
+
+   //Manual primary DNS configuration?
+   if(context->localConfig.primaryDns != IPV4_UNSPECIFIED_ADDR)
+      context->localConfig.primaryDnsRejected = TRUE;
+
+   //Manual secondary DNS configuration?
+   if(context->localConfig.secondaryDns != IPV4_UNSPECIFIED_ADDR)
+      context->localConfig.secondaryDnsRejected = TRUE;
+
+   //Default peer's configuration
+   context->peerConfig.ipAddr = interface->ipv4Context.defaultGateway;
 #endif
 
    //The link is available for traffic
    error = lcpOpen(context);
 
-   //Leave critical section
-   osReleaseMutex(&context->mutex);
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //Any error to report?
    if(error)
       return error;
 
-   //Blocking operation?
-   if(context->timeout)
+#if (NET_RTOS_SUPPORT == ENABLED)
+   //Save current time
+   start = osGetSystemTime();
+
+   //Wait for the connection to be established
+   while(1)
    {
-      //Wait for the connection to be established
-      while(context->pppPhase == PPP_PHASE_ESTABLISH ||
-         context->pppPhase == PPP_PHASE_AUTHENTICATE)
+      //Check current PPP phase
+      if(context->pppPhase == PPP_PHASE_NETWORK)
       {
-         //Check timeout value
-         if(context->timeout != INFINITE_DELAY)
+         //Check current IPCP state
+         if(context->ipcpFsm.state == PPP_STATE_9_OPENED)
          {
-            //Get current time
-            time = osGetSystemTime();
-
-            //Check whether the timeout period has elapsed
-            if(timeCompare(time, start + context->timeout) >= 0)
-               break;
+            //Connection successfully established
+            error = NO_ERROR;
+            //Exit immediately
+            break;
          }
-
-         //Poll the state
-         osDelayTask(PPP_POLLING_INTERVAL);
       }
-
-      //Failed to establish connection?
-      if(context->pppPhase != PPP_PHASE_NETWORK)
+      else if(context->pppPhase == PPP_PHASE_DEAD)
       {
-         //Enter critical section
-         osAcquireMutex(&context->mutex);
-
-         //Abort the PPP connection
-         context->pppPhase = PPP_PHASE_DEAD;
-         context->lcpFsm.state = PPP_STATE_0_INITIAL;
-         context->ipcpFsm.state = PPP_STATE_0_INITIAL;
-         context->papFsm.state = PAP_STATE_0_INITIAL;
-
-         //Leave critical section
-         osReleaseMutex(&context->mutex);
-
-         //Report an error
-         return ERROR_TIMEOUT;
+         //Failed to establish connection
+         error = ERROR_CONNECTION_FAILED;
+         //Exit immediately
+         break;
       }
+
+      //Check timeout value
+      if(context->timeout != INFINITE_DELAY)
+      {
+         //Get current time
+         time = osGetSystemTime();
+
+         //Check whether the timeout period has elapsed
+         if(timeCompare(time, start + context->timeout) >= 0)
+         {
+            //Report an error
+            error = ERROR_TIMEOUT;
+            //Exit immediately
+            break;
+         }
+      }
+
+      //Polling delay
+      osDelayTask(PPP_POLLING_INTERVAL);
    }
 
-   //PPP connection succesfully established
-   return NO_ERROR;
+   //Failed to establish connection?
+   if(error)
+   {
+      //Get exclusive access
+      osAcquireMutex(&netMutex);
+
+      //Abort the PPP connection
+      context->pppPhase = PPP_PHASE_DEAD;
+      context->lcpFsm.state = PPP_STATE_0_INITIAL;
+      context->ipcpFsm.state = PPP_STATE_0_INITIAL;
+
+#if (PAP_SUPPORT == ENABLED)
+      //Abort PAP authentication process
+      context->papFsm.localState = PAP_STATE_0_INITIAL;
+      context->papFsm.peerState = PAP_STATE_0_INITIAL;
+#endif
+
+#if (CHAP_SUPPORT == ENABLED)
+      //Abort CHAP authentication process
+      context->chapFsm.localState = CHAP_STATE_0_INITIAL;
+      context->chapFsm.peerState = CHAP_STATE_0_INITIAL;
+#endif
+
+      //Release exclusive access
+      osReleaseMutex(&netMutex);
+   }
+#endif
+
+   //Return status code
+   return error;
 }
 
 
@@ -462,9 +669,11 @@ error_t pppConnect(NetInterface *interface)
 error_t pppClose(NetInterface *interface)
 {
    error_t error;
+   PppContext *context;
+#if (NET_RTOS_SUPPORT == ENABLED)
    systime_t time;
    systime_t start;
-   PppContext *context;
+#endif
 
    //Check parameters
    if(interface == NULL)
@@ -475,65 +684,86 @@ error_t pppClose(NetInterface *interface)
 
    //Point to the PPP context
    context = interface->pppContext;
-   //Save current time
-   start = osGetSystemTime();
 
-   //Enter critical section
-   osAcquireMutex(&context->mutex);
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
 
    //The link is no longer available for traffic
    error = lcpClose(context);
 
-   //Leave critical section
-   osReleaseMutex(&context->mutex);
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //Any error to report?
    if(error)
       return error;
 
-   //Blocking operation?
-   if(context->timeout)
+#if (NET_RTOS_SUPPORT == ENABLED)
+   //Save current time
+   start = osGetSystemTime();
+
+   //Wait for the connection to be closed
+   while(1)
    {
-      //Wait for the connection to be closed
-      while(context->pppPhase != PPP_PHASE_DEAD)
+      //Check current PPP phase
+      if(context->pppPhase == PPP_PHASE_DEAD)
       {
-         //Check timeout value
-         if(context->timeout != INFINITE_DELAY)
+         //PPP connection is closed
+         error = NO_ERROR;
+         //Exit immediately
+         break;
+      }
+
+      //Check timeout value
+      if(context->timeout != INFINITE_DELAY)
+      {
+         //Get current time
+         time = osGetSystemTime();
+
+         //Check whether the timeout period has elapsed
+         if(timeCompare(time, start + context->timeout) >= 0)
          {
-            //Get current time
-            time = osGetSystemTime();
-
-            //Check whether the timeout period has elapsed
-            if(timeCompare(time, start + context->timeout) >= 0)
-               break;
+            //Report an error
+            error = ERROR_TIMEOUT;
+            //Exit immediately
+            break;
          }
-
-         //Poll the state
-         osDelayTask(PPP_POLLING_INTERVAL);
       }
 
-      //Failed to properly close the connection?
-      if(context->pppPhase != PPP_PHASE_DEAD)
-      {
-         //Enter critical section
-         osAcquireMutex(&context->mutex);
-
-         //Abort the PPP connection
-         context->pppPhase = PPP_PHASE_DEAD;
-         context->lcpFsm.state = PPP_STATE_0_INITIAL;
-         context->ipcpFsm.state = PPP_STATE_0_INITIAL;
-         context->papFsm.state = PAP_STATE_0_INITIAL;
-
-         //Leave critical section
-         osReleaseMutex(&context->mutex);
-
-         //Report an error
-         return ERROR_TIMEOUT;
-      }
+      //Poll the state
+      osDelayTask(PPP_POLLING_INTERVAL);
    }
 
-   //PPP connection has been properly closed
-   return NO_ERROR;
+   //Failed to properly close the connection?
+   if(error)
+   {
+      //Get exclusive access
+      osAcquireMutex(&netMutex);
+
+      //Abort the PPP connection
+      context->pppPhase = PPP_PHASE_DEAD;
+      context->lcpFsm.state = PPP_STATE_0_INITIAL;
+      context->ipcpFsm.state = PPP_STATE_0_INITIAL;
+
+#if (PAP_SUPPORT == ENABLED)
+      //Abort PAP authentication process
+      context->papFsm.localState = PAP_STATE_0_INITIAL;
+      context->papFsm.peerState = PAP_STATE_0_INITIAL;
+#endif
+
+#if (CHAP_SUPPORT == ENABLED)
+      //Abort CHAP authentication process
+      context->chapFsm.localState = CHAP_STATE_0_INITIAL;
+      context->chapFsm.peerState = CHAP_STATE_0_INITIAL;
+#endif
+
+      //Release exclusive access
+      osReleaseMutex(&netMutex);
+   }
+#endif
+
+   //Return status code
+   return error;
 }
 
 
@@ -555,18 +785,21 @@ void pppTick(NetInterface *interface)
    {
       //Point to the PPP context
       context = interface->pppContext;
-      //Enter critical section
-      osAcquireMutex(&context->mutex);
 
       //Handle LCP retransmission timer
       lcpTick(context);
       //Handle IPCP retransmission timer
       ipcpTick(context);
-      //Handle PAP retransmission timer
-      papTick(context);
 
-      //Leave critical section
-      osReleaseMutex(&context->mutex);
+#if (PAP_SUPPORT == ENABLED)
+      //Handle PAP timer
+      papTick(context);
+#endif
+
+#if (CHAP_SUPPORT == ENABLED)
+      //Handle CHAP timer
+      chapTick(context);
+#endif
    }
 }
 
@@ -578,21 +811,21 @@ void pppTick(NetInterface *interface)
  * @param[in] length Total frame length
  **/
 
-void pppProcessFrame(NetInterface *interface, PppFrame *frame, size_t length)
+void pppProcessFrame(NetInterface *interface, uint8_t *frame, size_t length)
 {
+   size_t n;
+   uint16_t protocol;
    PppContext *context;
 
    //Point to the PPP context
    context = interface->pppContext;
 
-   //Ensure the length of the incoming frame is valid
-   if(length < (sizeof(PppFrame) + PPP_FCS_SIZE))
+   //Check the length of the PPP frame
+   if(length < PPP_FCS_SIZE)
       return;
 
    //Debug message
    TRACE_DEBUG("PPP frame received (%" PRIuSIZE " bytes)...\r\n", length);
-   //Dump PPP header contents for debugging purpose
-   pppDumpFrameHeader(frame);
 
    //The value of the residue is 0x0F47 when no FCS errors are detected
    if(pppCalcFcs(frame, length) != 0x0F47)
@@ -603,56 +836,73 @@ void pppProcessFrame(NetInterface *interface, PppFrame *frame, size_t length)
       return;
    }
 
-   //Calculate the length of the data payload
-   length -= sizeof(PppFrame) + PPP_FCS_SIZE;
+   //Calculate the length of PPP frame excluding the FCS field
+   length -= PPP_FCS_SIZE;
 
-   //Enter critical section
-   osAcquireMutex(&context->mutex);
+   //Decompress the frame header
+   n = pppParseFrameHeader(frame, length, &protocol);
+   //Malformed PPP frame?
+   if(!n) return;
+
+   //Point to the payload field
+   frame += n;
+   length -= n;
 
    //Check protocol field
-   switch(ntohs(frame->protocol))
+   switch(protocol)
    {
    //Link control protocol?
    case PPP_PROTOCOL_LCP:
       //Process incoming LCP packet
-      lcpProcessPacket(context, (PppPacket *) frame->data, length);
+      lcpProcessPacket(context, (PppPacket *) frame, length);
       break;
+
 #if (IPV4_SUPPORT == ENABLED)
-   //IP protocol?
-   case PPP_PROTOCOL_IP:
-      //Process incoming IPv4 packet
-      ipv4ProcessPacket(interface, (Ipv4Header *) frame->data, length);
-      break;
    //IP control protocol?
    case PPP_PROTOCOL_IPCP:
       //Process incoming IPCP packet
-      ipcpProcessPacket(context, (PppPacket *) frame->data, length);
+      ipcpProcessPacket(context, (PppPacket *) frame, length);
+      break;
+   //IP protocol?
+   case PPP_PROTOCOL_IP:
+      //Process incoming IPv4 packet
+      ipv4ProcessPacket(interface, (Ipv4Header *) frame, length);
       break;
 #endif
+
 #if (IPV6_SUPPORT == ENABLED)
-   //IPv6 protocol?
-   //case PPP_PROTOCOL_IPV6:
-      //break;
    //IPv6 control protocol?
    //case PPP_PROTOCOL_IPV6CP:
       //Process incoming IPV6CP packet
       //ipv6cpProcessPacket(context, frame->data, length);
       //break;
+   //IPv6 protocol?
+   //case PPP_PROTOCOL_IPV6:
+      //break;
 #endif
+
+#if (PAP_SUPPORT == ENABLED)
    //PAP protocol?
    case PPP_PROTOCOL_PAP:
       //Process incoming PAP packet
-      papProcessPacket(context, (PppPacket *) frame->data, length);
+      papProcessPacket(context, (PppPacket *) frame, length);
       break;
+#endif
+
+#if (CHAP_SUPPORT == ENABLED)
+   //CHAP protocol?
+   case PPP_PROTOCOL_CHAP:
+      //Process incoming CHAP packet
+      chapProcessPacket(context, (PppPacket *) frame, length);
+      break;
+#endif
+
    //Unknown protocol field
    default:
       //The peer is attempting to use a protocol which is unsupported
-      lcpProcessUnknownProtocol(context, ntohs(frame->protocol), frame->data, length);
+      lcpProcessUnknownProtocol(context, protocol, frame, length);
       break;
    }
-
-   //Leave critical section
-   osReleaseMutex(&context->mutex);
 }
 
 
@@ -671,30 +921,74 @@ error_t pppSendFrame(NetInterface *interface,
    error_t error;
    size_t length;
    uint16_t fcs;
-   PppFrame *frame;
+   uint8_t *p;
+   PppContext *context;
 
+   //Point to the PPP context
+   context = interface->pppContext;
+
+   //IPv6 protocol?
    if(protocol == PPP_PROTOCOL_IPV6)
    {
       //Not implemented
       return NO_ERROR;
    }
 
-   //Is there enough space for the PPP header?
-   if(offset < sizeof(PppFrame))
-      return ERROR_INVALID_PARAMETER;
+   //Check whether the Protocol field can be compressed
+   if(context->peerConfig.pfc && MSB(protocol) == 0)
+   {
+      //Is there enough space in the buffer to store the compressed
+      //Protocol field?
+      if(offset < 1)
+         return ERROR_FAILURE;
 
-   //Make room for the PPP header
-   offset -= sizeof(PppFrame);
+      //Make room for the Protocol field
+      offset--;
+      //Move backward
+      p = netBufferAt(buffer, offset);
+      //Compress the Protocol field
+      p[0] = LSB(protocol);
+   }
+   else
+   {
+      //Is there enough space in the buffer to store the uncompressed
+      //Protocol field?
+      if(offset < 2)
+         return ERROR_FAILURE;
+
+      //Make room for the Protocol field
+      offset -= 2;
+      //Move backward
+      p = netBufferAt(buffer, offset);
+      //Do not compress the Protocol field
+      p[0] = MSB(protocol);
+      p[1] = LSB(protocol);
+   }
+
+   //Check whether the Address and Control fields can be compressed
+   if(context->peerConfig.acfc && protocol != PPP_PROTOCOL_LCP)
+   {
+      //On transmission, compressed Address and Control fields
+      //are simply omitted...
+   }
+   else
+   {
+      //Is there enough space in the buffer to store the uncompressed
+      //Address and Control fields?
+      if(offset < 2)
+         return ERROR_FAILURE;
+
+      //Make room for the Address and Control fields
+      offset -= 2;
+      //Move backward
+      p = netBufferAt(buffer, offset);
+      //Do not compress the Address and Control fields
+      p[0] = PPP_ADDR_FIELD;
+      p[1] = PPP_CTRL_FIELD;
+   }
+
    //Retrieve the length of the frame
    length = netBufferGetLength(buffer) - offset;
-
-   //Point to the beginning of the frame
-   frame = netBufferAt(buffer, offset);
-
-   //Format PPP header
-   frame->address = 0xFF;
-   frame->control = 0x03;
-   frame->protocol = htons(protocol);
 
    //Compute FCS over the header and payload
    fcs = pppCalcFcsEx(buffer, offset, length);
@@ -702,20 +996,95 @@ error_t pppSendFrame(NetInterface *interface,
    fcs = htole16(fcs);
 
    //Append the calculated FCS value
-   error = netBufferAppend(buffer, &fcs, sizeof(fcs));
+   error = netBufferAppend(buffer, &fcs, PPP_FCS_SIZE);
    //Any error to report?
    if(error) return error;
 
    //Adjust frame length
-   length += sizeof(fcs);
+   length += PPP_FCS_SIZE;
 
    //Debug message
    TRACE_DEBUG("Sending PPP frame (%" PRIuSIZE " bytes)...\r\n", length);
-   //Dump PPP header contents for debugging purpose
-   pppDumpFrameHeader(frame);
+   TRACE_DEBUG("  Protocol = 0x%04" PRIX16 "\r\n", protocol);
 
    //Send the resulting frame over the specified link
-   return nicSendPacket(interface, buffer, offset);
+   error = nicSendPacket(interface, buffer, offset);
+   //Return status code
+   return error;
+}
+
+
+/**
+ * @brief Parse PPP frame header
+ * @param[in] frame Pointer to the PPP frame
+ * @param[in] length Length of the frame, in bytes
+ * @param[out] protocol Value of the Protocol field
+ * @return If the PPP header was successfully parsed, the function returns the size
+ *   of the PPP header, in bytes. If a parsing error occurred, zero is returned
+ **/
+
+size_t pppParseFrameHeader(const uint8_t *frame, size_t length, uint16_t *protocol)
+{
+   size_t n;
+
+   //Size of the PPP header, in bytes
+   n = 0;
+
+   //On reception, the Address and Control fields are decompressed by
+   //examining the first two octets
+   if(length >= 2)
+   {
+      //If they contain the values 0xff and 0x03, they are assumed to be
+      //the Address and Control fields. If not, it is assumed that the
+      //fields were compressed and were not transmitted
+      if(frame[0] == PPP_ADDR_FIELD && frame[1] == PPP_CTRL_FIELD)
+      {
+         //Move to the Protocol field
+         n = 2;
+      }
+   }
+
+   //Check the length of the PPP frame
+   if(length >= (n + 1))
+   {
+      //PPP Protocol field numbers are chosen such that some values may be
+      //compressed into a single octet form which is clearly distinguishable
+      //from the two octet form
+      if(frame[n] & 0x01)
+      {
+         //The presence of a binary 1 as the LSB marks the last octet of
+         //the Protocol field
+         *protocol = frame[n];
+
+         //Update the length of the header
+         n++;
+      }
+      else
+      {
+         //Check the length of the PPP frame
+         if(length >= (n + 2))
+         {
+            //The Protocol field is not compressed
+            *protocol = (frame[n] << 8) | frame[n + 1];
+
+            //Update the length of the header
+            n += 2;
+         }
+         else
+         {
+            //Malformed PPP frame
+            n = 0;
+         }
+      }
+   }
+   else
+   {
+      //Malformed PPP frame
+      n = 0;
+   }
+
+   //Return the size of the PPP header, in bytes
+   return n;
 }
 
 
@@ -726,13 +1095,10 @@ error_t pppSendFrame(NetInterface *interface,
  * @return Resulting FCS value
  **/
 
-uint16_t pppCalcFcs(const void *data, size_t length)
+uint16_t pppCalcFcs(const uint8_t *data, size_t length)
 {
    size_t i;
    uint16_t fcs;
-
-   //Point to the data over which to calculate the FCS
-   const uint8_t *p = (uint8_t *) data;
 
    //FCS preset value
    fcs = 0xFFFF;
@@ -741,7 +1107,7 @@ uint16_t pppCalcFcs(const void *data, size_t length)
    for(i = 0; i < length; i++)
    {
       //The message is processed byte by byte
-      fcs = (fcs >> 8) ^ fcsTable[(fcs & 0xFF) ^ p[i]];
+      fcs = (fcs >> 8) ^ fcsTable[(fcs & 0xFF) ^ data[i]];
    }
 
    //Return 1's complement value
@@ -819,12 +1185,12 @@ NetBuffer *pppAllocBuffer(size_t length, size_t *offset)
    NetBuffer *buffer;
 
    //Allocate a buffer to hold the Ethernet header and the payload
-   buffer = netBufferAlloc(length + sizeof(PppFrame));
+   buffer = netBufferAlloc(length + PPP_FRAME_HEADER_SIZE);
    //Failed to allocate buffer?
    if(!buffer) return NULL;
 
    //Offset to the first byte of the payload
-   *offset = sizeof(PppFrame);
+   *offset = PPP_FRAME_HEADER_SIZE;
 
    //Return a pointer to the freshly allocated buffer
    return buffer;

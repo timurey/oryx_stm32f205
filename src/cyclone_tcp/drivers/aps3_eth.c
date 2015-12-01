@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -52,6 +52,9 @@
 #define rxDmaDesc ((Aps3RxDmaDesc *) (SFRADR_ETH_RX_MEM_BOTTOM_AD + \
    APS3_ETH_RX_BUFFER_COUNT * APS3_ETH_RX_BUFFER_SIZE))
 
+//Underlying network interface
+static NetInterface *nicDriverInterface;
+
 
 /**
  * @brief Cortus APS3 Ethernet MAC driver
@@ -66,8 +69,9 @@ const NicDriver aps3EthDriver =
    aps3EthEnableIrq,
    aps3EthDisableIrq,
    aps3EthEventHandler,
-   aps3EthSetMacFilter,
    aps3EthSendPacket,
+   aps3EthSetMulticastFilter,
+   aps3EthUpdateMacConfig,
    aps3EthWritePhyReg,
    aps3EthReadPhyReg,
    TRUE,
@@ -88,6 +92,9 @@ error_t aps3EthInit(NetInterface *interface)
 
    //Debug message
    TRACE_INFO("Initializing Cortus APS3 Ethernet MAC...\r\n");
+
+   //Save underlying network interface
+   nicDriverInterface = interface;
 
    //Adjust MDC clock range
    eth_miim->miim_clock_divider = 32;
@@ -149,7 +156,7 @@ error_t aps3EthInit(NetInterface *interface)
    aps3EthInitDmaDesc(interface);
 
    //Configure TX interrupts
-   eth_tx->tx_irq_mask = TX_IRQ_MASK_MEMORY_AVAILABLE;
+   eth_tx->tx_irq_mask = 0x7F; //TX_IRQ_MASK_FRAME_SENT | TX_IRQ_MASK_TRANSMIT_ERROR;
    //Configure RX interrupts
    eth_rx->rx_irq_mask = RX_IRQ_MASK_FRAME_READY;
 
@@ -162,9 +169,7 @@ error_t aps3EthInit(NetInterface *interface)
    eth_tx->tx_enable = 1;
    eth_rx->rx_enable = 1;
 
-   //Force the TCP/IP stack to check the link state
-   osSetEvent(&interface->nicRxEvent);
-   //Cortus APS3 Ethernet MAC is now ready to send
+   //Accept any packets from the upper layer
    osSetEvent(&interface->nicTxEvent);
 
    //Successful initialization
@@ -226,6 +231,14 @@ void aps3EthInitDmaDesc(NetInterface *interface)
 
 void aps3EthTick(NetInterface *interface)
 {
+	uint_t i;
+	uint_t k;
+
+	 i = eth_tx->tx_desc_produce;
+
+	   k = eth_tx->tx_desc_consume;
+	TRACE_ERROR("### 3 - TX_PROD = %u, TX_CONS = %u\r\n", i, k);
+
    //Handle periodic operations
    interface->phyDriver->tick(interface);
 }
@@ -262,33 +275,39 @@ void aps3EthDisableIrq(NetInterface *interface)
 
 
 /**
- * @brief Ethernet MAC transmit interrupt
+ * @brief Ethernet MAC transmit interrupt service routine
  **/
 
-void interrupt_handler(IRQ_ETH_TX)
+void aps3EthTxIrqHandler(void)
 {
+   uint_t i;
    bool_t flag;
-   NetInterface *interface;
 
    //Enter interrupt service routine
    osEnterIsr();
-
-   //Point to the structure describing the network interface
-   interface = &netInterface[0];
+fputc('#', stderr);
+fputc('T', stderr);
+fputc('X', stderr);
+fputc('\r', stderr);
+fputc('\n', stderr);
    //This flag will be set if a higher priority task must be woken
    flag = FALSE;
 
-   //Check interrupt flag
-   if(eth_tx->tx_status & TX_IRQ_MASK_MEMORY_AVAILABLE)
+   //Check interrupt status register
+   if(eth_tx->tx_status)
    {
-      //Disable TX interrupts
-      eth_tx->tx_irq_mask = 0;
+      //Get the index of the next descriptor
+      i = eth_tx->tx_desc_produce + 1;
+
+      //Wrap around if necessary
+	  if(i >= APS3_ETH_TX_BUFFER_COUNT)
+		  i = 0;
 
       //Check whether the TX buffer is available for writing
-      if(!(eth_tx->tx_desc_status))
+      if(i != eth_tx->tx_desc_consume)
       {
-         //Notify the user that the transmitter is ready to send
-         flag = osSetEventFromIsr(&interface->nicTxEvent);
+         //Notify the TCP/IP stack that the transmitter is ready to send
+         flag = osSetEventFromIsr(&nicDriverInterface->nicTxEvent);
       }
    }
 
@@ -298,27 +317,30 @@ void interrupt_handler(IRQ_ETH_TX)
 
 
 /**
- * @brief Ethernet MAC receive interrupt
+ * @brief Ethernet MAC receive interrupt service routine
  **/
 
-void interrupt_handler(IRQ_ETH_RX)
+void aps3EthRxIrqHandler(void)
 {
    bool_t flag;
-   NetInterface *interface;
 
    //Enter interrupt service routine
    osEnterIsr();
-
-   //Point to the structure describing the network interface
-   interface = &netInterface[0];
+fputc('#', stderr);
+fputc('R', stderr);
+fputc('X', stderr);
+fputc('\r', stderr);
+fputc('\n', stderr);
    //This flag will be set if a higher priority task must be woken
    flag = FALSE;
 
    //Disable RX interrupts
    eth_rx->rx_irq_mask = 0;
 
-   //Notify the user that a packet has been received
-   flag = osSetEventFromIsr(&interface->nicRxEvent);
+   //Set event flag
+   nicDriverInterface->nicEvent = TRUE;
+   //Notify the TCP/IP stack of the event
+   flag = osSetEventFromIsr(&netEvent);
 
    //Leave interrupt service routine
    osExitIsr(flag);
@@ -334,41 +356,6 @@ void aps3EthEventHandler(NetInterface *interface)
 {
    error_t error;
    size_t length;
-   bool_t linkStateChange;
-
-   //PHY event is pending?
-   if(interface->phyEvent)
-   {
-      //Acknowledge the event by clearing the flag
-      interface->phyEvent = FALSE;
-      //Handle PHY specific events
-      linkStateChange = interface->phyDriver->eventHandler(interface);
-
-      //Check whether the link state has changed?
-      if(linkStateChange)
-      {
-         //Set duplex mode for proper operation
-         if(interface->linkState)
-         {
-            //Disable transmission and reception
-            eth_tx->tx_enable = 0;
-            eth_rx->rx_enable = 0;
-
-            //Half-duplex or full-duplex mode?
-            if(interface->fullDuplex)
-               eth_mac->full_duplex = 1;
-            else
-               eth_mac->full_duplex = 0;
-
-            //Re-enable transmission and reception
-            eth_tx->tx_enable = 1;
-            eth_rx->rx_enable = 1;
-         }
-
-         //Process link state change event
-         nicNotifyLinkChange(interface);
-      }
-   }
 
    //A packet has been received?
    if(eth_rx->rx_status & RX_IRQ_MASK_FRAME_READY)
@@ -397,59 +384,6 @@ void aps3EthEventHandler(NetInterface *interface)
 
 
 /**
- * @brief Configure multicast MAC address filtering
- * @param[in] interface Underlying network interface
- * @return Error code
- **/
-
-error_t aps3EthSetMacFilter(NetInterface *interface)
-{
-   uint_t i;
-   uint_t k;
-   uint32_t crc;
-   uint32_t hashTable[2];
-
-   //Debug message
-   TRACE_INFO("Updating Cortus APS3 hash table...\r\n");
-
-   //Clear hash table
-   hashTable[0] = 0;
-   hashTable[1] = 0;
-
-   //The MAC filter table contains the multicast MAC addresses
-   //to accept when receiving an Ethernet frame
-   for(i = 0; i < interface->macFilterSize; i++)
-   {
-      //Compute CRC over the current MAC address
-      crc = aps3EthCalcCrc(&interface->macFilter[i].addr, sizeof(MacAddr));
-      //Calculate the corresponding index in the table
-      k = (crc >> 23) & 0x3F;
-      //Update hash table contents
-      hashTable[k / 32] |= (1 << (k % 32));
-   }
-
-   //Disable transmission and reception
-   eth_tx->tx_enable = 0;
-   eth_rx->rx_enable = 0;
-
-   //Write the hash table
-   eth_mac->hash_filter_low = hashTable[0];
-   eth_mac->hash_filter_high = hashTable[1];
-
-   //Debug message
-   TRACE_INFO("  hash_filter_low = %08" PRIX32 "\r\n", hashTable[0]);
-   TRACE_INFO("  hash_filter_high = %08" PRIX32 "\r\n", hashTable[1]);
-
-   //Re-enable transmission and reception
-   eth_tx->tx_enable = 1;
-   eth_rx->rx_enable = 1;
-
-   //Successful processing
-   return NO_ERROR;
-}
-
-
-/**
  * @brief Send a packet
  * @param[in] interface Underlying network interface
  * @param[in] buffer Multi-part buffer containing the data to send
@@ -461,6 +395,8 @@ error_t aps3EthSendPacket(NetInterface *interface,
    const NetBuffer *buffer, size_t offset)
 {
    uint_t i;
+   uint_t j;
+   uint_t k;
 
    //Retrieve the length of the packet
    size_t length = netBufferGetLength(buffer) - offset;
@@ -476,15 +412,13 @@ error_t aps3EthSendPacket(NetInterface *interface,
 
    //Make sure the current buffer is available for writing
    if(eth_tx->tx_desc_status)
-   {
-      //Re-enable TX interrupts
-      eth_tx->tx_irq_mask = TX_IRQ_MASK_MEMORY_AVAILABLE;
-      //Report an error
       return ERROR_FAILURE;
-   }
 
    //Get the index of the current descriptor
    i = eth_tx->tx_desc_produce;
+
+   k = eth_tx->tx_desc_consume;
+TRACE_ERROR("### 1 - TX_PROD = %u, TX_CONS = %u\r\n", i, k);
 
    //Copy user data to the transmit buffer
    netBufferRead((uint8_t *) txDmaDesc[i].addr, buffer, offset, length);
@@ -494,16 +428,29 @@ error_t aps3EthSendPacket(NetInterface *interface,
    //Start transmission
    eth_tx->tx_sw_done = 1;
 
+   //Get the index of the current descriptor
+   i = eth_tx->tx_desc_produce;
+   {
+	   k = eth_tx->tx_desc_consume;
+	   TRACE_ERROR("### 2 - TX_PROD = %u, TX_CONS = %u\r\n", i, k);
+   }
+   //Get the index of the next descriptor
+   j = i + 1;
+
+   //Wrap around if necessary
+   if(j >= APS3_ETH_TX_BUFFER_COUNT)
+      j = 0;
+
    //Check whether the next buffer is available for writing
-   if(!(eth_tx->tx_desc_status))
+   if(j != eth_tx->tx_desc_consume)
    {
       //The transmitter can accept another packet
-      osSetEvent(&interface->nicTxEvent);
+      //osSetEvent(&interface->nicTxEvent);
    }
    else
    {
-      //Re-enable TX interrupts
-      eth_tx->tx_irq_mask = TX_IRQ_MASK_MEMORY_AVAILABLE;
+
+	   TRACE_ERROR("### TX BUFFER FULL ###\r\n");
    }
 
    //Data successfully written
@@ -567,6 +514,94 @@ error_t aps3EthReceivePacket(NetInterface *interface,
 
    //Return status code
    return error;
+}
+
+
+/**
+ * @brief Configure multicast MAC address filtering
+ * @param[in] interface Underlying network interface
+ * @return Error code
+ **/
+
+error_t aps3EthSetMulticastFilter(NetInterface *interface)
+{
+   uint_t i;
+   uint_t k;
+   uint32_t crc;
+   uint32_t hashTable[2];
+   MacFilterEntry *entry;
+
+   //Debug message
+   TRACE_DEBUG("Updating Cortus APS3 hash table...\r\n");
+
+   //Clear hash table
+   hashTable[0] = 0;
+   hashTable[1] = 0;
+
+   //The MAC filter table contains the multicast MAC addresses
+   //to accept when receiving an Ethernet frame
+   for(i = 0; i < MAC_MULTICAST_FILTER_SIZE; i++)
+   {
+      //Point to the current entry
+      entry = &interface->macMulticastFilter[i];
+
+      //Valid entry?
+      if(entry->refCount > 0)
+      {
+         //Compute CRC over the current MAC address
+         crc = aps3EthCalcCrc(&entry->addr, sizeof(MacAddr));
+         //Calculate the corresponding index in the table
+         k = (crc >> 23) & 0x3F;
+         //Update hash table contents
+         hashTable[k / 32] |= (1 << (k % 32));
+      }
+   }
+
+   //Disable transmission and reception
+   eth_tx->tx_enable = 0;
+   eth_rx->rx_enable = 0;
+
+   //Write the hash table
+   eth_mac->hash_filter_low = hashTable[0];
+   eth_mac->hash_filter_high = hashTable[1];
+
+   //Debug message
+   TRACE_DEBUG("  hash_filter_low = %08" PRIX32 "\r\n", hashTable[0]);
+   TRACE_DEBUG("  hash_filter_high = %08" PRIX32 "\r\n", hashTable[1]);
+
+   //Re-enable transmission and reception
+   eth_tx->tx_enable = 1;
+   eth_rx->rx_enable = 1;
+
+   //Successful processing
+   return NO_ERROR;
+}
+
+
+/**
+ * @brief Adjust MAC configuration parameters for proper operation
+ * @param[in] interface Underlying network interface
+ * @return Error code
+ **/
+
+error_t aps3EthUpdateMacConfig(NetInterface *interface)
+{
+   //Disable transmission and reception
+   eth_tx->tx_enable = 0;
+   eth_rx->rx_enable = 0;
+
+   //Half-duplex or full-duplex mode?
+   if(interface->duplexMode == NIC_FULL_DUPLEX_MODE)
+      eth_mac->full_duplex = 1;
+   else
+      eth_mac->full_duplex = 0;
+
+   //Re-enable transmission and reception
+   eth_tx->tx_enable = 1;
+   eth_rx->rx_enable = 1;
+
+   //Successful processing
+   return NO_ERROR;
 }
 
 

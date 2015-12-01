@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _SAM4E_ETH_H
@@ -162,13 +162,14 @@ void sam4eEthEnableIrq(NetInterface *interface);
 void sam4eEthDisableIrq(NetInterface *interface);
 void sam4eEthEventHandler(NetInterface *interface);
 
-error_t sam4eEthSetMacFilter(NetInterface *interface);
-
 error_t sam4eEthSendPacket(NetInterface *interface,
    const NetBuffer *buffer, size_t offset);
 
 uint_t sam4eEthReceivePacket(NetInterface *interface,
    uint8_t *buffer, size_t size);
+
+error_t sam4eEthSetMulticastFilter(NetInterface *interface);
+error_t sam4eEthUpdateMacConfig(NetInterface *interface);
 
 void sam4eEthWritePhyReg(uint8_t phyAddr, uint8_t regAddr, uint16_t data);
 uint16_t sam4eEthReadPhyReg(uint8_t phyAddr, uint8_t regAddr);

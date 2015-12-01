@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -208,8 +208,8 @@ size_t dnsDumpQuestion(const DnsHeader *message, size_t length, size_t pos, char
 size_t dnsDumpResourceRecord(const DnsHeader *message, size_t length, size_t pos, char_t *buffer)
 {
    size_t n;
-   DnsResourceRecord *resourceRecord;
-   DnsSrvResourceRecord *srvResourceRecord;
+   DnsResourceRecord *record;
+   DnsSrvResourceRecord *srvRecord;
 
    //Parse domain name
    n = dnsParseName(message, length, pos, buffer, 0);
@@ -217,15 +217,17 @@ size_t dnsDumpResourceRecord(const DnsHeader *message, size_t length, size_t pos
    if(!n)
       return 0;
 
-   //Make sure the DNS resource record is valid
-   if((n + sizeof(DnsResourceRecord) + ntohs(resourceRecord->rdlength)) > length)
+   //Point to the corresponding entry
+   record = DNS_GET_RESOURCE_RECORD(message, n);
+
+   //Make sure the resource record is valid
+   if((n + sizeof(DnsResourceRecord)) > length)
+      return 0;
+   if((n + sizeof(DnsResourceRecord) + ntohs(record->rdlength)) > length)
       return 0;
 
-   //Point to the corresponding entry
-   resourceRecord = DNS_GET_RESOURCE_RECORD(message, n);
-
    //NB resource record found?
-   if(ntohs(resourceRecord->rtype) == DNS_RR_TYPE_NB)
+   if(ntohs(record->rtype) == DNS_RR_TYPE_NB)
    {
 #if (NBNS_CLIENT_SUPPORT == ENABLED || NBNS_RESPONDER_SUPPORT == ENABLED)
 #if (IPV4_SUPPORT == ENABLED)
@@ -239,39 +241,39 @@ size_t dnsDumpResourceRecord(const DnsHeader *message, size_t length, size_t pos
 
    //Dump DNS resource record
    TRACE_DEBUG("    Name (NAME) = %s\r\n", buffer);
-   TRACE_DEBUG("      Query Type (TYPE) = %" PRIu16 "\r\n", ntohs(resourceRecord->rtype));
-   TRACE_DEBUG("      Query Class (CLASS) = %" PRIu16 "\r\n", ntohs(resourceRecord->rclass));
-   TRACE_DEBUG("      Time-To-Live (TTL) = %" PRIu32 "\r\n", ntohl(resourceRecord->ttl));
-   TRACE_DEBUG("      Data Length (RDLENGTH) = %" PRIu16 "\r\n", ntohs(resourceRecord->rdlength));
+   TRACE_DEBUG("      Query Type (TYPE) = %" PRIu16 "\r\n", ntohs(record->rtype));
+   TRACE_DEBUG("      Query Class (CLASS) = %" PRIu16 "\r\n", ntohs(record->rclass));
+   TRACE_DEBUG("      Time-To-Live (TTL) = %" PRIu32 "\r\n", ntohl(record->ttl));
+   TRACE_DEBUG("      Data Length (RDLENGTH) = %" PRIu16 "\r\n", ntohs(record->rdlength));
 
    //Dump resource data
 #if (IPV4_SUPPORT == ENABLED)
-   if(ntohs(resourceRecord->rtype) == DNS_RR_TYPE_A &&
-      ntohs(resourceRecord->rdlength) == sizeof(Ipv4Addr))
+   if(ntohs(record->rtype) == DNS_RR_TYPE_A &&
+      ntohs(record->rdlength) == sizeof(Ipv4Addr))
    {
       Ipv4Addr ipAddr;
 
       //Copy IPv4 address
-      ipv4CopyAddr(&ipAddr, resourceRecord->rdata);
+      ipv4CopyAddr(&ipAddr, record->rdata);
       //Dump IPv4 address
       TRACE_DEBUG("      Data (RDATA) = %s\r\n", ipv4AddrToString(ipAddr, NULL));
    }
    else
 #endif
 #if (IPV6_SUPPORT == ENABLED)
-   if(ntohs(resourceRecord->rtype) == DNS_RR_TYPE_AAAA &&
-      ntohs(resourceRecord->rdlength) == sizeof(Ipv6Addr))
+   if(ntohs(record->rtype) == DNS_RR_TYPE_AAAA &&
+      ntohs(record->rdlength) == sizeof(Ipv6Addr))
    {
       Ipv6Addr ipAddr;
 
       //Copy IPv6 address
-      ipv6CopyAddr(&ipAddr, resourceRecord->rdata);
+      ipv6CopyAddr(&ipAddr, record->rdata);
       //Dump IPv6 address
       TRACE_DEBUG("      Data (RDATA) = %s\r\n", ipv6AddrToString(&ipAddr, NULL));
    }
    else
 #endif
-   if(ntohs(resourceRecord->rtype) == DNS_RR_TYPE_PTR)
+   if(ntohs(record->rtype) == DNS_RR_TYPE_PTR)
    {
       //Decode domain name
       pos = dnsParseName(message, length, n + sizeof(DnsResourceRecord), buffer, 0);
@@ -281,15 +283,15 @@ size_t dnsDumpResourceRecord(const DnsHeader *message, size_t length, size_t pos
       //Dump name
       TRACE_DEBUG("      Domain Name (PTRDNAME) = %s\r\n", buffer);
    }
-   else if(ntohs(resourceRecord->rtype) == DNS_RR_TYPE_SRV)
+   else if(ntohs(record->rtype) == DNS_RR_TYPE_SRV)
    {
       //Cast resource record
-      srvResourceRecord = (DnsSrvResourceRecord *) resourceRecord;
+      srvRecord = (DnsSrvResourceRecord *) record;
 
       //Dump SRV resource record
-      TRACE_DEBUG("      Priority = %" PRIu16 "\r\n", ntohs(srvResourceRecord->priority));
-      TRACE_DEBUG("      Weight = %" PRIu16 "\r\n", ntohs(srvResourceRecord->weight));
-      TRACE_DEBUG("      Port = %" PRIu16 "\r\n", ntohs(srvResourceRecord->port));
+      TRACE_DEBUG("      Priority = %" PRIu16 "\r\n", ntohs(srvRecord->priority));
+      TRACE_DEBUG("      Weight = %" PRIu16 "\r\n", ntohs(srvRecord->weight));
+      TRACE_DEBUG("      Port = %" PRIu16 "\r\n", ntohs(srvRecord->port));
 
       //Decode target name
       pos = dnsParseName(message, length, n + sizeof(DnsSrvResourceRecord), buffer, 0);
@@ -303,11 +305,11 @@ size_t dnsDumpResourceRecord(const DnsHeader *message, size_t length, size_t pos
    {
       //Dump resource data
       TRACE_DEBUG("      Data (RDATA)\r\n");
-      TRACE_DEBUG_ARRAY("        ", resourceRecord->rdata, ntohs(resourceRecord->rdlength));
+      TRACE_DEBUG_ARRAY("        ", record->rdata, ntohs(record->rdlength));
    }
 
    //Point to the next resource record
-   n += sizeof(DnsResourceRecord) + ntohs(resourceRecord->rdlength);
+   n += sizeof(DnsResourceRecord) + ntohs(record->rdlength);
    //Return the current position
    return n;
 }

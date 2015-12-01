@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _KSZ8081_H
@@ -161,7 +161,7 @@
 #define LPNPAR_MESSAGE0             (1 << 0)
 
 //DRC register
-#define DRC_PLL_OFF                (1 << 4)
+#define DRC_PLL_OFF                 (1 << 4)
 
 //AFECON1 register
 #define AFECON1_SLOW_OSC_MODE_EN    (1 << 5)
@@ -261,7 +261,7 @@ void ksz8081Tick(NetInterface *interface);
 void ksz8081EnableIrq(NetInterface *interface);
 void ksz8081DisableIrq(NetInterface *interface);
 
-bool_t ksz8081EventHandler(NetInterface *interface);
+void ksz8081EventHandler(NetInterface *interface);
 
 void ksz8081WritePhyReg(NetInterface *interface, uint8_t address, uint16_t data);
 uint16_t ksz8081ReadPhyReg(NetInterface *interface, uint8_t address);

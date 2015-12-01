@@ -32,7 +32,7 @@
  * - RFC 2428: FTP Extensions for IPv6 and NATs
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -59,10 +59,16 @@
 
 void ftpServerGetDefaultSettings(FtpServerSettings *settings)
 {
-   //Use default interface
+   //The FTP server is not bound to any interface
    settings->interface = NULL;
-   //Listen to port 21
+
+   //FTP command port number
    settings->port = FTP_PORT;
+   //FTP data port number
+   settings->dataPort = FTP_DATA_PORT;
+   //Passive port range
+   settings->passivePortMin = FTP_SERVER_PASSIVE_PORT_MIN;
+   settings->passivePortMax = FTP_SERVER_PASSIVE_PORT_MAX;
    //Set root directory
    strcpy(settings->rootDir, "/");
    //User verification callback function
@@ -84,13 +90,16 @@ void ftpServerGetDefaultSettings(FtpServerSettings *settings)
 error_t ftpServerInit(FtpServerContext *context, const FtpServerSettings *settings)
 {
    error_t error;
-   OsTask *task;
 
    //Debug message
    TRACE_INFO("Initializing FTP server...\r\n");
 
    //Ensure the parameters are valid
    if(!context || !settings)
+      return ERROR_INVALID_PARAMETER;
+
+   //Check passive port range
+   if(settings->passivePortMax <= settings->passivePortMin)
       return ERROR_INVALID_PARAMETER;
 
    //Clear the FTP server context
@@ -130,12 +139,14 @@ error_t ftpServerInit(FtpServerContext *context, const FtpServerSettings *settin
       if(error) break;
 
       //Change the size of the TX buffer
-      error = socketSetTxBufferSize(context->socket, FTP_SERVER_CTRL_SOCKET_BUFFER_SIZE);
+      error = socketSetTxBufferSize(context->socket,
+         FTP_SERVER_CTRL_SOCKET_BUFFER_SIZE);
       //Any error to report?
       if(error) break;
 
       //Change the size of the RX buffer
-      error = socketSetRxBufferSize(context->socket, FTP_SERVER_CTRL_SOCKET_BUFFER_SIZE);
+      error = socketSetRxBufferSize(context->socket,
+         FTP_SERVER_CTRL_SOCKET_BUFFER_SIZE);
       //Any error to report?
       if(error) break;
 
@@ -154,15 +165,7 @@ error_t ftpServerInit(FtpServerContext *context, const FtpServerSettings *settin
       //Any failure to report?
       if(error) break;
 
-      //Create the FTP server task
-      task = osCreateTask("FTP Server", ftpServerTask,
-         context, FTP_SERVER_STACK_SIZE, FTP_SERVER_PRIORITY);
-
-      //Unable to create the task?
-      if(task == OS_INVALID_HANDLE)
-         error = ERROR_OUT_OF_RESOURCES;
-
-   //End of exception handling block
+      //End of exception handling block
    } while(0);
 
    //Did we encounter an error?
@@ -187,8 +190,19 @@ error_t ftpServerInit(FtpServerContext *context, const FtpServerSettings *settin
 
 error_t ftpServerStart(FtpServerContext *context)
 {
+   OsTask *task;
+
    //Debug message
    TRACE_INFO("Starting FTP server...\r\n");
+
+   //Create the FTP server task
+   task = osCreateTask("FTP Server", ftpServerTask,
+      context, FTP_SERVER_STACK_SIZE, FTP_SERVER_PRIORITY);
+
+   //Unable to create the task?
+   if(task == OS_INVALID_HANDLE)
+      return ERROR_OUT_OF_RESOURCES;
+
    //Successful processing
    return NO_ERROR;
 }
@@ -252,9 +266,11 @@ void ftpServerTask(void *param)
    //Retrieve the FTP server context
    context = (FtpServerContext *) param;
 
+#if (NET_RTOS_SUPPORT == ENABLED)
    //Process events
    while(1)
    {
+#endif
       //Clear event descriptor set
       memset(context->eventDesc, 0, sizeof(context->eventDesc));
 
@@ -425,7 +441,9 @@ void ftpServerTask(void *param)
             }
          }
       }
+#if (NET_RTOS_SUPPORT == ENABLED)
    }
+#endif
 }
 
 #endif

@@ -31,7 +31,7 @@
  * with the latter to obtain configuration parameters. Refer to RFC 3315
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -55,18 +55,18 @@ const Ipv6Addr DHCPV6_ALL_SERVERS_ADDR =
 
 
 /**
- * @brief Parse Status Code option
+ * @brief Retrieve status code
  *
  * This function returns a status indication related to the DHCPv6
  * message or option in which it appears
  *
  * @param[in] options Pointer to the Options field
  * @param[in] length Length of the Options field
+ * @return Status code
  **/
 
-error_t dhcpv6ParseStatusCodeOption(const uint8_t *options, size_t length)
+Dhcpv6StatusCode dhcpv6GetStatusCode(const uint8_t *options, size_t length)
 {
-   error_t error;
    uint16_t statusCode;
    Dhcpv6Option *option;
    Dhcpv6StatusCodeOption *statusCodeOption;
@@ -74,53 +74,24 @@ error_t dhcpv6ParseStatusCodeOption(const uint8_t *options, size_t length)
    //Search for the Status Code option
    option = dhcpv6GetOption(options, length, DHCPV6_OPTION_STATUS_CODE);
 
-   //If the Status Code option does not appear in a message in which the option
-   //could appear, the status of the message is assumed to be Success
-   if(!option || ntohs(option->length) < sizeof(Dhcpv6StatusCodeOption))
-      return NO_ERROR;
-
-   //The option contains a status code and a status message
-   statusCodeOption = (Dhcpv6StatusCodeOption *) option->value;
-   //Convert status code from network byte order
-   statusCode = ntohs(statusCodeOption->statusCode);
-
-   //Check the status code returned by the peer
-   switch(statusCode)
+   //Check whether the option has been found
+   if(option != NULL && ntohs(option->length) >= sizeof(Dhcpv6StatusCodeOption))
    {
-   //Success
-   case DHCPV6_STATUS_SUCCESS:
-      error = NO_ERROR;
-      break;
-   //Unspecified failure
-   case DHCPV6_STATUS_UNSPEC_FAILURE:
-      error = ERROR_FAILURE;
-      break;
-   //Server has no address available to assign to the IA
-   case DHCPV6_STATUS_NO_ADDRS_AVAILABLE:
-      error = ERROR_NO_ADDRESS;
-      break;
-   //Client record (binding) unavailable
-   case DHCPV6_STATUS_NO_BINDING:
-      error = ERROR_NO_BINDING;
-      break;
-   //The prefix for the address is not appropriate for
-   //the link to which the client is attached
-   case DHCPV6_STATUS_NOT_ON_LINK:
-      error = ERROR_NOT_ON_LINK;
-      break;
-   //Sent by a server to a client to force the client to send
-   //messages to the server using the multicast address
-   case DHCPV6_STATUS_USE_MULTICAST:
-      error = ERROR_USE_MULTICAST;
-      break;
-   //Any other failure...
-   default:
-      error = ERROR_FAILURE;
-      break;
+      //The option contains a status code and a status message
+      statusCodeOption = (Dhcpv6StatusCodeOption *) option->value;
+
+      //Convert the status code from network byte order
+      statusCode = ntohs(statusCodeOption->statusCode);
+   }
+   else
+   {
+      //If the Status Code option does not appear in a message in which the option
+      //could appear, the status of the message is assumed to be Success
+      statusCode = DHCPV6_STATUS_SUCCESS;
    }
 
-   //Return the corresponding error
-   return error;
+   //Return status code
+   return (Dhcpv6StatusCode) statusCode;
 }
 
 
@@ -132,7 +103,7 @@ error_t dhcpv6ParseStatusCodeOption(const uint8_t *options, size_t length)
  * @param[in] optionValue Option value
  * @param[in] optionLength Length of the option value
  * @return If the option was successfully added, a pointer to the freshly
-          created option is returned. Otherwise NULL pointer is returned
+ *   created option is returned. Otherwise NULL pointer is returned
  **/
 
 Dhcpv6Option *dhcpv6AddOption(void *message, size_t *messageLength,
@@ -167,7 +138,7 @@ Dhcpv6Option *dhcpv6AddOption(void *message, size_t *messageLength,
  * @param[in] optionValue Option value
  * @param[in] optionLength Length of the option value
  * @return If the option was successfully added, a pointer to the freshly
-          created option is returned. Otherwise NULL pointer is returned
+ *   created option is returned. Otherwise NULL pointer is returned
  **/
 
 Dhcpv6Option *dhcpv6AddSubOption(Dhcpv6Option *baseOption, size_t *messageLength,
@@ -247,6 +218,40 @@ Dhcpv6Option *dhcpv6GetOption(const uint8_t *options,
 
    //The specified option code was not found
    return NULL;
+}
+
+
+/**
+ * @brief Multiplication by a randomization factor
+ *
+ * Each of the computations of a new RT include a randomization factor
+ * RAND, which is a random number chosen with a uniform distribution
+ * between -0.1 and +0.1. The randomization factor is included to
+ * minimize synchronization of messages transmitted by DHCPv6 clients
+ *
+ * @param[in] value Input value
+ * @return Value resulting from the randomization process
+ **/
+
+int32_t dhcpv6Rand(int32_t value)
+{
+   //Use a randomization factor chosen with a uniform
+   //distribution between -0.1 and +0.1
+   return value * dhcpv6RandRange(-100, 100) / 1000;
+}
+
+
+/**
+ * @brief Get a random value in the specified range
+ * @param[in] min Lower bound
+ * @param[in] max Upper bound
+ * @return Random value in the specified range
+ **/
+
+int32_t dhcpv6RandRange(int32_t min, int32_t max)
+{
+   //Return a random value in the given range
+   return min + netGetRand() % (max - min + 1);
 }
 
 #endif

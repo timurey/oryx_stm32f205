@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -42,8 +42,6 @@
 #include "netbios/nbns_client.h"
 #include "debug.h"
 
-//Mutex preventing simultaneous access to the socket table
-OsMutex socketMutex;
 //Socket table
 Socket socketTable[SOCKET_MAX_COUNT];
 
@@ -58,14 +56,7 @@ error_t socketInit(void)
    uint_t i;
    uint_t j;
 
-   //Create a mutex to prevent simultaneous access to sockets
-   if(!osCreateMutex(&socketMutex))
-   {
-      //Failed to create mutex
-      return ERROR_OUT_OF_RESOURCES;
-   }
-
-   //Initialize socket related data
+   //Initialize socket descriptors
    memset(socketTable, 0, sizeof(socketTable));
 
    //Loop through socket descriptors
@@ -80,9 +71,6 @@ error_t socketInit(void)
          //Clean up side effects
          for(j = 0; j < i; j++)
             osDeleteEvent(&socketTable[j].event);
-
-         //Delete mutex
-         osDeleteMutex(&socketMutex);
 
          //Report an error
          return ERROR_OUT_OF_RESOURCES;
@@ -112,8 +100,8 @@ Socket *socketOpen(uint_t type, uint_t protocol)
    //Initialize socket handle
    socket = NULL;
 
-   //Enter critical section
-   osAcquireMutex(&socketMutex);
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
 
 #if (TCP_SUPPORT == ENABLED)
    //Connection-oriented socket?
@@ -183,7 +171,7 @@ Socket *socketOpen(uint_t type, uint_t protocol)
       }
 #endif
 
-      //Any entry available in the socket table?
+      //Check whether the current entry is free
       if(socket != NULL)
       {
          //Save socket descriptor
@@ -210,8 +198,8 @@ Socket *socketOpen(uint_t type, uint_t protocol)
       }
    }
 
-   //Leave critical section
-   osReleaseMutex(&socketMutex);
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //Return a handle to the freshly created socket
    return socket;
@@ -231,8 +219,12 @@ error_t socketSetTimeout(Socket *socket, systime_t timeout)
    if(!socket)
       return ERROR_INVALID_PARAMETER;
 
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
    //Record timeout value
    socket->timeout = timeout;
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //No error to report
    return NO_ERROR;
@@ -389,12 +381,14 @@ error_t socketConnect(Socket *socket, const IpAddr *remoteIpAddr, uint16_t remot
       if(ipIsUnspecifiedAddr(&socket->localIpAddr))
          return ERROR_NOT_CONFIGURED;
 
-      //Enter critical section
-      osAcquireMutex(&socketMutex);
+      //Get exclusive access
+      osAcquireMutex(&netMutex);
+
       //Establish TCP connection
       error = tcpConnect(socket);
-      //Leave critical section
-      osReleaseMutex(&socketMutex);
+
+      //Release exclusive access
+      osReleaseMutex(&netMutex);
    }
    else
 #endif
@@ -450,12 +444,14 @@ error_t socketListen(Socket *socket, uint_t backlog)
    if(socket->type != SOCKET_TYPE_STREAM)
       return ERROR_INVALID_SOCKET;
 
-   //Enter critical section
-   osAcquireMutex(&socketMutex);
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
+
    //Start listening for an incoming connection
    error = tcpListen(socket, backlog);
-   //Leave critical section
-   osReleaseMutex(&socketMutex);
+
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //Return status code
    return error;
@@ -544,12 +540,14 @@ error_t socketSendTo(Socket *socket, const IpAddr *destIpAddr, uint16_t destPort
    //Connection-oriented socket?
    if(socket->type == SOCKET_TYPE_STREAM)
    {
-      //Enter critical section
-      osAcquireMutex(&socketMutex);
+      //Get exclusive access
+      osAcquireMutex(&netMutex);
+
       //For connection-oriented sockets, target address is ignored
       error = tcpSend(socket, data, length, written, flags);
-      //Leave critical section
-      osReleaseMutex(&socketMutex);
+
+      //Release exclusive access
+      osReleaseMutex(&netMutex);
    }
    else
 #endif
@@ -648,8 +646,8 @@ error_t socketReceiveEx(Socket *socket, IpAddr *srcIpAddr, uint16_t *srcPort,
    if(!socket)
       return ERROR_INVALID_PARAMETER;
 
-   //Enter critical section
-   osAcquireMutex(&socketMutex);
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
 
 #if (TCP_SUPPORT == ENABLED)
    //Connection-oriented socket?
@@ -701,8 +699,8 @@ error_t socketReceiveEx(Socket *socket, IpAddr *srcIpAddr, uint16_t *srcPort,
       error = ERROR_INVALID_SOCKET;
    }
 
-   //Leave critical section
-   osReleaseMutex(&socketMutex);
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
    //Return status code
    return error;
 }
@@ -788,12 +786,14 @@ error_t socketShutdown(Socket *socket, uint_t how)
    if((how != SOCKET_SD_SEND) && (how != SOCKET_SD_RECEIVE) && (how != SOCKET_SD_BOTH))
       return ERROR_INVALID_PARAMETER;
 
-   //Enter critical section
-   osAcquireMutex(&socketMutex);
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
+
    //Graceful shutdown
    error = tcpShutdown(socket, how);
-   //Leave critical section
-   osReleaseMutex(&socketMutex);
+
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //Return status code
    return error;
@@ -813,8 +813,8 @@ void socketClose(Socket *socket)
    //Make sure the socket handle is valid
    if(!socket) return;
 
-   //Enter critical section
-   osAcquireMutex(&socketMutex);
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
 
 #if (TCP_SUPPORT == ENABLED)
    //Connection-oriented socket?
@@ -839,7 +839,7 @@ void socketClose(Socket *socket)
          //Keep track of the next item in the queue
          SocketQueueItem *nextQueueItem = queueItem->next;
          //Free previously allocated memory
-         memPoolFree(queueItem);
+         memPoolFree(queueItem->buffer);
          //Point to the next item
          queueItem = nextQueueItem;
       }
@@ -849,8 +849,8 @@ void socketClose(Socket *socket)
    }
 #endif
 
-   //Leave critical section
-   osReleaseMutex(&socketMutex);
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 }
 
 
@@ -952,8 +952,8 @@ error_t socketRegisterEvents(Socket *socket, OsEvent *event, uint_t eventMask)
    if(!socket)
       return ERROR_INVALID_PARAMETER;
 
-   //Enter critical section
-   osAcquireMutex(&socketMutex);
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
 
    //An user event may have been previously registered...
    if(socket->userEvent != NULL)
@@ -987,8 +987,8 @@ error_t socketRegisterEvents(Socket *socket, OsEvent *event, uint_t eventMask)
    }
 #endif
 
-   //Leave critical section
-   osReleaseMutex(&socketMutex);
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
    //Successful processing
    return NO_ERROR;
 }
@@ -1006,14 +1006,14 @@ error_t socketUnregisterEvents(Socket *socket)
    if(!socket)
       return ERROR_INVALID_PARAMETER;
 
-   //Enter critical section
-   osAcquireMutex(&socketMutex);
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
 
    //Unsuscribe socket events
    socket->userEvent = NULL;
 
-   //Leave critical section
-   osReleaseMutex(&socketMutex);
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
    //Successful processing
    return NO_ERROR;
 }
@@ -1037,54 +1037,16 @@ error_t socketGetEvents(Socket *socket, uint_t *eventFlags)
       return ERROR_INVALID_PARAMETER;
    }
 
-   //Enter critical section
-   osAcquireMutex(&socketMutex);
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
 
    //Read event flags for the specified socket
    *eventFlags = socket->eventFlags;
 
-   //Leave critical section
-   osReleaseMutex(&socketMutex);
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
    //Successful processing
    return NO_ERROR;
-}
-
-
-/**
- * @brief Report an error condition
- * @param[in] socket Handle that identifies a socket
- * @param[in] error Error code
- * @return The specified error code is returned
- **/
-
-error_t socketError(Socket *socket, error_t error)
-{
-   //Make sure the socket handle is valid
-   if(socket)
-   {
-      //Save the error code
-      socket->lastError = error;
-   }
-
-   //Return status code
-   return error;
-}
-
-
-/**
- * @brief Get last error code
- * @param[in] socket Handle that identifies a socket
- * @return Last error code
- **/
-
-error_t socketGetLastError(Socket *socket)
-{
-   //Make sure the socket handle is valid
-   if(!socket)
-      return ERROR_INVALID_PARAMETER;
-
-   //Return the last known error code
-   return socket->lastError;
 }
 
 
@@ -1194,7 +1156,7 @@ error_t getHostByName(NetInterface *interface,
       if(protocol == HOST_NAME_RESOLVER_MDNS)
       {
          //Perform host name resolution
-         error = mdnsResolve(interface, name, type, ipAddr);
+         error = mdnsClientResolve(interface, name, type, ipAddr);
       }
       else
 #endif

@@ -31,7 +31,7 @@
  * with the latter to obtain configuration parameters. Refer to RFC 3315
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -40,21 +40,28 @@
 //Dependencies
 #include <stdlib.h>
 #include "core/net.h"
+#include "ipv6/ipv6.h"
+#include "ipv6/ipv6_misc.h"
+#include "ipv6/ndp.h"
 #include "dhcpv6/dhcpv6_client.h"
 #include "dhcpv6/dhcpv6_common.h"
 #include "dhcpv6/dhcpv6_debug.h"
-#include "ipv6/slaac.h"
+#include "dns/dns_common.h"
 #include "date_time.h"
 #include "debug.h"
 
 //Check TCP/IP stack configuration
-#if (IPV6_SUPPORT == ENABLED)
+#if (IPV6_SUPPORT == ENABLED && DHCPV6_CLIENT_SUPPORT == ENABLED)
+
+//Tick counter to handle periodic operations
+systime_t dhcpv6ClientTickCounter;
 
 //Requested DHCPv6 options
 static const uint16_t dhcpv6OptionList[] =
 {
    HTONS(DHCPV6_OPTION_DNS_SERVERS),
-   HTONS(DHCPV6_OPTION_DOMAIN_LIST)
+   HTONS(DHCPV6_OPTION_DOMAIN_LIST),
+   HTONS(DHCPV6_OPTION_FQDN)
 };
 
 
@@ -66,9 +73,20 @@ static const uint16_t dhcpv6OptionList[] =
 void dhcpv6ClientGetDefaultSettings(Dhcpv6ClientSettings *settings)
 {
    //Use default interface
-   settings->interface = NULL;
-   //No rapid commit
+   settings->interface = netGetDefaultInterface();
+
+   //Support for quick configuration using rapid commit
    settings->rapidCommit = FALSE;
+   //Use the DNS servers provided by the DHCPv6 server
+   settings->manualDnsConfig = FALSE;
+   //DHCPv6 configuration timeout
+   settings->timeout = 0;
+   //DHCPv6 configuration timeout event
+   settings->timeoutEvent = NULL;
+   //Link state change event
+   settings->linkChangeEvent = NULL;
+   //FSM state change event
+   settings->stateChangeEvent = NULL;
 }
 
 
@@ -82,96 +100,53 @@ void dhcpv6ClientGetDefaultSettings(Dhcpv6ClientSettings *settings)
 error_t dhcpv6ClientInit(Dhcpv6ClientCtx *context, const Dhcpv6ClientSettings *settings)
 {
    error_t error;
-   Dhcpv6DuidLl *duid;
-   OsTask *task;
+   NetInterface *interface;
 
    //Debug message
    TRACE_INFO("Initializing DHCPv6 client...\r\n");
 
    //Ensure the parameters are valid
-   if(!context || !settings)
+   if(context == NULL || settings == NULL)
       return ERROR_INVALID_PARAMETER;
+
    //A valid pointer to the interface being configured is required
-   if(!settings->interface)
+   if(settings->interface == NULL)
       return ERROR_INVALID_PARAMETER;
+
+   //Point to the underlying network interface
+   interface = settings->interface;
 
    //Clear the DHCPv6 client context
    memset(context, 0, sizeof(Dhcpv6ClientCtx));
+   //Save user settings
+   context->settings = *settings;
 
-   //Save the network interface to configure
-   context->interface = settings->interface;
-   //Check whether rapid commit is allowed
-   context->rapidCommit = settings->rapidCommit;
+   //Generate client's DUID
+   error = dhcpv6ClientGenerateDuid(context);
+   //any error to report?
+   if(error) return error;
 
-   //Point to the client DUID
-   duid = (Dhcpv6DuidLl *) context->clientId;
-   //Generate a DUID-LL
-   duid->type = HTONS(DHCPV6_DUID_LL);
-   duid->hardwareType = HTONS(DHCPV6_HARDWARE_TYPE_ETH);
-   duid->linkLayerAddr = context->interface->macAddr;
-   //Length of the newly generated DUID
-   context->clientIdLength = sizeof(Dhcpv6DuidLl);
+   //Generate client's fully qualified domain name
+   error = dhcpv6ClientGenerateFqdn(context);
+   //any error to report?
+   if(error) return error;
 
-   //Open a UDP socket
-   context->socket = socketOpen(SOCKET_TYPE_DGRAM, SOCKET_IP_PROTO_UDP);
-   //Failed to open socket?
-   if(!context->socket)
-      return ERROR_OPEN_FAILED;
+   //Callback function to be called when a DHCPv6 message is received
+   error = udpAttachRxCallback(interface, DHCPV6_CLIENT_PORT,
+      dhcpv6ClientProcessMessage, context);
+   //Failed to register callback function?
+   if(error) return error;
 
-   //Start of exception handling block
-   do
-   {
-      //Explicitly associate the socket with the relevant interface
-      error = socketBindToInterface(context->socket, context->interface);
-      //Unable to bind the socket to the desired interface?
-      if(error) break;
+   //DHCPv6 client is currently suspended
+   context->running = FALSE;
+   //Initialize state machine
+   context->state = DHCPV6_STATE_INIT;
 
-      //The client listens for DHCPv6 messages on port 546
-      error = socketBind(context->socket, &IP_ADDR_ANY, DHCPV6_CLIENT_PORT);
-      //Unable to bind the socket to the desired port?
-      if(error) break;
+   //Attach the DHCPv6 client context to the network interface
+   interface->dhcpv6ClientContext = context;
 
-      //Only accept datagrams with source port number 547
-      error = socketConnect(context->socket, &IP_ADDR_ANY, DHCPV6_SERVER_PORT);
-      //Any error to report?
-      if(error) break;
-
-      //The socket operates in non-blocking mode
-      error = socketSetTimeout(context->socket, 0);
-      //Any error to report?
-      if(error) break;
-
-      //Initialize event object
-      if(!osCreateEvent(&context->event))
-      {
-         //Failed to create event object
-         error = ERROR_OUT_OF_RESOURCES;
-         //Stop processing
-         break;
-      }
-
-      //Start the DHCPv6 client service
-      task = osCreateTask("DHCPv6 Client", dhcpv6ClientTask,
-         context, DHCPV6_CLIENT_STACK_SIZE, DHCPV6_CLIENT_PRIORITY);
-
-      //Unable to create the task?
-      if(task == OS_INVALID_HANDLE)
-         error = ERROR_OUT_OF_RESOURCES;
-
-      //End of exception handling block
-   } while(0);
-
-   //Any error to report?
-   if(error)
-   {
-      //Close underlying socket
-      socketClose(context->socket);
-      //Delete event object
-      osDeleteEvent(&context->event);
-   }
-
-   //Return status code
-   return error;
+   //Successful initialization
+   return NO_ERROR;
 }
 
 
@@ -183,8 +158,47 @@ error_t dhcpv6ClientInit(Dhcpv6ClientCtx *context, const Dhcpv6ClientSettings *s
 
 error_t dhcpv6ClientStart(Dhcpv6ClientCtx *context)
 {
+   NetInterface *interface;
+
+   //Check parameter
+   if(context == NULL)
+      return ERROR_INVALID_PARAMETER;
+
    //Debug message
    TRACE_INFO("Starting DHCPv6 client...\r\n");
+
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
+
+   //Point to the underlying network interface
+   interface = context->settings.interface;
+
+   //Flush the list of IPv6 addresses from the client's IA
+   dhcpv6ClientFlushAddrList(context);
+
+   //Automatic DNS server configuration?
+   if(!context->settings.manualDnsConfig)
+   {
+      //Clear the list of DNS servers
+      ipv6FlushDnsServerList(interface);
+   }
+
+   //Check if the link is up?
+   if(interface->linkState)
+   {
+      //A link-local address is formed by combining the well-known
+      //link-local prefix fe80::/10 with the interface identifier
+      dhcpv6ClientGenerateLinkLocalAddr(context);
+   }
+
+   //Start DHCPv6 client
+   context->running = TRUE;
+   //Initialize state machine
+   context->state = DHCPV6_STATE_INIT;
+
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
+
    //Successful processing
    return NO_ERROR;
 }
@@ -198,79 +212,332 @@ error_t dhcpv6ClientStart(Dhcpv6ClientCtx *context)
 
 error_t dhcpv6ClientStop(Dhcpv6ClientCtx *context)
 {
+   //Check parameter
+   if(context == NULL)
+      return ERROR_INVALID_PARAMETER;
+
    //Debug message
    TRACE_INFO("Stopping DHCPv6 client...\r\n");
-   //Not implemented
-   return ERROR_NOT_IMPLEMENTED;
+
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
+
+   //Stop DHCPv6 client
+   context->running = FALSE;
+   //Reinitialize state machine
+   context->state = DHCPV6_STATE_INIT;
+
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
+
+   //Successful processing
+   return NO_ERROR;
 }
 
 
 /**
- * @brief DHCPv6 client task
- * @param[in] param Pointer to the DHCPv6 client context
+ * @brief Release DHCPv6 lease
+ * @param[in] context Pointer to the DHCPv6 client context
+ * @return Error code
  **/
 
-void dhcpv6ClientTask(void *param)
+error_t dhcpv6ClientRelease(Dhcpv6ClientCtx *context)
 {
-   //Point to the DHCPv6 client context
-   Dhcpv6ClientCtx *context = (Dhcpv6ClientCtx *) param;
+   uint_t i;
+   NetInterface *interface;
+   Dhcpv6ClientAddrEntry *entry;
 
-   //At this point the global address is not yet valid
-   context->interface->ipv6Config.globalAddrState = IPV6_ADDR_STATE_INVALID;
-   context->interface->ipv6Config.globalAddr = IPV6_UNSPECIFIED_ADDR;
-   //Initialize DHCPv6 client state
-   context->state = DHCPV6_STATE_SOLICIT;
+   //Check parameter
+   if(context == NULL)
+      return ERROR_INVALID_PARAMETER;
+
+   //Debug message
+   TRACE_INFO("Releasing DHCPv6 lease...\r\n");
+
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
+
+   //Point to the underlying network interface
+   interface = context->settings.interface;
+
+   //Check whether the DHCPv6 client is running
+   if(context->running)
+   {
+      //BOUND state?
+      if(context->state == DHCPV6_STATE_BOUND)
+      {
+         //Loop through the IPv6 addresses recorded by the DHCPv6 client
+         for(i = 0; i < DHCPV6_CLIENT_ADDR_LIST_SIZE; i++)
+         {
+            //Point to the current entry
+            entry = &context->ia.addrList[i];
+
+            //Valid IPv6 address?
+            if(entry->validLifetime > 0)
+            {
+               //The client must stop using the addresses being released as soon
+               //as the client begins the Release message exchange process
+               ipv6RemoveAddr(interface, &entry->addr);
+            }
+         }
+
+         //Switch to the RELEASE state
+         dhcpv6ClientChangeState(context, DHCPV6_STATE_RELEASE, 0);
+      }
+      else
+      {
+         //Stop DHCPv6 client
+         context->running = FALSE;
+         //Reinitialize state machine
+         context->state = DHCPV6_STATE_INIT;
+      }
+   }
+
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
+
+   //Successful processing
+   return NO_ERROR;
+}
+
+
+/**
+ * @brief Retrieve current state
+ * @param[in] context Pointer to the DHCPv6 client context
+ * @return Current DHCPv6 client state
+ **/
+
+Dhcpv6State dhcpv6ClientGetState(Dhcpv6ClientCtx *context)
+{
+   Dhcpv6State state;
+
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
+   //Get current state
+   state = context->state;
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
+
+   //Return current state
+   return state;
+}
+
+
+/**
+ * @brief DHCPv6 client timer handler
+ *
+ * This routine must be periodically called by the TCP/IP stack to
+ * manage DHCPv6 client operation
+ *
+ * @param[in] context Pointer to the DHCPv6 client context
+ **/
+
+
+void dhcpv6ClientTick(Dhcpv6ClientCtx *context)
+{
+   //Make sure the DHCPv6 client has been properly instantiated
+   if(context == NULL)
+      return;
 
    //DHCPv6 client finite state machine
-   while(1)
+   switch(context->state)
    {
-      //Check current state
-      switch(context->state)
+   //Process INIT state
+   case DHCPV6_STATE_INIT:
+      //This is the initialization state, where a client begins the process of
+      //acquiring a lease. It also returns here when a lease ends, or when a
+      //lease negotiation fails
+      dhcpv6ClientStateInit(context);
+      break;
+   //Process SOLICIT state
+   case DHCPV6_STATE_SOLICIT:
+      //The client sends a Solicit message to locate servers
+      dhcpv6ClientStateSolicit(context);
+      break;
+   //Process REQUEST state
+   case DHCPV6_STATE_REQUEST:
+      //The client sends a Request message to request configuration
+      //parameters, including IP addresses, from a specific server
+      dhcpv6ClientStateRequest(context);
+      break;
+   //Process INIT-CONFIRM state
+   case DHCPV6_STATE_INIT_CONFIRM:
+      //When a client that already has a valid lease starts up after a
+      //power-down or reboot, it starts here instead of the INIT state
+      dhcpv6ClientStateInitConfirm(context);
+      break;
+   //Process CONFIRM state
+   case DHCPV6_STATE_CONFIRM:
+      //The client sends a Confirm message to any available server
+      //to determine whether the addresses it was assigned are still
+      //appropriate to the link to which the client is connected
+      dhcpv6ClientStateConfirm(context);
+      break;
+   //Process DAD state
+   case DHCPV6_STATE_DAD:
+      //The client should perform duplicate address detection on each
+      //of the addresses in any IAs it receives in the Reply message
+      //before using that address for traffic
+      dhcpv6ClientStateDad(context);
+      break;
+   //Process BOUND state
+   case DHCPV6_STATE_BOUND:
+      //The client has a valid lease and is in its normal operating state
+      dhcpv6ClientStateBound(context);
+      break;
+   //Process RENEW state
+   case DHCPV6_STATE_RENEW:
+      //The client sends a Renew message to the server that originally
+      //provided the client's addresses and configuration parameters to
+      //extend the lifetimes on the addresses assigned to the client
+      //and to update other configuration parameters
+      dhcpv6ClientStateRenew(context);
+      break;
+   //Process REBIND state
+   case DHCPV6_STATE_REBIND:
+      //The client sends a Rebind message to any available server to extend
+      //the lifetimes on the addresses assigned to the client and to update
+      //other configuration parameters. This message is sent after a client
+      //receives no response to a Renew message
+      dhcpv6ClientStateRebind(context);
+      break;
+   //Process RELEASE state
+   case DHCPV6_STATE_RELEASE:
+      //To release one or more addresses, a client sends a Release message
+      //to the server
+      dhcpv6ClientStateRelease(context);
+      break;
+   //Process DECLINE state
+   case DHCPV6_STATE_DECLINE:
+      //If a client detects that one or more addresses assigned to it by a
+      //server are already in use by another node, the client sends a Decline
+      //message to the server to inform it that the address is suspect
+      dhcpv6ClientStateDecline(context);
+      break;
+   //Invalid state...
+   default:
+      //Switch to the default state
+      context->state = DHCPV6_STATE_INIT;
+      break;
+   }
+}
+
+
+/**
+ * @brief Callback function for link change event
+ * @param[in] context Pointer to the DHCPv6 client context
+ **/
+
+void dhcpv6ClientLinkChangeEvent(Dhcpv6ClientCtx *context)
+{
+   NetInterface *interface;
+
+   //Make sure the DHCPv6 client has been properly instantiated
+   if(context == NULL)
+      return;
+
+   //Point to the underlying network interface
+   interface = context->settings.interface;
+
+   //Check whether the DHCPv6 client is running
+   if(context->running)
+   {
+      //Automatic DNS server configuration?
+      if(!context->settings.manualDnsConfig)
       {
-      //Process SOLICIT state
-      case DHCPV6_STATE_SOLICIT:
-         //The client sends a Solicit message to locate servers
-         dhcpv6StateSolicit(context);
-         break;
-      //Process REQUEST state
-      case DHCPV6_STATE_REQUEST:
-         //The client sends a Request message to request configuration
-         //parameters, including IP addresses, from a specific server
-         dhcpv6StateRequest(context);
-         break;
-      //Process CONFIRM state
-      case DHCPV6_STATE_CONFIRM:
-         //The client sends a Confirm message to any available server
-         //to determine whether the addresses it was assigned are still
-         //appropriate to the link to which the client is connected
-         dhcpv6StateConfirm(context);
-         break;
-      //Process BOUND state
-      case DHCPV6_STATE_BOUND:
-         //The client has a valid lease and is in its normal operating state
-         dhcpv6StateBound(context);
-         break;
-      //Process RENEW state
-      case DHCPV6_STATE_RENEW:
-         //The client sends a Renew message to the server that originally
-         //provided the client's addresses and configuration parameters to
-         //extend the lifetimes on the addresses assigned to the client
-         //and to update other configuration parameters
-         dhcpv6StateRenew(context);
-         break;
-      //Process REBIND state
-      case DHCPV6_STATE_REBIND:
-         //The client sends a Rebind message to any available server to extend
-         //the lifetimes on the addresses assigned to the client and to update
-         //other configuration parameters. This message is sent after a client
-         //receives no response to a Renew message
-         dhcpv6StateRebind(context);
-         break;
-      //Invalid state...
-      default:
-         //Switch to the default state
-         context->state = DHCPV6_STATE_SOLICIT;
-         break;
+         //Clear the list of DNS servers
+         ipv6FlushDnsServerList(interface);
+      }
+
+      //Link-up event?
+      if(interface->linkState)
+      {
+         //A link-local address is formed by combining the well-known
+         //link-local prefix fe80::/10 with the interface identifier
+         dhcpv6ClientGenerateLinkLocalAddr(context);
+      }
+   }
+
+   //Check the state of the DHCPv6 client
+   switch(context->state)
+   {
+   case DHCPV6_STATE_INIT_CONFIRM:
+   case DHCPV6_STATE_CONFIRM :
+   case DHCPV6_STATE_DAD:
+   case DHCPV6_STATE_BOUND:
+   case DHCPV6_STATE_RENEW:
+   case DHCPV6_STATE_REBIND:
+      //The client already has a valid lease
+      context->state = DHCPV6_STATE_INIT_CONFIRM;
+      break;
+   case DHCPV6_STATE_RELEASE:
+      //Stop DHCPv6 client
+      context->running = FALSE;
+      //Reinitialize state machine
+      context->state = DHCPV6_STATE_INIT;
+      break;
+   default:
+      //Switch to the INIT state
+      context->state = DHCPV6_STATE_INIT;
+      break;
+   }
+
+   //Any registered callback?
+   if(context->settings.linkChangeEvent != NULL)
+   {
+      //Release exclusive access
+      osReleaseMutex(&netMutex);
+      //Invoke user callback function
+      context->settings.linkChangeEvent(context, interface, interface->linkState);
+      //Get exclusive access
+      osAcquireMutex(&netMutex);
+   }
+}
+
+
+/**
+ * @brief INIT state
+ *
+ * This is the initialization state, where a client begins the process of
+ * acquiring a lease. It also returns here when a lease ends, or when a
+ * lease negotiation fails
+ *
+ * @param[in] context Pointer to the DHCPv6 client context
+ **/
+
+void dhcpv6ClientStateInit(Dhcpv6ClientCtx *context)
+{
+   systime_t delay;
+   NetInterface *interface;
+
+   //Point to the underlying network interface
+   interface = context->settings.interface;
+
+   //Check whether the DHCPv6 client is running
+   if(context->running)
+   {
+      //Wait for the link to be up before starting DHCPv6 configuration
+      if(interface->linkState)
+      {
+         //Make sure that a valid link-local address has been assigned to the interface
+         if(ipv6GetLinkLocalAddrState(interface) == IPV6_ADDR_STATE_PREFERRED)
+         {
+            //Flush the list of IPv6 addresses from the client's IA
+            dhcpv6ClientFlushAddrList(context);
+
+            //The first Solicit message from the client on the interface must be
+            //delayed by a random amount of time between 0 and SOL_MAX_DELAY
+            delay = dhcpv6RandRange(0, DHCPV6_CLIENT_SOL_MAX_DELAY);
+
+            //Record the time at which the client started
+            //the address acquisition process
+            context->configStartTime = osGetSystemTime();
+            //Clear flag
+            context->timeoutEventDone = FALSE;
+
+            //Switch to the SOLICIT state
+            dhcpv6ClientChangeState(context, DHCPV6_STATE_SOLICIT, delay);
+         }
       }
    }
 }
@@ -284,98 +551,74 @@ void dhcpv6ClientTask(void *param)
  * @param[in] context Pointer to the DHCPv6 client context
  **/
 
-void dhcpv6StateSolicit(Dhcpv6ClientCtx *context)
+void dhcpv6ClientStateSolicit(Dhcpv6ClientCtx *context)
 {
-   error_t error;
-   SocketEventDesc eventDesc;
+   systime_t time;
 
-   //At this point the global address is not yet valid
-   context->interface->ipv6Config.globalAddrState = IPV6_ADDR_STATE_INVALID;
-   context->interface->ipv6Config.globalAddr = IPV6_UNSPECIFIED_ADDR;
+   //Get current time
+   time = osGetSystemTime();
 
-   //Reset server preference value
-   context->serverPreference = -1;
-   //The rapid commit procedure is not yet completed
-   context->rapidCommitDone = FALSE;
-
-   //Specify the events the application is interested in
-   eventDesc.socket = context->socket;
-   eventDesc.eventMask = SOCKET_EVENT_LINK_UP;
-
-   //Wait for the link to be up before starting DHCPv6 configuration
-   error = socketPoll(&eventDesc, 1, &context->event, INFINITE_DELAY);
-
-   //Any error to report?
-   if(error)
+   //Check current time
+   if(timeCompare(time, context->timestamp + context->timeout) >= 0)
    {
-      //Restart configuration procedure
-      context->state = DHCPV6_STATE_SOLICIT;
-      //Exit immediately
-      return;
-   }
-
-   //Debug message
-   TRACE_INFO("\r\n%s: DHCPv6 client SOLICIT state\r\n",
-      formatSystemTime(osGetSystemTime(), NULL));
-
-   //The first Solicit message from the client on the interface must be
-   //delayed by a random amount of time between 0 and SOL_MAX_DELAY
-   osDelayTask(dhcpv6RandRange(0, DHCPV6_SOL_MAX_DELAY));
-
-   //Adjust retransmission parameters
-   context->irt = DHCPV6_SOL_TIMEOUT;
-   context->mrt = DHCPV6_SOL_MAX_RT;
-   context->mrc = 0;
-   context->mrd = 0;
-
-   //Initiate a Solicit/Advertise message exchange
-   error = dhcpv6MessageExchange(context, dhcpv6FormatSolicit, dhcpv6ParseAdvertise);
-
-   //Message exchange failed?
-   if(error)
-   {
-      //Restart configuration procedure
-      context->state = DHCPV6_STATE_SOLICIT;
-   }
-   //Rapid commit has not been used?
-   else if(!context->rapidCommitDone)
-   {
-      //Continue configuration procedure
-      context->state = DHCPV6_STATE_REQUEST;
-   }
-   //Rapid commit procedure is complete?
-   else
-   {
-      //Address uniqueness on the link is being verified...
-      context->interface->ipv6Config.globalAddrState = IPV6_ADDR_STATE_TENTATIVE;
-{
-Ipv6Addr solicitedNodeAddr;
-ipv6ComputeSolicitedNodeAddr(&context->interface->ipv6Config.globalAddr, &solicitedNodeAddr);
-ipv6JoinMulticastGroup(context->interface, &solicitedNodeAddr);
-}
-      //The client should perform duplicate address detection on the address it
-      //receives in the Reply message before using that address for traffic
-      //error = slaacDetectDuplicateAddr(&context->interface->ipv6Config.globalAddr);
-
-      //Check if the address is found to be in use on the link
-      if(error)
+      //Check retransmission counter
+      if(context->retransmitCount == 0)
       {
-         //The global address cannot be used on the link
-         context->interface->ipv6Config.globalAddrState = IPV6_ADDR_STATE_INVALID;
-         context->interface->ipv6Config.globalAddr = IPV6_UNSPECIFIED_ADDR;
-         //Switch to the DECLINE state
-         context->state = DHCPV6_STATE_DECLINE;
+         //Reset server preference value
+         context->serverPreference = -1;
+         //Generate a 24-bit transaction ID
+         context->transactionId = netGetRand() & 0x00FFFFFF;
+
+         //Send a Solicit message
+         dhcpv6ClientSendMessage(context, DHCPV6_MSG_TYPE_SOLICIT);
+
+         //Save the time at which the message was sent
+         context->exchangeStartTime = time;
+         context->timestamp = time;
+
+         //If the client is waiting for an Advertise message, the first RT
+         //must be selected to be strictly greater than IRT
+         context->timeout = DHCPV6_CLIENT_SOL_TIMEOUT +
+            abs(dhcpv6Rand(DHCPV6_CLIENT_SOL_TIMEOUT));
+
+         //Increment retransmission counter
+         context->retransmitCount++;
       }
       else
       {
-         //The use of the global address is now unrestricted
-         context->interface->ipv6Config.globalAddrState = IPV6_ADDR_STATE_PREFERRED;
-         //Dump current DHCPv6 configuration for debugging purpose
-         dhcpv6DumpConfig(context);
-         //Enter the BOUND state
-         context->state = DHCPV6_STATE_BOUND;
+         //Check whether a valid Advertise message has been received
+         if(context->serverPreference >= 0)
+         {
+            //Continue configuration procedure
+            dhcpv6ClientChangeState(context, DHCPV6_STATE_REQUEST, 0);
+         }
+         else
+         {
+            //Send a Solicit message
+            dhcpv6ClientSendMessage(context, DHCPV6_MSG_TYPE_SOLICIT);
+
+            //Save the time at which the message was sent
+            context->timestamp = time;
+
+            //The RT is doubled for each subsequent retransmission
+            context->timeout = context->timeout * 2 + dhcpv6Rand(context->timeout);
+
+            //MRT specifies an upper bound on the value of RT
+            if(context->timeout > DHCPV6_CLIENT_SOL_MAX_RT)
+            {
+               //Compute retransmission timeout
+               context->timeout = DHCPV6_CLIENT_SOL_MAX_RT +
+                  dhcpv6Rand(DHCPV6_CLIENT_SOL_MAX_RT);
+            }
+
+            //Increment retransmission counter
+            context->retransmitCount++;
+         }
       }
    }
+
+   //Manage DHCPv6 configuration timeout
+   dhcpv6ClientCheckTimeout(context);
 }
 
 
@@ -390,63 +633,111 @@ ipv6JoinMulticastGroup(context->interface, &solicitedNodeAddr);
  * @param[in] context Pointer to the DHCPv6 client context
  **/
 
-void dhcpv6StateRequest(Dhcpv6ClientCtx *context)
+void dhcpv6ClientStateRequest(Dhcpv6ClientCtx *context)
 {
-   error_t error;
+   systime_t time;
 
-   //Debug message
-   TRACE_INFO("\r\n%s: DHCPv6 client REQUEST state\r\n",
-      formatSystemTime(osGetSystemTime(), NULL));
+   //Get current time
+   time = osGetSystemTime();
 
-   //Adjust retransmission parameters
-   context->irt = DHCPV6_REQ_TIMEOUT;
-   context->mrt = DHCPV6_REQ_MAX_RT;
-   context->mrc = DHCPV6_REQ_MAX_RC;
-   context->mrd = 0;
-
-   //Perform a Request/Reply message exchange
-   error = dhcpv6MessageExchange(context, dhcpv6FormatRequest, dhcpv6ParseReply);
-
-   //Check whether an error occurred during the message exchange
-   if(error || !context->validLifetime)
+   //Check current time
+   if(timeCompare(time, context->timestamp + context->timeout) >= 0)
    {
-      //No global address has been assigned yet
-      context->interface->ipv6Config.globalAddrState = IPV6_ADDR_STATE_INVALID;
-      context->interface->ipv6Config.globalAddr = IPV6_UNSPECIFIED_ADDR;
-      //Back to SOLICIT state
-      context->state = DHCPV6_STATE_SOLICIT;
-      //Exit immediately
-      return;
+      //Check retransmission counter
+      if(context->retransmitCount == 0)
+      {
+         //Generate a 24-bit transaction ID
+         context->transactionId = netGetRand() & 0x00FFFFFF;
+
+         //Send a Request message
+         dhcpv6ClientSendMessage(context, DHCPV6_MSG_TYPE_REQUEST);
+
+         //Save the time at which the message was sent
+         context->exchangeStartTime = time;
+         context->timestamp = time;
+
+         //Initial retransmission timeout
+         context->timeout = DHCPV6_CLIENT_REQ_TIMEOUT +
+            dhcpv6Rand(DHCPV6_CLIENT_REQ_TIMEOUT);
+
+         //Increment retransmission counter
+         context->retransmitCount++;
+      }
+      else if(context->retransmitCount < DHCPV6_CLIENT_REQ_MAX_RC)
+      {
+         //Send a Request message
+         dhcpv6ClientSendMessage(context, DHCPV6_MSG_TYPE_REQUEST);
+
+         //Save the time at which the message was sent
+         context->timestamp = time;
+
+         //The RT is doubled for each subsequent retransmission
+         context->timeout = context->timeout * 2 + dhcpv6Rand(context->timeout);
+
+         //MRT specifies an upper bound on the value of RT
+         if(context->timeout > DHCPV6_CLIENT_REQ_MAX_RT)
+         {
+            //Compute retransmission timeout
+            context->timeout = DHCPV6_CLIENT_REQ_MAX_RT +
+               dhcpv6Rand(DHCPV6_CLIENT_REQ_MAX_RT);
+         }
+
+         //Increment retransmission counter
+         context->retransmitCount++;
+      }
+      else
+      {
+         //If the client does not receive a response within a reasonable
+         //period of time, then it restarts the initialization procedure
+         dhcpv6ClientChangeState(context, DHCPV6_STATE_INIT, 0);
+      }
    }
 
-   //Address uniqueness on the link is being verified...
-   context->interface->ipv6Config.globalAddrState = IPV6_ADDR_STATE_TENTATIVE;
-{
-Ipv6Addr solicitedNodeAddr;
-ipv6ComputeSolicitedNodeAddr(&context->interface->ipv6Config.globalAddr, &solicitedNodeAddr);
-ipv6JoinMulticastGroup(context->interface, &solicitedNodeAddr);
+   //Manage DHCPv6 configuration timeout
+   dhcpv6ClientCheckTimeout(context);
 }
-   //The client should perform duplicate address detection on the address it
-   //receives in the Reply message before using that address for traffic
-   //error = slaacDetectDuplicateAddr(&context->interface->ipv6Config.globalAddr);
 
-   //Check if the address is found to be in use on the link
-   if(error)
+
+/**
+ * @brief INIT-CONFIRM state
+ *
+ * When a client that already has a valid lease starts up after a
+ * power-down or reboot, it starts here instead of the INIT state
+ *
+ * @param[in] context Pointer to the DHCPv6 client context
+ **/
+
+void dhcpv6ClientStateInitConfirm(Dhcpv6ClientCtx *context)
+{
+   systime_t delay;
+   NetInterface *interface;
+
+   //Point to the underlying network interface
+   interface = context->settings.interface;
+
+   //Check whether the DHCPv6 client is running
+   if(context->running)
    {
-      //The global address cannot be used on the link
-      context->interface->ipv6Config.globalAddrState = IPV6_ADDR_STATE_INVALID;
-      context->interface->ipv6Config.globalAddr = IPV6_UNSPECIFIED_ADDR;
-      //Switch to the DECLINE state
-      context->state = DHCPV6_STATE_DECLINE;
-   }
-   else
-   {
-      //The use of the global address is now unrestricted
-      context->interface->ipv6Config.globalAddrState = IPV6_ADDR_STATE_PREFERRED;
-      //Dump current DHCPv6 configuration for debugging purpose
-      dhcpv6DumpConfig(context);
-      //Enter the BOUND state
-      context->state = DHCPV6_STATE_BOUND;
+      //Wait for the link to be up before starting DHCPv6 configuration
+      if(interface->linkState)
+      {
+         //Make sure that a valid link-local address has been assigned to the interface
+         if(ipv6GetLinkLocalAddrState(interface) == IPV6_ADDR_STATE_PREFERRED)
+         {
+            //The first Confirm message from the client on the interface must be
+            //delayed by a random amount of time between 0 and CNF_MAX_DELAY
+            delay = dhcpv6RandRange(0, DHCPV6_CLIENT_CNF_MAX_DELAY);
+
+            //Record the time at which the client started
+            //the address acquisition process
+            context->configStartTime = osGetSystemTime();
+            //Clear flag
+            context->timeoutEventDone = FALSE;
+
+            //Switch to the CONFIRM state
+            dhcpv6ClientChangeState(context, DHCPV6_STATE_CONFIRM, delay);
+         }
+      }
    }
 }
 
@@ -462,71 +753,134 @@ ipv6JoinMulticastGroup(context->interface, &solicitedNodeAddr);
  * @param[in] context Pointer to the DHCPv6 client context
  **/
 
-void dhcpv6StateConfirm(Dhcpv6ClientCtx *context)
+void dhcpv6ClientStateConfirm(Dhcpv6ClientCtx *context)
 {
-   error_t error;
-   SocketEventDesc eventDesc;
+   systime_t time;
 
-   //Specify the events the application is interested in
-   eventDesc.socket = context->socket;
-   eventDesc.eventMask = SOCKET_EVENT_LINK_UP;
+   //Get current time
+   time = osGetSystemTime();
 
-   //Wait for the link to be up before sending out the first Confirm message
-   error = socketPoll(&eventDesc, 1, &context->event, INFINITE_DELAY);
-
-   //Any error to report?
-   if(error)
+   //Check current time
+   if(timeCompare(time, context->timestamp + context->timeout) >= 0)
    {
-      //Restart configuration procedure
-      context->state = DHCPV6_STATE_CONFIRM;
-      //Exit immediately
-      return;
+      //Check retransmission counter
+      if(context->retransmitCount == 0)
+      {
+         //Generate a 24-bit transaction ID
+         context->transactionId = netGetRand() & 0x00FFFFFF;
+
+         //Send a Confirm message
+         dhcpv6ClientSendMessage(context, DHCPV6_MSG_TYPE_CONFIRM);
+
+         //Save the time at which the client sent the first message
+         context->exchangeStartTime = time;
+         context->timestamp = time;
+
+         //Initial retransmission timeout
+         context->timeout = DHCPV6_CLIENT_CNF_TIMEOUT +
+            dhcpv6Rand(DHCPV6_CLIENT_CNF_TIMEOUT);
+
+         //Increment retransmission counter
+         context->retransmitCount++;
+      }
+      else
+      {
+         //Send a Confirm message
+         dhcpv6ClientSendMessage(context, DHCPV6_MSG_TYPE_CONFIRM);
+
+         //Save the time at which the message was sent
+         context->timestamp = time;
+
+         //The RT is doubled for each subsequent retransmission
+         context->timeout = context->timeout * 2 + dhcpv6Rand(context->timeout);
+
+         //MRT specifies an upper bound on the value of RT
+         if(context->timeout > DHCPV6_CLIENT_CNF_MAX_RT)
+         {
+            //Compute retransmission timeout
+            context->timeout = DHCPV6_CLIENT_CNF_MAX_RT +
+               dhcpv6Rand(DHCPV6_CLIENT_CNF_MAX_RT);
+         }
+
+         //Increment retransmission counter
+         context->retransmitCount++;
+      }
    }
-
-   //Debug message
-   TRACE_INFO("\r\n%s: DHCPv6 client CONFIRM state\r\n",
-      formatSystemTime(osGetSystemTime(), NULL));
-
-   //The first Confirm message from the client on the interface must be
-   //delayed by a random amount of time between 0 and CNF_MAX_DELAY
-   osDelayTask(dhcpv6RandRange(0, DHCPV6_CNF_MAX_DELAY));
-
-   //Adjust retransmission parameters
-   context->irt = DHCPV6_CNF_TIMEOUT;
-   context->mrt = DHCPV6_CNF_MAX_RT;
-   context->mrc = 0;
-   context->mrd = DHCPV6_CNF_MAX_RD;
-
-   //Initiate a Confirm/Reply message exchange
-   error = dhcpv6MessageExchange(context, dhcpv6FormatConfirm, dhcpv6ParseReply);
-
-   //If the client receives no responses before the message transmission
-   //process terminates, the client should continue to use its IPv6 address,
-   //using the last known lifetimes for that address, and should continue
-   //to use any other previously obtained configuration parameters
-   if(error == NO_ERROR || error == ERROR_TIMEOUT)
-   {
-      //Dump current DHCPv6 configuration for debugging purpose
-      dhcpv6DumpConfig(context);
-      //Switch to the BOUND state
-      context->state = DHCPV6_STATE_BOUND;
-   }
-   //Link is down?
-   else if(error == ERROR_LINK_DOWN)
-   {
-      //Back to CONFIRM state
-      context->state = DHCPV6_STATE_CONFIRM;
-   }
-   //Any other error?
    else
    {
-      //The address is no longer appropriate for the link
-      //to which the client is connected
-      context->interface->ipv6Config.globalAddrState = IPV6_ADDR_STATE_INVALID;
-      context->interface->ipv6Config.globalAddr = IPV6_UNSPECIFIED_ADDR;
-      //Perform DHCPv6 server solicitation
-      context->state = DHCPV6_STATE_SOLICIT;
+      //Check retransmission counter
+      if(context->retransmitCount > 0)
+      {
+         //The message exchange fails once MRD seconds have elapsed since
+         //the client first transmitted the message
+         if(timeCompare(time, context->exchangeStartTime + DHCPV6_CLIENT_CNF_MAX_RD) >= 0)
+         {
+            //If the client receives no responses before the message transmission
+            //process terminates, the client should continue to use any IP
+            //addresses using the last known lifetimes for those addresses
+            dhcpv6ClientChangeState(context, DHCPV6_STATE_INIT, 0);
+         }
+      }
    }
+
+   //Manage DHCPv6 configuration timeout
+   dhcpv6ClientCheckTimeout(context);
+}
+
+
+/**
+ * @brief DAD state
+ *
+ * The client perform duplicate address detection on each
+ * of the addresses in any IAs it receives in the Reply message
+ * before using that address for traffic
+ *
+ * @param[in] context Pointer to the DHCPv6 client context
+ **/
+
+void dhcpv6ClientStateDad(Dhcpv6ClientCtx *context)
+{
+   uint_t i;
+   NetInterface *interface;
+   Ipv6AddrState state;
+   Dhcpv6ClientAddrEntry *entry;
+
+   //Point to the underlying network interface
+   interface = context->settings.interface;
+
+   //Loop through the IPv6 addresses recorded by the DHCPv6 client
+   for(i = 0; i < DHCPV6_CLIENT_ADDR_LIST_SIZE; i++)
+   {
+      //Point to the current entry
+      entry = &context->ia.addrList[i];
+
+      //Check the IPv6 address is a tentative address?
+      if(entry->validLifetime > 0)
+      {
+         //Get the state of the current IPv6 address
+         state = ipv6GetAddrState(interface, &entry->addr);
+
+         //Duplicate Address Detection in progress?
+         if(state == IPV6_ADDR_STATE_TENTATIVE)
+         {
+            //Exit immediately
+            return;
+         }
+         //Duplicate Address Detection failed?
+         else if(state == IPV6_ADDR_STATE_INVALID)
+         {
+            //Switch to the DECLINE state
+            dhcpv6ClientChangeState(context, DHCPV6_STATE_DECLINE, 0);
+            //Exit immediately
+            return;
+         }
+      }
+   }
+
+   //Dump current DHCPv6 configuration for debugging purpose
+   dhcpv6DumpConfig(context);
+   //Switch to the BOUND state
+   dhcpv6ClientChangeState(context, DHCPV6_STATE_BOUND, 0);
 }
 
 
@@ -538,70 +892,32 @@ void dhcpv6StateConfirm(Dhcpv6ClientCtx *context)
  * @param[in] context Pointer to the DHCPv6 client context
  **/
 
-void dhcpv6StateBound(Dhcpv6ClientCtx *context)
+void dhcpv6ClientStateBound(Dhcpv6ClientCtx *context)
 {
-   error_t error;
    systime_t t1;
    systime_t time;
-   SocketEventDesc eventDesc;
 
-   //Debug message
-   TRACE_INFO("\r\n%s: DHCPv6 client BOUND state\r\n",
-      formatSystemTime(osGetSystemTime(), NULL));
-
-   //Specify the events the application is interested in
-   eventDesc.socket = context->socket;
-   eventDesc.eventMask = SOCKET_EVENT_LINK_DOWN;
+   //Get current time
+   time = osGetSystemTime();
 
    //A client will never attempt to extend the lifetime of any
-   //address in an IA with T1 set to 0xFFFFFFFF
-   if(context->t1 == DHCPV6_INFINITE_TIME)
-   {
-      //Monitor link changes
-      error = socketPoll(&eventDesc, 1, &context->event, INFINITE_DELAY);
-
-      //Link is down?
-      if(!error)
-      {
-         //Back to CONFIRM state
-         context->state = DHCPV6_STATE_CONFIRM;
-      }
-      //Any failure to report?
-      else
-      {
-         //Stay in BOUND state
-         context->state = DHCPV6_STATE_BOUND;
-      }
-   }
-   else
+   //address in an IA with T1 set to 0xffffffff
+   if(context->ia.t1 != DHCPV6_INFINITE_TIME)
    {
       //Convert T1 to milliseconds
-      t1 = context->t1 * 1000;
-      //Compute the time elapsed since the lease was obtained
-      time = osGetSystemTime() - context->leaseStartTime;
-      //Remaining time until T1 expires
-      time = (t1 > time) ? (t1 - time) : 0;
-
-      //Wait for the specified amount of time while tracking link changes
-      error = socketPoll(&eventDesc, 1, &context->event, time);
-
-      //Link is down?
-      if(!error)
-      {
-         //Back to CONFIRM state
-         context->state = DHCPV6_STATE_CONFIRM;
-      }
-      //Timeout error?
-      else if(error == ERROR_TIMEOUT)
-      {
-         //Enter the RENEW state
-         context->state = DHCPV6_STATE_RENEW;
-      }
-      //Any other failure to report?
+      if(context->ia.t1 < (MAX_DELAY / 1000))
+         t1 = context->ia.t1 * 1000;
       else
+         t1 = MAX_DELAY;
+
+      //Check the time elapsed since the lease was obtained
+      if(timeCompare(time, context->leaseStartTime + t1) >= 0)
       {
-         //Stay in BOUND state
-         context->state = DHCPV6_STATE_BOUND;
+         //Record the time at which the client started the address renewal process
+         context->configStartTime = time;
+
+         //Enter the RENEW state
+         dhcpv6ClientChangeState(context, DHCPV6_STATE_RENEW, 0);
       }
    }
 }
@@ -618,72 +934,77 @@ void dhcpv6StateBound(Dhcpv6ClientCtx *context)
  * @param[in] context Pointer to the DHCPv6 client context
  **/
 
-void dhcpv6StateRenew(Dhcpv6ClientCtx *context)
+void dhcpv6ClientStateRenew(Dhcpv6ClientCtx *context)
 {
-   error_t error;
    systime_t t2;
    systime_t time;
 
-   //Debug message
-   TRACE_INFO("\r\n%s: DHCPv6 client RENEW state\r\n",
-      formatSystemTime(osGetSystemTime(), NULL));
+   //Get current time
+   time = osGetSystemTime();
 
-   //A client will never attempt to use a Rebind message to locate a different server
-   //to extend the lifetime of any address in an IA with T2 set to 0xFFFFFFFF
-   if(context->t2 == DHCPV6_INFINITE_TIME)
+   //Check current time
+   if(timeCompare(time, context->timestamp + context->timeout) >= 0)
    {
-      //By setting MRD to zero, the client will continue to transmit
-      //the Renew message indefinitely until it receives a response
-      time = 0;
+      //Check retransmission counter
+      if(context->retransmitCount == 0)
+      {
+         //Generate a 24-bit transaction ID
+         context->transactionId = netGetRand() & 0x00FFFFFF;
+
+         //Send a Renew message
+         dhcpv6ClientSendMessage(context, DHCPV6_MSG_TYPE_RENEW);
+
+         //Save the time at which the message was sent
+         context->exchangeStartTime = time;
+         context->timestamp = time;
+
+         //Initial retransmission timeout
+         context->timeout = DHCPV6_CLIENT_REN_TIMEOUT +
+            dhcpv6Rand(DHCPV6_CLIENT_REN_TIMEOUT);
+      }
+      else
+      {
+         //Send a Renew message
+         dhcpv6ClientSendMessage(context, DHCPV6_MSG_TYPE_RENEW);
+
+         //Save the time at which the message was sent
+         context->timestamp = time;
+
+         //The RT is doubled for each subsequent retransmission
+         context->timeout = context->timeout * 2 + dhcpv6Rand(context->timeout);
+
+         //MRT specifies an upper bound on the value of RT
+         if(context->timeout > DHCPV6_CLIENT_REN_MAX_RT)
+         {
+            //Compute retransmission timeout
+            context->timeout = DHCPV6_CLIENT_REN_MAX_RT +
+               dhcpv6Rand(DHCPV6_CLIENT_REN_MAX_RT);
+         }
+      }
+
+      //Increment retransmission counter
+      context->retransmitCount++;
    }
    else
    {
-      //Convert T2 to milliseconds
-      t2 = context->t2 * 1000;
-      //Compute the time elapsed since the lease was obtained
-      time = osGetSystemTime() - context->leaseStartTime;
-      //Remaining time until T2 expires
-      time = (t2 > time) ? (t2 - time) : 1;
-   }
+      //A client will never attempt to use a Rebind message to locate a
+      //different server to extend the lifetime of any address in an IA
+      //with T2 set to 0xffffffff
+      if(context->ia.t2 != DHCPV6_INFINITE_TIME)
+      {
+         //Convert T2 to milliseconds
+         if(context->ia.t2 < (MAX_DELAY / 1000))
+            t2 = context->ia.t2 * 1000;
+         else
+            t2 = MAX_DELAY;
 
-   //Adjust retransmission parameters
-   context->irt = DHCPV6_REN_TIMEOUT;
-   context->mrt = DHCPV6_REN_MAX_RT;
-   context->mrc = 0;
-   context->mrd = time;
-
-   //Perform a Renew/Reply message exchange
-   error = dhcpv6MessageExchange(context, dhcpv6FormatRenew, dhcpv6ParseReply);
-
-   //Link is down?
-   if(error == ERROR_LINK_DOWN)
-   {
-      //Back to CONFIRM state
-      context->state = DHCPV6_STATE_CONFIRM;
-   }
-   //Unable to renew the address?
-   else if(error)
-   {
-      //Switch to the REBIND state
-      context->state = DHCPV6_STATE_REBIND;
-   }
-   //The server may remove addresses from the IA by setting the
-   //preferred and valid lifetimes of those addresses to zero
-   else if(!context->validLifetime)
-   {
-      //The address is no longer valid
-      context->interface->ipv6Config.globalAddrState = IPV6_ADDR_STATE_INVALID;
-      context->interface->ipv6Config.globalAddr = IPV6_UNSPECIFIED_ADDR;
-      //Initiate a new server solicitation
-      context->state = DHCPV6_STATE_SOLICIT;
-   }
-   //The address was successfully renewed
-   else
-   {
-      //Dump current DHCPv6 configuration for debugging purpose
-      dhcpv6DumpConfig(context);
-      //Switch to the BOUND state
-      context->state = DHCPV6_STATE_BOUND;
+         //Check whether T2 timer has expired
+         if(timeCompare(time, context->leaseStartTime + t2) >= 0)
+         {
+            //Switch to the REBIND state
+            dhcpv6ClientChangeState(context, DHCPV6_STATE_REBIND, 0);
+         }
+      }
    }
 }
 
@@ -699,65 +1020,147 @@ void dhcpv6StateRenew(Dhcpv6ClientCtx *context)
  * @param[in] context Pointer to the DHCPv6 client context
  **/
 
-void dhcpv6StateRebind(Dhcpv6ClientCtx *context)
+void dhcpv6ClientStateRebind(Dhcpv6ClientCtx *context)
 {
-   error_t error;
+   uint_t i;
    systime_t time;
-   systime_t validLifetime;
+   NetInterface *interface;
+   Dhcpv6ClientAddrEntry *entry;
 
-   //Debug message
-   TRACE_INFO("\r\n%s: DHCPv6 client REBIND state\r\n",
-      formatSystemTime(osGetSystemTime(), NULL));
+   //Point to the underlying network interface
+   interface = context->settings.interface;
 
-   //Setting the valid lifetime of an address to 0xFFFFFFFF amounts
-   //to a permanent assignment of an address to the client
-   if(context->validLifetime == DHCPV6_INFINITE_TIME)
+   //Get current time
+   time = osGetSystemTime();
+
+   //Check current time
+   if(timeCompare(time, context->timestamp + context->timeout) >= 0)
    {
-      //By setting MRD to zero, the client will continue to transmit
-      //the Rebind message indefinitely until it receives a response
-      time = 0;
+      //Check retransmission counter
+      if(context->retransmitCount == 0)
+      {
+         //Generate a 24-bit transaction ID
+         context->transactionId = netGetRand() & 0x00FFFFFF;
+
+         //Send a Rebind message
+         dhcpv6ClientSendMessage(context, DHCPV6_MSG_TYPE_REBIND);
+
+         //Save the time at which the message was sent
+         context->exchangeStartTime = time;
+         context->timestamp = time;
+
+         //Initial retransmission timeout
+         context->timeout = DHCPV6_CLIENT_REB_TIMEOUT +
+            dhcpv6Rand(DHCPV6_CLIENT_REB_TIMEOUT);
+      }
+      else
+      {
+         //Send a Rebind message
+         dhcpv6ClientSendMessage(context, DHCPV6_MSG_TYPE_REBIND);
+
+         //Save the time at which the message was sent
+         context->timestamp = time;
+
+         //The RT is doubled for each subsequent retransmission
+         context->timeout = context->timeout * 2 + dhcpv6Rand(context->timeout);
+
+         //MRT specifies an upper bound on the value of RT
+         if(context->timeout > DHCPV6_CLIENT_REB_MAX_RT)
+         {
+            //Compute retransmission timeout
+            context->timeout = DHCPV6_CLIENT_REB_MAX_RT +
+               dhcpv6Rand(DHCPV6_CLIENT_REB_MAX_RT);
+         }
+      }
+
+      //Increment retransmission counter
+      context->retransmitCount++;
    }
    else
    {
-      //Convert the valid lifetime to milliseconds
-      validLifetime = context->validLifetime * 1000;
-      //Compute the time elapsed since the lease was obtained
-      time = osGetSystemTime() - context->leaseStartTime;
-      //Remaining time until the valid lifetime expires
-      time = (validLifetime > time) ? (validLifetime - time) : 1;
-   }
+      //Loop through the IPv6 addresses recorded by the DHCPv6 client
+      for(i = 0; i < DHCPV6_CLIENT_ADDR_LIST_SIZE; i++)
+      {
+         //Point to the current entry
+         entry = &context->ia.addrList[i];
 
-   //Adjust retransmission parameters
-   context->irt = DHCPV6_REB_TIMEOUT;
-   context->mrt = DHCPV6_REB_MAX_RT;
-   context->mrc = 0;
-   context->mrd = time;
-
-   //Perform a Rebind/Reply message exchange
-   error = dhcpv6MessageExchange(context, dhcpv6FormatRebind, dhcpv6ParseReply);
-
-   //Link is down?
-   if(error == ERROR_LINK_DOWN)
-   {
-      //Back to CONFIRM state
-      context->state = DHCPV6_STATE_CONFIRM;
+         //Valid IPv6 address?
+         if(entry->validLifetime > 0)
+         {
+            //Check whether the valid lifetime has expired
+            if(ipv6GetAddrState(interface, &entry->addr) == IPV6_ADDR_STATE_INVALID)
+            {
+               //Restart DHCPv6 configuration
+               dhcpv6ClientChangeState(context, DHCPV6_STATE_INIT, 0);
+            }
+         }
+      }
    }
-   //Unable to renew the address?
-   else if(error)
+}
+
+
+/**
+ * @brief RELEASE state
+ *
+ * To release one or more addresses, a client sends a Release message
+ * to the server
+ *
+ * @param[in] context Pointer to the DHCPv6 client context
+ **/
+
+void dhcpv6ClientStateRelease(Dhcpv6ClientCtx *context)
+{
+   systime_t time;
+
+   //Get current time
+   time = osGetSystemTime();
+
+   //Check current time
+   if(timeCompare(time, context->timestamp + context->timeout) >= 0)
    {
-      //The address is no longer valid
-      context->interface->ipv6Config.globalAddrState = IPV6_ADDR_STATE_INVALID;
-      context->interface->ipv6Config.globalAddr = IPV6_UNSPECIFIED_ADDR;
-      //Initiate a new server solicitation
-      context->state = DHCPV6_STATE_SOLICIT;
-   }
-   //The address was successfully renewed
-   else
-   {
-      //Dump current DHCPv6 configuration for debugging purpose
-      dhcpv6DumpConfig(context);
-      //Switch to the BOUND state
-      context->state = DHCPV6_STATE_BOUND;
+      //Check retransmission counter
+      if(context->retransmitCount == 0)
+      {
+         //Generate a 24-bit transaction ID
+         context->transactionId = netGetRand() & 0x00FFFFFF;
+
+         //Send a Release message
+         dhcpv6ClientSendMessage(context, DHCPV6_MSG_TYPE_RELEASE);
+
+         //Save the time at which the message was sent
+         context->exchangeStartTime = time;
+         context->timestamp = time;
+
+         //Initial retransmission timeout
+         context->timeout = DHCPV6_CLIENT_REL_TIMEOUT +
+            dhcpv6Rand(DHCPV6_CLIENT_REL_TIMEOUT);
+
+         //Increment retransmission counter
+         context->retransmitCount++;
+      }
+      else if(context->retransmitCount < DHCPV6_CLIENT_REL_MAX_RC)
+      {
+         //Send a Release message
+         dhcpv6ClientSendMessage(context, DHCPV6_MSG_TYPE_RELEASE);
+
+         //Save the time at which the message was sent
+         context->timestamp = time;
+
+         //The RT is doubled for each subsequent retransmission
+         context->timeout = context->timeout * 2 + dhcpv6Rand(context->timeout);
+
+         //Increment retransmission counter
+         context->retransmitCount++;
+      }
+      else
+      {
+         //Implementations should retransmit one or more times, but may
+         //choose to terminate the retransmission procedure early
+         context->running = FALSE;
+
+         //Reinitialize state machine
+         dhcpv6ClientChangeState(context, DHCPV6_STATE_INIT, 0);
+      }
    }
 }
 
@@ -772,588 +1175,307 @@ void dhcpv6StateRebind(Dhcpv6ClientCtx *context)
  * @param[in] context Pointer to the DHCPv6 client context
  **/
 
-void dhcpv6StateDecline(Dhcpv6ClientCtx *context)
+void dhcpv6ClientStateDecline(Dhcpv6ClientCtx *context)
 {
-   //Debug message
-   TRACE_INFO("\r\n%s: DHCPv6 client DECLINE state\r\n",
-      formatSystemTime(osGetSystemTime(), NULL));
+   systime_t time;
 
-   //Adjust retransmission parameters
-   context->irt = DHCPV6_DEC_TIMEOUT;
-   context->mrt = 0;
-   context->mrc = DHCPV6_DEC_MAX_RC;
-   context->mrd = 0;
+   //Get current time
+   time = osGetSystemTime();
 
-   //Perform a Decline/Reply message exchange
-   dhcpv6MessageExchange(context, dhcpv6FormatDecline, dhcpv6ParseReply);
+   //Check current time
+   if(timeCompare(time, context->timestamp + context->timeout) >= 0)
+   {
+      //Check retransmission counter
+      if(context->retransmitCount == 0)
+      {
+         //Generate a 24-bit transaction ID
+         context->transactionId = netGetRand() & 0x00FFFFFF;
 
-   //Update DHCPv6 client state
-   context->state = DHCPV6_STATE_SOLICIT;
+         //Send a Decline message
+         dhcpv6ClientSendMessage(context, DHCPV6_MSG_TYPE_DECLINE);
+
+         //Save the time at which the message was sent
+         context->exchangeStartTime = time;
+         context->timestamp = time;
+
+         //Initial retransmission timeout
+         context->timeout = DHCPV6_CLIENT_DEC_TIMEOUT +
+            dhcpv6Rand(DHCPV6_CLIENT_DEC_TIMEOUT);
+
+         //Increment retransmission counter
+         context->retransmitCount++;
+      }
+      else if(context->retransmitCount < DHCPV6_CLIENT_DEC_MAX_RC)
+      {
+         //Send a Decline message
+         dhcpv6ClientSendMessage(context, DHCPV6_MSG_TYPE_DECLINE);
+
+         //Save the time at which the message was sent
+         context->timestamp = time;
+
+         //The RT is doubled for each subsequent retransmission
+         context->timeout = context->timeout * 2 + dhcpv6Rand(context->timeout);
+
+         //Increment retransmission counter
+         context->retransmitCount++;
+      }
+      else
+      {
+         //If the client does not receive a response within a reasonable
+         //period of time, then it restarts the initialization procedure
+         dhcpv6ClientChangeState(context, DHCPV6_STATE_INIT, 0);
+      }
+   }
 }
 
 
 /**
- * @brief Client-initiated message exchange
- *
- * The DHCPv6 client is responsible for reliable delivery of messages in the
- * client-initiated message exchanges. The client begins the message exchange
- * by transmitting a message to the server.  The message exchange terminates
- * when either the client successfully receives the appropriate response from
- * a server, or when the message exchange is considered to have failed according
- * to the retransmission mechanism (refer to RFC 3315 section 14)
- *
+ * @brief Send Solicit message
  * @param[in] context Pointer to the DHCPv6 client context
- * @param[in] formatRequest Callback function responsible for formatting client requests
- * @param[in] parseResponse Callback function responsible for parsing server responses
+ * @param[in] type DHCPv6 message type
  * @return Error code
  **/
 
-error_t dhcpv6MessageExchange(Dhcpv6ClientCtx *context,
-   Dhcpv6FormatCallback formatRequest, Dhcpv6ParseCallback parseResponse)
+error_t dhcpv6ClientSendMessage(Dhcpv6ClientCtx *context,
+   Dhcpv6MessageType type)
 {
    error_t error;
+   uint_t i;
    size_t length;
-   systime_t timeout;
-   systime_t elapsedTime;
-   IpAddr ipAddr;
-
-   //The context structure contains a buffer where messages will be formatted
-   Dhcpv6Message *message = (Dhcpv6Message *) context->buffer;
-
-   //Generate a 24-bit transaction ID
-   context->transactionId = netGetRand() & 0x00FFFFFF;
-
-   //If the client is waiting for an Advertise message, the first RT
-   //must be selected to be strictly greater than IRT
-   if(context->state == DHCPV6_STATE_SOLICIT)
-      context->rt = context->irt + abs(dhcpv6Rand(context->irt));
-   else
-      context->rt = context->irt + dhcpv6Rand(context->irt);
-
-   //Save the time at which the client sent the first message
-   context->exchangeStartTime = osGetSystemTime();
-   //Total duration of the message exchange
-   elapsedTime = 0;
-
-   //Unless MRC is zero, the message exchange fails once
-   //the client has transmitted the message MRC times
-   for(context->rc = 0; !context->mrc || context->rc < context->mrc; context->rc++)
-   {
-      //Unless MRD is zero, the message exchange fails once MRD seconds
-      //have elapsed since the client first transmitted the message
-      if(context->mrd && elapsedTime > context->mrd)
-         return ERROR_TIMEOUT;
-
-      //Format client message
-      error = formatRequest(context, message, &length);
-      //Any error to report?
-      if(error) return error;
-
-      //Debug message
-      TRACE_INFO("\r\n%s: Sending DHCPv6 message (%" PRIuSIZE " bytes)...\r\n",
-         formatSystemTime(osGetSystemTime(), NULL), length);
-      //Dump the contents of the message for debugging purpose
-      dhcpv6DumpMessage(message, length);
-
-      //Destination address
-      ipAddr.length = sizeof(Ipv6Addr);
-      ipAddr.ipv6Addr = DHCPV6_ALL_RELAY_AGENTS_AND_SERVERS_ADDR;
-
-      //Multicast the message to all DHCPv6 servers and relay agents
-      error = socketSendTo(context->socket, &ipAddr,
-         DHCPV6_SERVER_PORT, message, length, NULL, 0);
-      //Transmission failed?
-      if(error) return error;
-
-      //Calculate the maximum time to wait
-      timeout = context->rt;
-      //Make sure the maximum retransmission duration is not exceeded
-      if(context->mrd && (elapsedTime + timeout) > context->mrd)
-         timeout = context->mrd - elapsedTime;
-
-      //Wait for a valid message to be received on port 546
-      error = dhcpv6WaitForResponse(context, parseResponse, timeout);
-      //Check whether a message has been received
-      if(error != ERROR_TIMEOUT) return error;
-
-      //If the client has sent a Solicit message, the message exchange
-      //is not terminated before the first RT has elapsed
-      if(context->state == DHCPV6_STATE_SOLICIT && !context->rc)
-      {
-         //If any Advertise message has been received, the client
-         //immediately completes the message exchange
-         if(context->serverPreference >= 0)
-            return NO_ERROR;
-      }
-
-      //RT is doubled for each subsequent message retransmission
-      context->rt = 2 * context->rt + dhcpv6Rand(context->rt);
-      //MRT specifies an upper bound on the value of RT. If MRT has
-      //a value of 0, there is no upper limit on the value of RT
-      if(context->mrt && context->rt > context->mrt)
-         context->rt = context->mrt + dhcpv6Rand(context->mrt);
-
-      //Compute the total duration of the message exchange
-      elapsedTime = osGetSystemTime() - context->exchangeStartTime;
-   }
-
-   //The maximum retransmission count has been reached
-   return ERROR_TIMEOUT;
-}
-
-
-/**
- * @brief Wait for a valid response from the DHCPv6 server
- * @param[in] context Pointer to the DHCP client context
- * @param[in] parseResponse Callback function responsible for parsing server responses
- * @param[in] timeout Maximum time period to wait
- * @return Error code
- **/
-
-error_t dhcpv6WaitForResponse(Dhcpv6ClientCtx *context,
-   Dhcpv6ParseCallback parseResponse, systime_t timeout)
-{
-   error_t error;
-   size_t length;
-   systime_t startTime;
-   systime_t elapsedTime;
-   SocketEventDesc eventDesc;
-
-   //The context contains a buffer where incoming messages can be stored
-   Dhcpv6Message *message = (Dhcpv6Message *) context->buffer;
-
-   //Save the time at which the client request was sent
-   startTime = osGetSystemTime();
-   //Time elapsed since the client request was sent
-   elapsedTime = 0;
-
-   //Keep listening as long as the retransmission timeout has not been reached
-   while(elapsedTime < timeout)
-   {
-      //Specify the events the application is interested in
-      eventDesc.socket = context->socket;
-      eventDesc.eventMask = SOCKET_EVENT_RX_READY | SOCKET_EVENT_LINK_DOWN;
-
-      //Wait for an event to be fired
-      error = socketPoll(&eventDesc, 1, &context->event, timeout - elapsedTime);
-      //Timeout error or any other exception to report?
-      if(error) return error;
-
-      //Message received on port 546?
-      if(eventDesc.eventFlags & SOCKET_EVENT_RX_READY)
-      {
-         //Read the pending message
-         error = socketReceiveFrom(context->socket, NULL, NULL,
-            message, DHCPV6_MAX_MSG_SIZE, &length, 0);
-         //Sanity check
-         if(error) return error;
-
-         //Debug message
-         TRACE_INFO("\r\n%s: DHCPv6 message received (%" PRIuSIZE " bytes)...\r\n",
-            formatSystemTime(osGetSystemTime(), NULL), length);
-         //Dump the contents of the message for debugging purpose
-         dhcpv6DumpMessage(message, length);
-
-         //Parse the received message
-         error = parseResponse(context, message, length);
-
-         //Check whether the received message is valid
-         if(error != ERROR_INVALID_MESSAGE)
-         {
-            //If the client has sent a Solicit message, all the Advertise
-            //messages must be collected until the first RT has elapsed
-            if(context->state == DHCPV6_STATE_SOLICIT && !context->rc)
-            {
-               //If the client receives an Advertise message that includes a
-               //Preference option with a preference value of 255, the client
-               //immediately completes the message exchange
-               if(context->serverPreference >= DHCPV6_MAX_SERVER_PREFERENCE)
-                  return NO_ERROR;
-            }
-            //Else the message exchange is complete
-            else
-            {
-               //Return status code
-               return error;
-            }
-         }
-      }
-      //Link is down?
-      else if(eventDesc.eventFlags & SOCKET_EVENT_LINK_DOWN)
-      {
-         //Notify the caller that the link is down
-         return ERROR_LINK_DOWN;
-      }
-
-      //Compute the time elapsed since the client request was sent
-      elapsedTime = osGetSystemTime() - startTime;
-   }
-
-   //The timeout period elapsed
-   return ERROR_TIMEOUT;
-}
-
-
-/**
- * @brief Format Solicit message
- * @param[in] context Pointer to the DHCPv6 client context
- * @param[out] message Buffer where to format the Solicit message
- * @param[out] length Length of the resulting Solicit message
- * @return Error code
- **/
-
-error_t dhcpv6FormatSolicit(Dhcpv6ClientCtx *context, Dhcpv6Message *message, size_t *length)
-{
+   size_t offset;
+   NetBuffer *buffer;
+   NetInterface *interface;
+   Dhcpv6Message *message;
+   Dhcpv6Option *option;
    Dhcpv6IaNaOption iaNaOption;
+   Dhcpv6IaAddrOption iaAddrOption;
+   Dhcpv6FqdnOption *fqdnOption;
    Dhcpv6ElapsedTimeOption elapsedTimeOption;
+   Dhcpv6ClientAddrEntry *entry;
+   IpAddr destIpAddr;
 
-   //Format the Solicit message
-   message->msgType = DHCPV6_MSG_TYPE_SOLICIT;
+   //Point to the underlying network interface
+   interface = context->settings.interface;
+
+   //Allocate a memory buffer to hold the DHCPv6 message
+   buffer = udpAllocBuffer(DHCPV6_MAX_MSG_SIZE, &offset);
+   //Failed to allocate buffer?
+   if(!buffer) return ERROR_OUT_OF_MEMORY;
+
+   //Point to the beginning of the DHCPv6 message
+   message = netBufferAt(buffer, offset);
+
+   //Set DHCPv6 message type
+   message->msgType = type;
+
    //The transaction ID is chosen by the client
    STORE24BE(context->transactionId, message->transactionId);
-   //Size of the Solicit message
-   *length = sizeof(Dhcpv6Message);
+
+   //Size of the DHCPv6 message
+   length = sizeof(Dhcpv6Message);
 
    //The client must include a Client Identifier option
    //to identify itself to the server
-   dhcpv6AddOption(message, length, DHCPV6_OPTION_CLIENTID,
+   dhcpv6AddOption(message, &length, DHCPV6_OPTION_CLIENTID,
       context->clientId, context->clientIdLength);
+
+   //Request, Renew, Release or Decline message?
+   if(type == DHCPV6_MSG_TYPE_REQUEST ||
+      type == DHCPV6_MSG_TYPE_RENEW ||
+      type == DHCPV6_MSG_TYPE_RELEASE ||
+      type == DHCPV6_MSG_TYPE_DECLINE)
+   {
+      //The client places the identifier of the destination
+      //server in a Server Identifier option
+      dhcpv6AddOption(message, &length, DHCPV6_OPTION_SERVERID,
+         context->serverId, context->serverIdLength);
+   }
+
+   //Solicit message?
+   if(type == DHCPV6_MSG_TYPE_SOLICIT)
+   {
+      //Check whether rapid commit is enabled
+      if(context->settings.rapidCommit)
+      {
+         //Include the Rapid Commit option if the client is prepared
+         //to perform the Solicit/Reply message exchange
+         dhcpv6AddOption(message, &length, DHCPV6_OPTION_RAPID_COMMIT, NULL, 0);
+      }
+   }
+
+   //Solicit, Request, Confirm, Renew or Rebind message?
+   if(type == DHCPV6_MSG_TYPE_SOLICIT ||
+      type == DHCPV6_MSG_TYPE_REQUEST ||
+      type == DHCPV6_MSG_TYPE_CONFIRM ||
+      type == DHCPV6_MSG_TYPE_RENEW ||
+      type == DHCPV6_MSG_TYPE_REBIND)
+   {
+      //Point to the client's fully qualified domain name
+      fqdnOption = (Dhcpv6FqdnOption *) context->clientFqdn;
+
+      //The FQDN option can be used by the client to convey its
+      //fully qualified domain name to the server
+      dhcpv6AddOption(message, &length, DHCPV6_OPTION_FQDN,
+         fqdnOption, sizeof(Dhcpv6FqdnOption) + context->clientFqdnLength);
+
+      //The client should include an Option Request option to indicate
+      //the options the client is interested in receiving
+      dhcpv6AddOption(message, &length, DHCPV6_OPTION_ORO,
+         &dhcpv6OptionList, sizeof(dhcpv6OptionList));
+   }
 
    //Prepare an IA_NA option for a the current interface
-   iaNaOption.iaId = htonl(context->interface->id);
-   iaNaOption.t1 = 0;
-   iaNaOption.t2 = 0;
-   //The client includes IA options for any IAs to which
-   //it wants the server to assign addresses
-   dhcpv6AddOption(message, length, DHCPV6_OPTION_IA_NA,
-      &iaNaOption, sizeof(Dhcpv6IaNaOption));
+   iaNaOption.iaId = htonl(interface->id);
 
-   //The client should include an Option Request option to indicate
-   //the options the client is interested in receiving
-   dhcpv6AddOption(message, length, DHCPV6_OPTION_ORO,
-      &dhcpv6OptionList, sizeof(dhcpv6OptionList));
-
-   //Compute the time elapsed since the client sent the first message
-   elapsedTimeOption.value = dhcpv6ComputeElapsedTime(context);
-   //The client must include an Elapsed Time option in messages to indicate
-   //how long the client has been trying to complete a DHCP message exchange
-   dhcpv6AddOption(message, length, DHCPV6_OPTION_ELAPSED_TIME,
-      &elapsedTimeOption, sizeof(Dhcpv6ElapsedTimeOption));
-
-   //Check whether rapid commit is enabled
-   if(context->rapidCommit)
+   //Solicit, Request or Confirm message?
+   if(type == DHCPV6_MSG_TYPE_SOLICIT ||
+      type == DHCPV6_MSG_TYPE_REQUEST ||
+      type == DHCPV6_MSG_TYPE_CONFIRM)
    {
-      //Include the Rapid Commit option if the client is prepared
-      //to perform the Solicit/Reply message exchange
-      dhcpv6AddOption(message, length, DHCPV6_OPTION_RAPID_COMMIT, NULL, 0);
+      //The client should set the T1 and T2 fields in any IA_NA options to 0
+      iaNaOption.t1 = 0;
+      iaNaOption.t2 = 0;
+   }
+   else
+   {
+      //T1 and T2 are provided as a hint
+      iaNaOption.t1 = htonl(context->ia.t1);
+      iaNaOption.t2 = htonl(context->ia.t2);
    }
 
-   //Successful processing
-   return NO_ERROR;
-}
-
-
-/**
- * @brief Format Request message
- * @param[in] context Pointer to the DHCPv6 client context
- * @param[out] message Buffer where to format the Request message
- * @param[out] length Length of the resulting Request message
- * @return Error code
- **/
-
-error_t dhcpv6FormatRequest(Dhcpv6ClientCtx *context, Dhcpv6Message *message, size_t *length)
-{
-   Dhcpv6IaNaOption iaNaOption;
-   Dhcpv6ElapsedTimeOption elapsedTimeOption;
-
-   //Format the Request message
-   message->msgType = DHCPV6_MSG_TYPE_REQUEST;
-   //The transaction ID is chosen by the client
-   STORE24BE(context->transactionId, message->transactionId);
-   //Size of the Request message
-   *length = sizeof(Dhcpv6Message);
-
-   //The client must include a Client Identifier option
-   //to identify itself to the server
-   dhcpv6AddOption(message, length, DHCPV6_OPTION_CLIENTID,
-      context->clientId, context->clientIdLength);
-
-   //The client places the identifier of the destination
-   //server in a Server Identifier option
-   dhcpv6AddOption(message, length, DHCPV6_OPTION_SERVERID,
-      context->serverId, context->serverIdLength);
-
-   //Prepare an IA_NA option
-   iaNaOption.iaId = htonl(context->interface->id);
-   iaNaOption.t1 = 0;
-   iaNaOption.t2 = 0;
    //The client includes IA options for any IAs to which
    //it wants the server to assign addresses
-   dhcpv6AddOption(message, length, DHCPV6_OPTION_IA_NA,
+   option = dhcpv6AddOption(message, &length, DHCPV6_OPTION_IA_NA,
       &iaNaOption, sizeof(Dhcpv6IaNaOption));
 
-   //The client must include an Option Request option to indicate
-   //the options the client is interested in receiving
-   dhcpv6AddOption(message, length, DHCPV6_OPTION_ORO,
-      &dhcpv6OptionList, sizeof(dhcpv6OptionList));
+   //Confirm, Renew, Rebind, Release or Decline message?
+   if(type == DHCPV6_MSG_TYPE_CONFIRM ||
+      type == DHCPV6_MSG_TYPE_RENEW ||
+      type == DHCPV6_MSG_TYPE_REBIND ||
+      type == DHCPV6_MSG_TYPE_RELEASE ||
+      type == DHCPV6_MSG_TYPE_DECLINE)
+   {
+      //Loop through the IPv6 addresses recorded by the client
+      for(i = 0; i < DHCPV6_CLIENT_ADDR_LIST_SIZE; i++)
+      {
+         //Point to the current entry
+         entry = &context->ia.addrList[i];
+
+         //Valid IPv6 address?
+         if(entry->validLifetime > 0)
+         {
+            //Prepare an IA Address option
+            iaAddrOption.address = entry->addr;
+
+            //Confirm message?
+            if(type == DHCPV6_MSG_TYPE_CONFIRM)
+            {
+               //The client should set the preferred and valid lifetimes to 0
+               iaAddrOption.preferredLifetime = 0;
+               iaAddrOption.validLifetime = 0;
+            }
+            else
+            {
+               //Preferred and valid lifetimes are provided as a hint
+               iaAddrOption.preferredLifetime = htonl(entry->preferredLifetime);
+               iaAddrOption.validLifetime = htonl(entry->validLifetime);
+            }
+
+            //Add the IA Address option
+            dhcpv6AddSubOption(option, &length, DHCPV6_OPTION_IAADDR,
+               &iaAddrOption, sizeof(iaAddrOption));
+         }
+      }
+   }
 
    //Compute the time elapsed since the client sent the first message
-   elapsedTimeOption.value = dhcpv6ComputeElapsedTime(context);
+   elapsedTimeOption.value = dhcpv6ClientComputeElapsedTime(context);
+
    //The client must include an Elapsed Time option in messages to indicate
    //how long the client has been trying to complete a DHCP message exchange
-   dhcpv6AddOption(message, length, DHCPV6_OPTION_ELAPSED_TIME,
+   dhcpv6AddOption(message, &length, DHCPV6_OPTION_ELAPSED_TIME,
       &elapsedTimeOption, sizeof(Dhcpv6ElapsedTimeOption));
 
-   //Successful processing
-   return NO_ERROR;
+   //Adjust the length of the multi-part buffer
+   netBufferSetLength(buffer, offset + length);
+
+   //Destination address
+   destIpAddr.length = sizeof(Ipv6Addr);
+   destIpAddr.ipv6Addr = DHCPV6_ALL_RELAY_AGENTS_AND_SERVERS_ADDR;
+
+   //Debug message
+   TRACE_DEBUG("\r\n%s: Sending DHCPv6 message (%" PRIuSIZE " bytes)...\r\n",
+      formatSystemTime(osGetSystemTime(), NULL), length);
+
+   //Dump the contents of the message for debugging purpose
+   dhcpv6DumpMessage(message, length);
+
+   //Send DHCPv6 message
+   error = udpSendDatagramEx(interface, DHCPV6_CLIENT_PORT,
+      &destIpAddr, DHCPV6_SERVER_PORT, buffer, offset, 0);
+
+   //Free previously allocated memory
+   netBufferFree(buffer);
+   //Return status code
+   return error;
 }
 
 
 /**
- * @brief Format Confirm message
- * @param[in] context Pointer to the DHCPv6 client context
- * @param[out] message Buffer where to format the Confirm message
- * @param[out] length Length of the resulting Confirm message
- * @return Error code
+ * @brief Process incoming DHCPv6 message
+ * @param[in] interface Underlying network interface
+ * @param[in] pseudoHeader UDP pseudo header
+ * @param[in] udpHeader UDP header
+ * @param[in] buffer Multi-part buffer containing the incoming DHCPv6 message
+ * @param[in] offset Offset to the first byte of the DHCPv6 message
+ * @param[in] params Pointer to the DHCPv6 client context
  **/
 
-error_t dhcpv6FormatConfirm(Dhcpv6ClientCtx *context, Dhcpv6Message *message, size_t *length)
+void dhcpv6ClientProcessMessage(NetInterface *interface,
+   const IpPseudoHeader *pseudoHeader, const UdpHeader *udpHeader,
+   const NetBuffer *buffer, size_t offset, void *params)
 {
-   Dhcpv6Option *option;
-   Dhcpv6IaNaOption iaNaOption;
-   Dhcpv6IaAddrOption iaAddrOption;
-   Dhcpv6ElapsedTimeOption elapsedTimeOption;
+   size_t length;
+   Dhcpv6ClientCtx *context;
+   Dhcpv6Message *message;
 
-   //Format the Confirm message
-   message->msgType = DHCPV6_MSG_TYPE_CONFIRM;
-   //The transaction ID is chosen by the client
-   STORE24BE(context->transactionId, message->transactionId);
-   //Size of the Confirm message
-   *length = sizeof(Dhcpv6Message);
+   //Point to the DHCPv6 client context
+   context = (Dhcpv6ClientCtx *) params;
 
-   //The client must include a Client Identifier option
-   //to identify itself to the server
-   dhcpv6AddOption(message, length, DHCPV6_OPTION_CLIENTID,
-      context->clientId, context->clientIdLength);
+   //Retrieve the length of the DHCPv6 message
+   length = netBufferGetLength(buffer) - offset;
 
-   //Prepare an IA_NA option
-   iaNaOption.iaId = htonl(context->interface->id);
-   iaNaOption.t1 = 0;
-   iaNaOption.t2 = 0;
-   //The client includes any IAs assigned to the interface
-   //that may have moved to a new link
-   option = dhcpv6AddOption(message, length, DHCPV6_OPTION_IA_NA,
-      &iaNaOption, sizeof(Dhcpv6IaNaOption));
+   //Make sure the DHCPv6 message is valid
+   if(length < sizeof(Dhcpv6Message))
+      return;
 
-   //Prepare an IA Address option
-   iaAddrOption.address = context->interface->ipv6Config.globalAddr;
-   iaAddrOption.preferredLifetime = 0;
-   iaAddrOption.validLifetime = 0;
-   //Include the address currently assigned to the IA
-   dhcpv6AddSubOption(option, length, DHCPV6_OPTION_IAADDR,
-      &iaAddrOption, sizeof(iaAddrOption));
+   //Point to the beginning of the DHCPv6 message
+   message = netBufferAt(buffer, offset);
+   //Sanity check
+   if(!message) return;
 
-   //The client must include an Option Request option to indicate
-   //the options the client is interested in receiving
-   dhcpv6AddOption(message, length, DHCPV6_OPTION_ORO,
-      &dhcpv6OptionList, sizeof(dhcpv6OptionList));
+   //Debug message
+   TRACE_DEBUG("\r\n%s: DHCPv6 message received (%" PRIuSIZE " bytes)...\r\n",
+      formatSystemTime(osGetSystemTime(), NULL), length);
 
-   //Compute the time elapsed since the client sent the first message
-   elapsedTimeOption.value = dhcpv6ComputeElapsedTime(context);
-   //The client must include an Elapsed Time option in messages to indicate
-   //how long the client has been trying to complete a DHCP message exchange
-   dhcpv6AddOption(message, length, DHCPV6_OPTION_ELAPSED_TIME,
-      &elapsedTimeOption, sizeof(Dhcpv6ElapsedTimeOption));
+   //Dump the contents of the message for debugging purpose
+   dhcpv6DumpMessage(message, length);
 
-   //Successful processing
-   return NO_ERROR;
-}
-
-
-/**
- * @brief Format Renew message
- * @param[in] context Pointer to the DHCPv6 client context
- * @param[out] message Buffer where to format the Renew message
- * @param[out] length Length of the resulting Renew message
- * @return Error code
- **/
-
-error_t dhcpv6FormatRenew(Dhcpv6ClientCtx *context, Dhcpv6Message *message, size_t *length)
-{
-   Dhcpv6Option *option;
-   Dhcpv6IaNaOption iaNaOption;
-   Dhcpv6IaAddrOption iaAddrOption;
-   Dhcpv6ElapsedTimeOption elapsedTimeOption;
-
-   //Format the Renew message
-   message->msgType = DHCPV6_MSG_TYPE_RENEW;
-   //The transaction ID is chosen by the client
-   STORE24BE(context->transactionId, message->transactionId);
-   //Size of the Renew message
-   *length = sizeof(Dhcpv6Message);
-
-   //The client must include a Client Identifier option
-   //to identify itself to the server
-   dhcpv6AddOption(message, length, DHCPV6_OPTION_CLIENTID,
-      context->clientId, context->clientIdLength);
-
-   //The client places the identifier of the destination
-   //server in a Server Identifier option
-   dhcpv6AddOption(message, length, DHCPV6_OPTION_SERVERID,
-      context->serverId, context->serverIdLength);
-
-   //Prepare an IA_NA option
-   iaNaOption.iaId = htonl(context->interface->id);
-   iaNaOption.t1 = 0;
-   iaNaOption.t2 = 0;
-   //The client includes an IA option with all addresses
-   //currently assigned to the IA in its Renew message
-   option = dhcpv6AddOption(message, length, DHCPV6_OPTION_IA_NA,
-      &iaNaOption, sizeof(Dhcpv6IaNaOption));
-
-   //Prepare an IA Address option
-   iaAddrOption.address = context->interface->ipv6Config.globalAddr;
-   iaAddrOption.preferredLifetime = 0;
-   iaAddrOption.validLifetime = 0;
-   //Include the address currently assigned to the IA
-   dhcpv6AddSubOption(option, length, DHCPV6_OPTION_IAADDR,
-      &iaAddrOption, sizeof(iaAddrOption));
-
-   //The client must include an Option Request option to indicate
-   //the options the client is interested in receiving
-   dhcpv6AddOption(message, length, DHCPV6_OPTION_ORO,
-      &dhcpv6OptionList, sizeof(dhcpv6OptionList));
-
-   //Compute the time elapsed since the client sent the first message
-   elapsedTimeOption.value = dhcpv6ComputeElapsedTime(context);
-   //The client must include an Elapsed Time option in messages to indicate
-   //how long the client has been trying to complete a DHCP message exchange
-   dhcpv6AddOption(message, length, DHCPV6_OPTION_ELAPSED_TIME,
-      &elapsedTimeOption, sizeof(Dhcpv6ElapsedTimeOption));
-
-   //Successful processing
-   return NO_ERROR;
-}
-
-
-/**
- * @brief Format Rebind message
- * @param[in] context Pointer to the DHCPv6 client context
- * @param[out] message Buffer where to format the Rebind message
- * @param[out] length Length of the resulting Rebind message
- * @return Error code
- **/
-
-error_t dhcpv6FormatRebind(Dhcpv6ClientCtx *context, Dhcpv6Message *message, size_t *length)
-{
-   Dhcpv6Option *option;
-   Dhcpv6IaNaOption iaNaOption;
-   Dhcpv6IaAddrOption iaAddrOption;
-   Dhcpv6ElapsedTimeOption elapsedTimeOption;
-
-   //Format the Rebind message
-   message->msgType = DHCPV6_MSG_TYPE_REBIND;
-   //The transaction ID is chosen by the client
-   STORE24BE(context->transactionId, message->transactionId);
-   //Size of the Rebind message
-   *length = sizeof(Dhcpv6Message);
-
-   //The client must include a Client Identifier option
-   //to identify itself to the server
-   dhcpv6AddOption(message, length, DHCPV6_OPTION_CLIENTID,
-      context->clientId, context->clientIdLength);
-
-   //Prepare an IA_NA option
-   iaNaOption.iaId = htonl(context->interface->id);
-   iaNaOption.t1 = 0;
-   iaNaOption.t2 = 0;
-   //The client includes an IA option with all addresses
-   //currently assigned to the IA in its Rebind message
-   option = dhcpv6AddOption(message, length, DHCPV6_OPTION_IA_NA,
-      &iaNaOption, sizeof(Dhcpv6IaNaOption));
-
-   //Prepare an IA Address option
-   iaAddrOption.address = context->interface->ipv6Config.globalAddr;
-   iaAddrOption.preferredLifetime = 0;
-   iaAddrOption.validLifetime = 0;
-   //Include the address currently assigned to the IA
-   dhcpv6AddSubOption(option, length, DHCPV6_OPTION_IAADDR,
-      &iaAddrOption, sizeof(iaAddrOption));
-
-   //The client must include an Option Request option to indicate
-   //the options the client is interested in receiving
-   dhcpv6AddOption(message, length, DHCPV6_OPTION_ORO,
-      &dhcpv6OptionList, sizeof(dhcpv6OptionList));
-
-   //Compute the time elapsed since the client sent the first message
-   elapsedTimeOption.value = dhcpv6ComputeElapsedTime(context);
-   //The client must include an Elapsed Time option in messages to indicate
-   //how long the client has been trying to complete a DHCP message exchange
-   dhcpv6AddOption(message, length, DHCPV6_OPTION_ELAPSED_TIME,
-      &elapsedTimeOption, sizeof(Dhcpv6ElapsedTimeOption));
-
-   //Successful processing
-   return NO_ERROR;
-}
-
-
-/**
- * @brief Format Decline message
- * @param[in] context Pointer to the DHCPv6 client context
- * @param[out] message Buffer where to format the Decline message
- * @param[out] length Length of the resulting Decline message
- * @return Error code
- **/
-
-error_t dhcpv6FormatDecline(Dhcpv6ClientCtx *context, Dhcpv6Message *message, size_t *length)
-{
-   Dhcpv6Option *option;
-   Dhcpv6IaNaOption iaNaOption;
-   Dhcpv6IaAddrOption iaAddrOption;
-   Dhcpv6ElapsedTimeOption elapsedTimeOption;
-
-   //Format the Decline message
-   message->msgType = DHCPV6_MSG_TYPE_DECLINE;
-   //The transaction ID is chosen by the client
-   STORE24BE(context->transactionId, message->transactionId);
-   //Size of the Decline message
-   *length = sizeof(Dhcpv6Message);
-
-   //The client must include a Client Identifier option
-   //to identify itself to the server
-   dhcpv6AddOption(message, length, DHCPV6_OPTION_CLIENTID,
-      context->clientId, context->clientIdLength);
-
-   //The client places the identifier of the server that
-   //allocated the address in a Server Identifier option
-   dhcpv6AddOption(message, length, DHCPV6_OPTION_SERVERID,
-      context->serverId, context->serverIdLength);
-
-   //Prepare an IA_NA option
-   iaNaOption.iaId = htonl(context->interface->id);
-   iaNaOption.t1 = 0;
-   iaNaOption.t2 = 0;
-   //The client includes an IA option with the address it is declining
-   option = dhcpv6AddOption(message, length, DHCPV6_OPTION_IA_NA,
-      &iaNaOption, sizeof(Dhcpv6IaNaOption));
-
-   //Prepare an IA Address option
-   iaAddrOption.address = context->interface->ipv6Config.globalAddr;
-   iaAddrOption.preferredLifetime = 0;
-   iaAddrOption.validLifetime = 0;
-   //Include the address the client is declining
-   dhcpv6AddSubOption(option, length, DHCPV6_OPTION_IAADDR,
-      &iaAddrOption, sizeof(iaAddrOption));
-
-   //Compute the time elapsed since the client sent the first message
-   elapsedTimeOption.value = dhcpv6ComputeElapsedTime(context);
-   //The client must include an Elapsed Time option in messages to indicate
-   //how long the client has been trying to complete a DHCP message exchange
-   dhcpv6AddOption(message, length, DHCPV6_OPTION_ELAPSED_TIME,
-      &elapsedTimeOption, sizeof(Dhcpv6ElapsedTimeOption));
-
-   //Successful processing
-   return NO_ERROR;
+   //Check message type
+   switch(message->msgType)
+   {
+   case DHCPV6_MSG_TYPE_ADVERTISE:
+      //Parse Advertise message
+      dhcpv6ClientParseAdvertise(context, message, length);
+      break;
+   case DHCPV6_MSG_TYPE_REPLY:
+      //Parse Reply message
+      dhcpv6ClientParseReply(context, message, length);
+      break;
+   default:
+      //Silently drop incoming message
+      break;
+   }
 }
 
 
@@ -1362,69 +1484,109 @@ error_t dhcpv6FormatDecline(Dhcpv6ClientCtx *context, Dhcpv6Message *message, si
  * @param[in] context Pointer to the DHCPv6 client context
  * @param[in] message Pointer to the incoming message to parse
  * @param[in] length Length of the incoming message
- * @return Error code
  **/
 
-error_t dhcpv6ParseAdvertise(Dhcpv6ClientCtx *context, const Dhcpv6Message *message, size_t length)
+void dhcpv6ClientParseAdvertise(Dhcpv6ClientCtx *context,
+   const Dhcpv6Message *message, size_t length)
 {
-   error_t error;
+   uint_t i;
    int_t serverPreference;
+   NetInterface *interface;
+   Dhcpv6StatusCode status;
    Dhcpv6Option *option;
    Dhcpv6Option *serverIdOption;
+   Dhcpv6IaNaOption *iaNaOption;
 
-   //Check whether rapid commit is enabled
-   if(context->rapidCommit)
-   {
-      //Accept a Reply message with committed address assignments
-      //and other resources in response to the Solicit message
-      error = dhcpv6ParseReply(context, message, length);
+   //Point to the underlying network interface
+   interface = context->settings.interface;
 
-      //The client terminates the waiting process as soon as a Reply
-      //message with a Rapid Commit option is received
-      if(!error) return NO_ERROR;
-   }
+   //Make sure that the Advertise message is received in response to
+   //a Solicit message
+   if(context->state != DHCPV6_STATE_SOLICIT)
+      return;
 
-   //Check the length of the DHCPv6 message
-   if(length < sizeof(Dhcpv6Message))
-      return ERROR_INVALID_MESSAGE;
-   //Check the message type
-   if(message->msgType != DHCPV6_MSG_TYPE_ADVERTISE)
-      return ERROR_INVALID_MESSAGE;
    //Discard any received packet that does not match the transaction ID
    if(LOAD24BE(message->transactionId) != context->transactionId)
-      return ERROR_INVALID_MESSAGE;
+      return;
 
    //Get the length of the Options field
    length -= sizeof(Dhcpv6Message);
 
    //Search for the Client Identifier option
    option = dhcpv6GetOption(message->options, length, DHCPV6_OPTION_CLIENTID);
+
    //Discard any received packet that does not include a Client Identifier option
-   if(!option || ntohs(option->length) != context->clientIdLength)
-      return ERROR_INVALID_MESSAGE;
+   if(option == NULL)
+      return;
+   //Check the length of the option
+   if(ntohs(option->length) != context->clientIdLength)
+      return;
    //Check whether the Client Identifier matches our identifier
    if(memcmp(option->value, context->clientId, context->clientIdLength))
-      return ERROR_INVALID_MESSAGE;
+      return;
 
    //Search for the Server Identifier option
    serverIdOption = dhcpv6GetOption(message->options, length, DHCPV6_OPTION_SERVERID);
+
    //Discard any received packet that does not include a Server Identifier option
-   if(!serverIdOption || !serverIdOption->length)
-      return ERROR_INVALID_MESSAGE;
+   if(serverIdOption == NULL)
+      return;
    //Check the length of the server DUID
-   if(ntohs(serverIdOption->length) >= DHCPV6_MAX_DUID_SIZE)
-      return ERROR_INVALID_MESSAGE;
+   if(ntohs(serverIdOption->length) == 0)
+      return;
+   if(ntohs(serverIdOption->length) > DHCPV6_MAX_DUID_SIZE)
+      return;
 
    //Get the status code returned by the server
-   error = dhcpv6ParseStatusCodeOption(message->options, length);
-   //The client must ignore any Advertise message that includes
-   //a Status Code option containing the value NoAddrsAvail
-   if(error) return ERROR_INVALID_MESSAGE;
+   status = dhcpv6GetStatusCode(message->options, length);
+
+   //If the message contains a Status Code option indicating a failure,
+   //then the Advertise message is discarded by the client
+   if(status != DHCPV6_STATUS_SUCCESS)
+      return;
+
+   //Point to the first option
+   i = 0;
+
+   //Loop through DHCPv6 options
+   while(i < length)
+   {
+      //Search for an IA_NA option
+      option = dhcpv6GetOption(message->options + i, length - i, DHCPV6_OPTION_IA_NA);
+
+      //Unable to find the specified option?
+      if(option == NULL)
+         break;
+
+      //Make sure the IA_NA option is valid
+      if(ntohs(option->length) >= sizeof(Dhcpv6IaNaOption))
+      {
+         //Get the parameters associated with the IA_NA
+         iaNaOption = (Dhcpv6IaNaOption *) option->value;
+
+         //Check the IA identifier
+         if(ntohl(iaNaOption->iaId) == interface->id)
+         {
+            //The client examines the status code in each IA individually
+            status = dhcpv6GetStatusCode(iaNaOption->options,
+               ntohs(option->length) - sizeof(Dhcpv6IaNaOption));
+
+            //The client must ignore any Advertise message that includes a Status
+            //Code option containing the value NoAddrsAvail
+            if(status == DHCPV6_STATUS_NO_ADDRS_AVAILABLE)
+               return;
+         }
+      }
+
+      //Jump to the next option
+      i += sizeof(Dhcpv6Option) + ntohs(option->length);
+   }
 
    //Search for the Preference option
    option = dhcpv6GetOption(message->options, length, DHCPV6_OPTION_PREFERENCE);
+
    //Check whether the option has been found
-   if(option && ntohs(option->length) == sizeof(Dhcpv6PreferenceOption))
+   if(option != NULL && ntohs(option->length) == sizeof(Dhcpv6PreferenceOption))
    {
       //Server server preference value
       serverPreference = option->value[0];
@@ -1443,12 +1605,24 @@ error_t dhcpv6ParseAdvertise(Dhcpv6ClientCtx *context, const Dhcpv6Message *mess
       context->serverPreference = serverPreference;
       //Save the length of the DUID
       context->serverIdLength = ntohs(serverIdOption->length);
-      //Save the server DUID
+      //Record the server DUID
       memcpy(context->serverId, serverIdOption->value, context->serverIdLength);
    }
 
-   //The Advertise message was successfully parsed
-   return NO_ERROR;
+   //If the client receives an Advertise message that includes a
+   //Preference option with a preference value of 255, the client
+   //immediately completes the message exchange
+   if(serverPreference == DHCPV6_MAX_SERVER_PREFERENCE)
+   {
+      //Continue configuration procedure
+      dhcpv6ClientChangeState(context, DHCPV6_STATE_REQUEST, 0);
+   }
+   //The message exchange is not terminated before the first RT has elapsed
+   else if(context->retransmitCount > 1)
+   {
+      //Continue configuration procedure
+      dhcpv6ClientChangeState(context, DHCPV6_STATE_REQUEST, 0);
+   }
 }
 
 
@@ -1457,142 +1631,319 @@ error_t dhcpv6ParseAdvertise(Dhcpv6ClientCtx *context, const Dhcpv6Message *mess
  * @param[in] context Pointer to the DHCPv6 client context
  * @param[in] message Pointer to the incoming message to parse
  * @param[in] length Length of the incoming message
- * @return Error code
  **/
 
-error_t dhcpv6ParseReply(Dhcpv6ClientCtx *context, const Dhcpv6Message *message, size_t length)
+void dhcpv6ClientParseReply(Dhcpv6ClientCtx *context,
+   const Dhcpv6Message *message, size_t length)
 {
    error_t error;
    uint_t i;
+   uint_t k;
    uint_t n;
+   bool_t iaNaOptionFound;
+   systime_t minPreferredLifetime;
+   NetInterface *interface;
+   Dhcpv6StatusCode status;
    Dhcpv6Option *option;
    Dhcpv6Option *serverIdOption;
+   Dhcpv6ClientAddrEntry *entry;
 
-   //Check the length of the DHCPv6 message
-   if(length < sizeof(Dhcpv6Message))
-      return ERROR_INVALID_MESSAGE;
-   //Check the message type
-   if(message->msgType != DHCPV6_MSG_TYPE_REPLY)
-      return ERROR_INVALID_MESSAGE;
+   //Point to the underlying network interface
+   interface = context->settings.interface;
+
    //Discard any received packet that does not match the transaction ID
    if(LOAD24BE(message->transactionId) != context->transactionId)
-      return ERROR_INVALID_MESSAGE;
+      return;
 
    //Get the length of the Options field
    length -= sizeof(Dhcpv6Message);
 
    //Search for the Client Identifier option
    option = dhcpv6GetOption(message->options, length, DHCPV6_OPTION_CLIENTID);
+
    //Discard any received packet that does not include a Client Identifier option
-   if(!option || ntohs(option->length) != context->clientIdLength)
-      return ERROR_INVALID_MESSAGE;
+   if(option == NULL)
+      return;
+   //Check the length of the option
+   if(ntohs(option->length) != context->clientIdLength)
+      return;
    //Check whether the Client Identifier matches our identifier
    if(memcmp(option->value, context->clientId, context->clientIdLength))
-      return ERROR_INVALID_MESSAGE;
+      return;
 
    //Search for the Server Identifier option
    serverIdOption = dhcpv6GetOption(message->options, length, DHCPV6_OPTION_SERVERID);
-   //Discard any received packet that does not include a Server Identifier option
-   if(!serverIdOption || !serverIdOption->length)
-      return ERROR_INVALID_MESSAGE;
-   //Check the length of the server DUID
-   if(ntohs(serverIdOption->length) >= DHCPV6_MAX_DUID_SIZE)
-      return ERROR_INVALID_MESSAGE;
 
-   //The Reply message is received in response to a Solicit message?
+   //Discard any received packet that does not include a Server Identifier option
+   if(serverIdOption == NULL)
+      return;
+   //Check the length of the server DUID
+   if(ntohs(serverIdOption->length) == 0)
+      return;
+   if(ntohs(serverIdOption->length) > DHCPV6_MAX_DUID_SIZE)
+      return;
+
+   //Get the status code returned by the server
+   status = dhcpv6GetStatusCode(message->options, length);
+
+   //Check current state
    if(context->state == DHCPV6_STATE_SOLICIT)
    {
       //A Reply message is not acceptable when rapid commit is disallowed
-      if(!context->rapidCommit)
-         return ERROR_INVALID_MESSAGE;
+      if(!context->settings.rapidCommit)
+         return;
 
       //Search for the Rapid Commit option
       option = dhcpv6GetOption(message->options, length, DHCPV6_OPTION_RAPID_COMMIT);
-      //The client discards any message that does not include a Rapid Commit option
-      if(!option || ntohs(option->length) != 0)
-         return ERROR_INVALID_MESSAGE;
 
-      //Save the length of the DUID
-      context->serverIdLength = ntohs(serverIdOption->length);
-      //Save the server DUID
-      memcpy(context->serverId, serverIdOption->value, context->serverIdLength);
+      //The client discards any message that does not include a Rapid Commit option
+      if(option == NULL || ntohs(option->length) != 0)
+         return;
    }
-   //The Reply message is received in response to a Request or a Renew message?
-   else if(context->state == DHCPV6_STATE_REQUEST || context->state == DHCPV6_STATE_RENEW)
+   else if(context->state == DHCPV6_STATE_REQUEST)
    {
-      //Compare DUID lengths
+      //Check the length of the Server Identifier option
       if(ntohs(serverIdOption->length) != context->serverIdLength)
-         return ERROR_INVALID_MESSAGE;
-      //Unexpected server DUID?
+         return;
+      //The client must discard the Reply message if the contents of the
+      //Server Identifier option do not match the server’s DUID
       if(memcmp(serverIdOption->value, context->serverId, context->serverIdLength))
-         return ERROR_INVALID_MESSAGE;
+         return;
    }
-   //The Reply message is received in response to a Confirm or a Rebind message?
+   else if(context->state == DHCPV6_STATE_CONFIRM)
+   {
+      //When the client receives a NotOnLink status from the server in response
+      //to a Confirm message, the client performs DHCP server solicitation
+      if(status == DHCPV6_STATUS_NOT_ON_LINK)
+      {
+         //Restart the DHCP server discovery process
+         dhcpv6ClientChangeState(context, DHCPV6_STATE_INIT, 0);
+
+         //Exit immediately
+         return;
+      }
+   }
+   else if(context->state == DHCPV6_STATE_RENEW)
+   {
+      //Check the length of the Server Identifier option
+      if(ntohs(serverIdOption->length) != context->serverIdLength)
+         return;
+      //The client must discard the Reply message if the contents of the
+      //Server Identifier option do not match the server’s DUID
+      if(memcmp(serverIdOption->value, context->serverId, context->serverIdLength))
+         return;
+   }
+   else if(context->state == DHCPV6_STATE_REBIND)
+   {
+      //Do not check the server's DUID when the Reply message is
+      //received in response to a Rebind message
+   }
+   else if(context->state == DHCPV6_STATE_RELEASE)
+   {
+      //Check the length of the Server Identifier option
+      if(ntohs(serverIdOption->length) != context->serverIdLength)
+         return;
+      //The client must discard the Reply message if the contents of the
+      //Server Identifier option do not match the server’s DUID
+      if(memcmp(serverIdOption->value, context->serverId, context->serverIdLength))
+         return;
+
+      //When the client receives a valid Reply message in response to a
+      //Release message, the client considers the Release event completed,
+      //regardless of the Status Code option(s) returned by the server
+      context->running = FALSE;
+
+      //Reinitialize state machine
+      dhcpv6ClientChangeState(context, DHCPV6_STATE_INIT, 0);
+
+      //Exit immediately
+      return;
+   }
+   else if(context->state == DHCPV6_STATE_DECLINE)
+   {
+      //Check the length of the Server Identifier option
+      if(ntohs(serverIdOption->length) != context->serverIdLength)
+         return;
+      //The client must discard the Reply message if the contents of the
+      //Server Identifier option do not match the server’s DUID
+      if(memcmp(serverIdOption->value, context->serverId, context->serverIdLength))
+         return;
+
+      //When the client receives a valid Reply message in response to a
+      //Decline message, the client considers the Decline event completed,
+      //regardless of the Status Code option returned by the server
+      dhcpv6ClientChangeState(context, DHCPV6_STATE_INIT, 0);
+
+      //Exit immediately
+      return;
+   }
    else
    {
-      //Do not check the server DUID when the Reply message is
-      //received in response to a Confirm or a Rebind message
+      //Silently discard the Reply message
+      return;
    }
 
-   //Search for the Status Code option
-   error = dhcpv6ParseStatusCodeOption(message->options, length);
-   //Check the status code returned by the server
-   if(error) return error;
+   //Check status code
+   if(status == DHCPV6_STATUS_USE_MULTICAST)
+   {
+      //When the client receives a Reply message with a Status Code option
+      //with the value UseMulticast, the client records the receipt of the
+      //message and sends subsequent messages to the server through the
+      //interface on which the message was received using multicast
+      return;
+   }
+   else if(status == DHCPV6_STATUS_UNSPEC_FAILURE)
+   {
+      //If the client receives a Reply message with a Status Code containing
+      //UnspecFail, the server is indicating that it was unable to process
+      //the message due to an unspecified failure condition
+      return;
+   }
+
+   //This flag will be set if a valid IA_NA option is found
+   iaNaOptionFound = FALSE;
+   //Point to the first option
+   i = 0;
 
    //Loop through DHCPv6 options
-   for(i = 0; i < length; i += sizeof(Dhcpv6Option) + ntohs(option->length))
+   while(i < length)
    {
       //Search for an IA_NA option
       option = dhcpv6GetOption(message->options + i, length - i, DHCPV6_OPTION_IA_NA);
+
       //Unable to find the specified option?
-      if(!option) break;
+      if(option == NULL)
+         break;
 
       //Parse the contents of the IA_NA option
-      error = dhcpv6ParseIaNaOption(context, option);
-      //If an invalid option is received, the client discards
-      //the option and process the rest of the message...
-      if(!error)
+      error = dhcpv6ClientParseIaNaOption(context, option);
+
+      //Check error code
+      if(error == NO_ERROR)
       {
-         //Save the time a which the lease was obtained
-         context->leaseStartTime = osGetSystemTime();
+         //A valid IA_NA option has been found
+         iaNaOptionFound = TRUE;
+      }
+      else if(error == ERROR_NOT_ON_LINK)
+      {
+         //When the client receives a NotOnLink status from the server
+         //in response to a Request, the client can either re-issue the
+         //Request without specifying any addresses or restart the DHCP
+         //server discovery process
+         dhcpv6ClientChangeState(context, DHCPV6_STATE_INIT, 0);
 
-         //Save the length of the DUID
-         context->serverIdLength = ntohs(serverIdOption->length);
-         //Save the server DUID
-         memcpy(context->serverId, serverIdOption->value, context->serverIdLength);
+         //Exit immediately
+         return;
+      }
+      else if(error == ERROR_NO_BINDING)
+      {
+         //When the client receives a Reply message in response to a Renew
+         //or Rebind message, the client sends a Request message if any of
+         //the IAs in the Reply message contains the NoBinding status code
+         dhcpv6ClientChangeState(context, DHCPV6_STATE_REQUEST, 0);
 
-         //Search for DNS Servers option
-         option = dhcpv6GetOption(message->options, length, DHCPV6_OPTION_DNS_SERVERS);
-         //Check whether the message includes a DNS Servers option
-         if(option && !(ntohs(option->length) % sizeof(Ipv6Addr)))
-         {
-            //Get the number of addresses provided in the response
-            n = ntohs(option->length) / sizeof(Ipv6Addr);
-            //Only a limited set of DNS servers is supported
-            n = MIN(n, IPV6_MAX_DNS_SERVERS);
-            //Record DNS server addresses
-            memcpy(context->interface->ipv6Config.dnsServer, option->value, n * sizeof(Ipv6Addr));
-            //Save the number of DNS servers
-            context->interface->ipv6Config.dnsServerCount = n;
-         }
+         //Exit immediately
+         return;
+      }
+      else
+      {
+         //If an invalid option is received, the client discards
+         //the option and process the rest of the message...
+      }
 
-         //The Reply message is received in response to a Solicit message?
-         if(context->state == DHCPV6_STATE_SOLICIT)
-         {
-            //The client terminates the waiting process as soon as a Reply
-            //message with a Rapid Commit option is received
-            context->serverPreference = DHCPV6_MAX_SERVER_PREFERENCE;
-            //The rapid commit procedure is done
-            context->rapidCommitDone = TRUE;
-         }
+      //Jump to the next option
+      i += sizeof(Dhcpv6Option) + ntohs(option->length);
+   }
 
-         //The Reply message was successfully parsed
-         return NO_ERROR;
+   //Check whether the client receives a Reply message in response to a Renew
+   //or Rebind message
+   if(context->state == DHCPV6_STATE_RENEW ||
+      context->state == DHCPV6_STATE_REBIND)
+   {
+      //The client sends a Renew/Rebind if the IA is not in the Reply message
+      if(!iaNaOptionFound)
+         return;
+   }
+
+   //Total number of valid IPv6 in the IA
+   n = 0;
+   //Number of new IPv6 addresses in the IA
+   k = 0;
+   //Minimum preferred lifetime observed in the IA
+   minPreferredLifetime = 0;
+
+   //Loop through the IPv6 addresses recorded by the DHCPv6 client
+   for(i = 0; i < DHCPV6_CLIENT_ADDR_LIST_SIZE; i++)
+   {
+      //Point to the current entry
+      entry = &context->ia.addrList[i];
+
+      //Valid IPv6 address?
+      if(entry->validLifetime > 0)
+      {
+         //Total number of valid IPv6 in the IA
+         n++;
+
+         //Save the minimum preferred lifetime that has been observed so far
+         if(minPreferredLifetime < entry->preferredLifetime)
+            minPreferredLifetime = entry->preferredLifetime;
+
+         //Update lifetimes of the current IPv6 address
+         ipv6AddAddr(interface, &entry->addr, entry->validLifetime,
+            entry->preferredLifetime);
+
+         //New IPv6 address added?
+         if(ipv6GetAddrState(interface, &entry->addr) == IPV6_ADDR_STATE_TENTATIVE)
+            k++;
       }
    }
 
-   //The Reply message contains no valid IA_NA option
-   return ERROR_INVALID_MESSAGE;
+   //Make sure that the IA contains at least one IPv6 address
+   if(n > 0)
+   {
+      //Save the time a which the lease was obtained
+      context->leaseStartTime = osGetSystemTime();
+
+      //Check the value of T1
+      if(context->ia.t1 == 0)
+      {
+         //If T1 is set to 0 by the server, the client may send
+         //a Renew message at the client's discretion
+         if(minPreferredLifetime == DHCPV6_INFINITE_TIME)
+            context->ia.t1 = DHCPV6_INFINITE_TIME;
+         else
+            context->ia.t1 = minPreferredLifetime / 2;
+      }
+
+      //Check the value of T2
+      if(context->ia.t2 == 0)
+      {
+         //If T2 is set to 0 by the server, the client may send
+         //a Rebind message at the client's discretion
+         if(context->ia.t1 == DHCPV6_INFINITE_TIME)
+            context->ia.t2 = DHCPV6_INFINITE_TIME;
+         else
+            context->ia.t2 = context->ia.t1 + context->ia.t1 / 2;
+      }
+
+      //Any addresses added in the IA?
+      if(k > 0)
+      {
+         //Perform Duplicate Address Detection for the new IPv6 addresses
+         dhcpv6ClientChangeState(context, DHCPV6_STATE_DAD, 0);
+      }
+      else
+      {
+         //Switch to the BOUND state
+         dhcpv6ClientChangeState(context, DHCPV6_STATE_BOUND, 0);
+      }
+   }
+   else
+   {
+      //If the client finds no usable addresses in any of the IAs, it may try
+      //another server (perhaps restarting the DHCP server discovery process)
+      dhcpv6ClientChangeState(context, DHCPV6_STATE_INIT, 0);
+   }
 }
 
 
@@ -1603,17 +1954,21 @@ error_t dhcpv6ParseReply(Dhcpv6ClientCtx *context, const Dhcpv6Message *message,
  * @return Error code
  **/
 
-error_t dhcpv6ParseIaNaOption(Dhcpv6ClientCtx *context, const Dhcpv6Option *option)
+error_t dhcpv6ClientParseIaNaOption(Dhcpv6ClientCtx *context,
+   const Dhcpv6Option *option)
 {
-   error_t error;
+   size_t i;
    size_t length;
-   Dhcpv6Option *subOption;
+   NetInterface *interface;
+   Dhcpv6StatusCode status;
    Dhcpv6IaNaOption *iaNaOption;
-   Dhcpv6IaAddrOption *iaAddrOption;
+
+   //Point to the underlying network interface
+   interface = context->settings.interface;
 
    //Make sure the IA_NA option is valid
    if(ntohs(option->length) < sizeof(Dhcpv6IaNaOption))
-      return ERROR_INVALID_OPTION;
+      return ERROR_INVALID_LENGTH;
 
    //Get the parameters associated with the IA_NA
    iaNaOption = (Dhcpv6IaNaOption *) option->value;
@@ -1621,56 +1976,492 @@ error_t dhcpv6ParseIaNaOption(Dhcpv6ClientCtx *context, const Dhcpv6Option *opti
    length = ntohs(option->length) - sizeof(Dhcpv6IaNaOption);
 
    //Check the IA identifier
-   if(ntohl(iaNaOption->iaId) != context->interface->id)
-      return ERROR_INVALID_OPTION;
+   if(ntohl(iaNaOption->iaId) != interface->id)
+      return ERROR_WRONG_IDENTIFIER;
 
    //If a client receives an IA_NA with T1 greater than T2, and both T1
    //and T2 are greater than 0, the client discards the IA_NA option and
    //processes the remainder of the message as though the server had not
    //included the invalid IA_NA option
    if(ntohl(iaNaOption->t1) > ntohl(iaNaOption->t2) && ntohl(iaNaOption->t2) > 0)
-      return ERROR_INVALID_OPTION;
+      return ERROR_INVALID_PARAMETER;
 
    //The client examines the status code in each IA individually
-   error = dhcpv6ParseStatusCodeOption(iaNaOption->options, length);
-   //If the status code is NoAddrsAvail, the client has received
-   //no usable address in the IA
-   if(error) return ERROR_INVALID_OPTION;
+   status = dhcpv6GetStatusCode(iaNaOption->options, length);
 
-   //Get the address assigned to the IA
-   subOption = dhcpv6GetOption(iaNaOption->options, length, DHCPV6_OPTION_IAADDR);
-   //Failed to retrieve the IA Address option?
-   if(!subOption || ntohs(subOption->length) < sizeof(Dhcpv6IaAddrOption))
-      return ERROR_INVALID_OPTION;
+   //Check error code
+   if(status == DHCPV6_STATUS_NO_ADDRS_AVAILABLE)
+   {
+      //The client has received no usable address in the IA
+      return ERROR_NO_ADDRESS;
+   }
+   else if(status == DHCPV6_STATUS_NO_BINDING)
+   {
+      //Client record (binding) unavailable
+      return ERROR_NO_BINDING;
+   }
+   else if(status == DHCPV6_STATUS_NOT_ON_LINK)
+   {
+      //The prefix for the address is not appropriate for the
+      //link to which the client is attached
+      return ERROR_NOT_ON_LINK;
+   }
+   else if(status != DHCPV6_STATUS_SUCCESS)
+   {
+      //Failure, reason unspecified
+      return ERROR_FAILURE;
+   }
+
+   //Record T1 and T2 times
+   context->ia.t1 = ntohl(iaNaOption->t1);
+   context->ia.t2 = ntohl(iaNaOption->t2);
+
+   //Point to the first option
+   i = 0;
+
+   //Loop through IA_NA options
+   while(i < length)
+   {
+      //Search for an IA Address option
+      option = dhcpv6GetOption(iaNaOption->options + i, length - i, DHCPV6_OPTION_IAADDR);
+
+      //Unable to find the specified option?
+      if(option == NULL)
+         break;
+
+      //Parse the contents of the IA Address option
+      dhcpv6ClientParseIaAddrOption(context, option);
+
+      //Jump to the next option
+      i += sizeof(Dhcpv6Option) + ntohs(option->length);
+   }
+
+   //Successful processing
+   return NO_ERROR;
+}
+
+
+/**
+ * @brief Parse IA Address option
+ * @param[in] context Pointer to the DHCPv6 client context
+ * @param[in] option Pointer to the IA Address option to parse
+ * @return Error code
+ **/
+
+error_t dhcpv6ClientParseIaAddrOption(Dhcpv6ClientCtx *context,
+   const Dhcpv6Option *option)
+{
+   size_t length;
+   uint32_t validLifetime;
+   uint32_t preferredLifetime;
+   Dhcpv6StatusCode status;
+   Dhcpv6IaAddrOption *iaAddrOption;
+
+   //Make sure the IA Address option is valid
+   if(ntohs(option->length) < sizeof(Dhcpv6IaAddrOption))
+      return ERROR_INVALID_LENGTH;
 
    //Point to the contents of the IA Address option
-   iaAddrOption = (Dhcpv6IaAddrOption *) subOption->value;
+   iaAddrOption = (Dhcpv6IaAddrOption *) option->value;
    //Compute the length of IA Address Options field
-   length = ntohs(subOption->length) - sizeof(Dhcpv6IaAddrOption);
+   length = ntohs(option->length) - sizeof(Dhcpv6IaAddrOption);
+
+   //Convert lifetimes to host byte order
+   validLifetime = ntohl(iaAddrOption->validLifetime);
+   preferredLifetime = ntohl(iaAddrOption->preferredLifetime);
 
    //A client discards any addresses for which the preferred lifetime
    //is greater than the valid lifetime
-   if(ntohl(iaAddrOption->preferredLifetime) > ntohl(iaAddrOption->validLifetime))
-      return ERROR_INVALID_OPTION;
+   if(preferredLifetime > validLifetime)
+      return ERROR_INVALID_PARAMETER;
 
-   //Record T1 and T2 times
-   context->t1 = ntohl(iaNaOption->t1);
-   context->t2 = ntohl(iaNaOption->t2);
-   //Update preferred and valid lifetimes
-   context->preferredLifetime = ntohl(iaAddrOption->preferredLifetime);
-   context->validLifetime = ntohl(iaAddrOption->validLifetime);
-   //Configure the global IPv6 address
-   context->interface->ipv6Config.globalAddr = iaAddrOption->address;
+   //The client examines the status code in each IA Address
+   status = dhcpv6GetStatusCode(iaAddrOption->options, length);
 
-   //If T1 or T2 is set to 0 by the server, the client may send a Renew
-   //or Rebind message at the client's discretion
-   if(!context->t1)
-      context->t1 = context->preferredLifetime / 2;
-   if(!context->t2)
-      context->t2 = context->t1 + context->t1 / 2;
+   //Any error to report?
+   if(status != DHCPV6_STATUS_SUCCESS)
+      return ERROR_FAILURE;
 
-   //The IA_NA option was successfully parsed
+   //Check the value of the Valid Lifetime
+   if(iaAddrOption->validLifetime > 0)
+   {
+      //Add any new addresses in the IA option to the IA as recorded
+      //by the client
+      dhcpv6ClientAddAddr(context, &iaAddrOption->address,
+         validLifetime, preferredLifetime);
+   }
+   else
+   {
+      //Discard any addresses from the IA, as recorded by the client,
+      //that have a valid lifetime of 0 in the IA Address option
+      dhcpv6ClientRemoveAddr(context, &iaAddrOption->address);
+   }
+
+   //Successful processing
    return NO_ERROR;
+}
+
+
+/**
+ * @brief Add an IPv6 address to the IA
+ * @param[in] context Pointer to the DHCPv6 client context
+ * @param[in] addr IPv6 address to be added
+ * @param[in] validLifetime Valid lifetime, in seconds
+ * @param[in] preferredLifetime Preferred lifetime, in seconds
+ **/
+
+void dhcpv6ClientAddAddr(Dhcpv6ClientCtx *context, const Ipv6Addr *addr,
+   uint32_t validLifetime, uint32_t preferredLifetime)
+{
+   uint_t i;
+   Dhcpv6ClientAddrEntry *entry;
+   Dhcpv6ClientAddrEntry *firstFreeEntry;
+
+   //Keep track of the first free entry
+   firstFreeEntry = NULL;
+
+   //Loop through the IPv6 addresses recorded by the DHCPv6 client
+   for(i = 0; i < DHCPV6_CLIENT_ADDR_LIST_SIZE; i++)
+   {
+      //Point to the current entry
+      entry = &context->ia.addrList[i];
+
+      //Valid IPv6 address?
+      if(entry->validLifetime > 0)
+      {
+         //Check whether the current entry matches the specified address
+         if(ipv6CompAddr(&entry->addr, addr))
+            break;
+      }
+      else
+      {
+         //Keep track of the first free entry
+         if(firstFreeEntry == NULL)
+            firstFreeEntry = entry;
+      }
+   }
+
+   //No matching entry found?
+   if(i >= IPV6_PREFIX_LIST_SIZE)
+      entry = firstFreeEntry;
+
+   //Update the entry if necessary
+   if(entry != NULL)
+   {
+      //Save IPv6 address
+      entry->addr = *addr;
+
+      //Save lifetimes
+      entry->validLifetime = validLifetime;
+      entry->preferredLifetime = preferredLifetime;
+   }
+}
+
+
+/**
+ * @brief Remove an IPv6 address from the IA
+ * @param[in] context Pointer to the DHCPv6 client context
+ * @param[in] addr IPv6 address to be removed
+ **/
+
+void dhcpv6ClientRemoveAddr(Dhcpv6ClientCtx *context, const Ipv6Addr *addr)
+{
+   uint_t i;
+   NetInterface *interface;
+   Dhcpv6ClientAddrEntry *entry;
+
+   //Point to the underlying network interface
+   interface = context->settings.interface;
+
+   //Loop through the IPv6 addresses recorded by the DHCPv6 client
+   for(i = 0; i < DHCPV6_CLIENT_ADDR_LIST_SIZE; i++)
+   {
+      //Point to the current entry
+      entry = &context->ia.addrList[i];
+
+      //Valid IPv6 address?
+      if(entry->validLifetime > 0)
+      {
+         //Check whether the current entry matches the specified address
+         if(ipv6CompAddr(&entry->addr, addr))
+         {
+            //The IPv6 address is no more valid and should be removed from
+            //the list of IPv6 addresses assigned to the interface
+            ipv6RemoveAddr(interface, addr);
+
+            //Remove the IPv6 address from the IA
+            entry->validLifetime = 0;
+         }
+      }
+   }
+}
+
+
+/**
+ * @brief Flush the list of IPv6 addresses from the IA
+ * @param[in] context Pointer to the DHCPv6 client context
+ **/
+
+void dhcpv6ClientFlushAddrList(Dhcpv6ClientCtx *context)
+{
+   uint_t i;
+   NetInterface *interface;
+   Dhcpv6ClientAddrEntry *entry;
+
+   //Point to the underlying network interface
+   interface = context->settings.interface;
+
+   //Loop through the IPv6 addresses recorded by the DHCPv6 client
+   for(i = 0; i < DHCPV6_CLIENT_ADDR_LIST_SIZE; i++)
+   {
+      //Point to the current entry
+      entry = &context->ia.addrList[i];
+
+      //Valid IPv6 address?
+      if(entry->validLifetime > 0)
+      {
+         //The IPv6 address is no more valid and should be removed from
+         //the list of IPv6 addresses assigned to the interface
+         ipv6RemoveAddr(interface, &entry->addr);
+
+         //Remove the IPv6 address from the IA
+         entry->validLifetime = 0;
+      }
+   }
+}
+
+
+/**
+ * @brief Generate client's DUID
+ * @param[in] context Pointer to the DHCPv6 client context
+ * @return Error code
+ **/
+
+error_t dhcpv6ClientGenerateDuid(Dhcpv6ClientCtx *context)
+{
+   NetInterface *interface;
+   Dhcpv6DuidLl *duid;
+
+   //Point to the underlying network interface
+   interface = context->settings.interface;
+
+   //Point to the buffer where to format the client's DUID
+   duid = (Dhcpv6DuidLl *) context->clientId;
+
+#if (ETH_SUPPORT == ENABLED)
+   //Generate a DUID-LL from the MAC address
+   duid->type = HTONS(DHCPV6_DUID_LL);
+   duid->hardwareType = HTONS(DHCPV6_HARDWARE_TYPE_ETH);
+   duid->linkLayerAddr = interface->macAddr;
+#else
+   //Generate a DUID-LL from the EUI-64 identifier
+   duid->type = HTONS(DHCPV6_DUID_LL);
+   duid->hardwareType = HTONS(DHCPV6_HARDWARE_TYPE_EUI64);
+   duid->linkLayerAddr = interface->eui64;
+#endif
+
+   //Length of the newly generated DUID
+   context->clientIdLength = sizeof(Dhcpv6DuidLl);
+
+   //Successful processing
+   return NO_ERROR;
+}
+
+
+/**
+ * @brief Generate client's fully qualified domain name
+ * @param[in] context Pointer to the DHCPv6 client context
+ * @return Error code
+ **/
+
+error_t dhcpv6ClientGenerateFqdn(Dhcpv6ClientCtx *context)
+{
+   NetInterface *interface;
+   Dhcpv6FqdnOption *fqdnOption;
+
+   //Point to the underlying network interface
+   interface = context->settings.interface;
+
+   //Point to the buffer where to format the client's FQDN
+   fqdnOption = (Dhcpv6FqdnOption *) context->clientFqdn;
+
+   //Set flags
+   fqdnOption->mbz = 0;
+   fqdnOption->n = FALSE;
+   fqdnOption->o = FALSE;
+   fqdnOption->s = FALSE;
+
+   //Encode client's FQDN
+   context->clientFqdnLength = dnsEncodeName(interface->hostname,
+      fqdnOption->domainName);
+
+   //Successful processing
+   return NO_ERROR;
+}
+
+
+/**
+ * @brief Generate a link-local address
+ * @param[in] context Pointer to the DHCPv6 client context
+ * @return Error code
+ **/
+
+error_t dhcpv6ClientGenerateLinkLocalAddr(Dhcpv6ClientCtx *context)
+{
+   error_t error;
+   NetInterface *interface;
+   Ipv6Addr addr;
+
+   //Point to the underlying network interface
+   interface = context->settings.interface;
+
+   //Check whether a link-local address has been manually assigned
+   if(interface->ipv6Context.addrList[0].state != IPV6_ADDR_STATE_INVALID &&
+      interface->ipv6Context.addrList[0].permanent)
+   {
+      //Keep using the current link-local address
+      error = NO_ERROR;
+   }
+   else
+   {
+      //A link-local address is formed by combining the well-known
+      //link-local prefix fe80::/10 with the interface identifier
+      addr.w[0] = HTONS(0xFE80);
+      addr.w[1] = HTONS(0x0000);
+      addr.w[2] = HTONS(0x0000);
+      addr.w[3] = HTONS(0x0000);
+      addr.w[4] = interface->eui64.w[0];
+      addr.w[5] = interface->eui64.w[1];
+      addr.w[6] = interface->eui64.w[2];
+      addr.w[7] = interface->eui64.w[3];
+
+#if (NDP_SUPPORT == ENABLED)
+      //Check whether Duplicate Address Detection should be performed
+      if(interface->ndpContext.dupAddrDetectTransmits > 0)
+      {
+         //Use the link-local address as a tentative address
+         error = ipv6SetAddr(interface, 0, &addr, IPV6_ADDR_STATE_TENTATIVE,
+            NDP_INFINITE_LIFETIME, NDP_INFINITE_LIFETIME, FALSE);
+      }
+      else
+#endif
+      {
+         //The use of the link-local address is now unrestricted
+         error = ipv6SetAddr(interface, 0, &addr, IPV6_ADDR_STATE_PREFERRED,
+            NDP_INFINITE_LIFETIME, NDP_INFINITE_LIFETIME, FALSE);
+      }
+   }
+
+   //Return status code
+   return error;
+}
+
+
+/**
+ * @brief Update DHCPv6 FSM state
+ * @param[in] context Pointer to the DHCPv6 client context
+ * @param[in] newState New DHCPv6 state to switch to
+ * @param[in] delay Initial delay
+ **/
+
+void dhcpv6ClientChangeState(Dhcpv6ClientCtx *context,
+   Dhcpv6State newState, systime_t delay)
+{
+   systime_t time;
+
+   //Get current time
+   time = osGetSystemTime();
+
+#if (DHCPV6_TRACE_LEVEL >= TRACE_LEVEL_INFO)
+   //Sanity check
+   if(newState <= DHCPV6_STATE_DECLINE)
+   {
+      //DHCPv6 FSM states
+      static const char_t *stateLabel[] =
+      {
+         "INIT",
+         "SOLICIT",
+         "REQUEST",
+         "INIT-CONFIRM",
+         "CONFIRM",
+         "DAD",
+         "BOUND",
+         "RENEW",
+         "REBIND",
+         "RELEASE",
+         "DECLINE"
+      };
+
+      //Debug message
+      TRACE_INFO("%s: DHCPv6 client %s state\r\n",
+         formatSystemTime(time, NULL), stateLabel[newState]);
+   }
+#endif
+
+   //Set time stamp
+   context->timestamp = time;
+   //Set initial delay
+   context->timeout = delay;
+   //Reset retransmission counter
+   context->retransmitCount = 0;
+   //Switch to the new state
+   context->state = newState;
+
+   //Any registered callback?
+   if(context->settings.stateChangeEvent != NULL)
+   {
+      NetInterface *interface;
+
+      //Point to the underlying network interface
+      interface = context->settings.interface;
+
+      //Release exclusive access
+      osReleaseMutex(&netMutex);
+      //Invoke user callback function
+      context->settings.stateChangeEvent(context, interface, newState);
+      //Get exclusive access
+      osAcquireMutex(&netMutex);
+   }
+}
+
+
+/**
+ * @brief Manage DHCPv6 configuration timeout
+ * @param[in] context Pointer to the DHCPv6 client context
+ **/
+
+void dhcpv6ClientCheckTimeout(Dhcpv6ClientCtx *context)
+{
+   systime_t time;
+   NetInterface *interface;
+
+   //Point to the underlying network interface
+   interface = context->settings.interface;
+
+   //Get current time
+   time = osGetSystemTime();
+
+   //Any registered callback?
+   if(context->settings.timeoutEvent != NULL)
+   {
+      //DHCPv6 configuration timeout?
+      if(timeCompare(time, context->configStartTime + context->settings.timeout) >= 0)
+      {
+         //Ensure the callback function is only called once
+         if(!context->timeoutEventDone)
+         {
+            //Release exclusive access
+            osReleaseMutex(&netMutex);
+            //Invoke user callback function
+            context->settings.timeoutEvent(context, interface);
+            //Get exclusive access
+            osAcquireMutex(&netMutex);
+
+            //Set flag
+            context->timeoutEventDone = TRUE;
+         }
+      }
+   }
 }
 
 
@@ -1680,12 +2471,17 @@ error_t dhcpv6ParseIaNaOption(Dhcpv6ClientCtx *context, const Dhcpv6Option *opti
  * @return The elapsed time expressed in hundredths of a second
  **/
 
-uint16_t dhcpv6ComputeElapsedTime(Dhcpv6ClientCtx *context)
+uint16_t dhcpv6ClientComputeElapsedTime(Dhcpv6ClientCtx *context)
 {
-   systime_t time = 0;
+   systime_t time;
 
-   //The elapsed time must be 0 for the first message
-   if(context->rc > 0)
+   //Check retransmission counter
+   if(context->retransmitCount == 0)
+   {
+      //The elapsed time must be 0 for the first message
+      time = 0;
+   }
+   else
    {
       //Compute the time elapsed since the client sent the
       //first message (in hundredths of a second)
@@ -1693,45 +2489,11 @@ uint16_t dhcpv6ComputeElapsedTime(Dhcpv6ClientCtx *context)
 
       //The value 0xFFFF is used to represent any elapsed time values
       //greater than the largest time value that can be represented
-      if(time > 0xFFFF) time = 0xFFFF;
+      time = MIN(time, 0xFFFF);
    }
 
    //Convert the 16-bit value to network byte order
-   return htons((uint16_t) time);
-}
-
-
-/**
- * @brief Multiplication by a randomization factor
- *
- * Each of the computations of a new RT include a randomization factor
- * RAND, which is a random number chosen with a uniform distribution
- * between -0.1 and +0.1. The randomization factor is included to
- * minimize synchronization of messages transmitted by DHCPv6 clients
- *
- * @param[in] value Input value
- * @return Value resulting from the randomization process
- **/
-
-int32_t dhcpv6Rand(int32_t value)
-{
-   //Use a randomization factor chosen with a uniform
-   //distribution between -0.1 and +0.1
-   return value * dhcpv6RandRange(-100, 100) / 1000;
-}
-
-
-/**
- * @brief Get a random value in the specified range
- * @param[in] min Lower bound
- * @param[in] max Upper bound
- * @return Random value in the specified range
- **/
-
-int32_t dhcpv6RandRange(int32_t min, int32_t max)
-{
-   //Return a random value in the given range
-   return min + netGetRand() % (max - min + 1);
+   return htons(time);
 }
 
 
@@ -1742,20 +2504,44 @@ int32_t dhcpv6RandRange(int32_t min, int32_t max)
 
 void dhcpv6DumpConfig(Dhcpv6ClientCtx *context)
 {
-   //Dump current DHCPv6 configuration
-   TRACE_INFO("\r\nDHCPv6 configuration:\r\n");
-   TRACE_INFO("  IPv6 Global Address = %s\r\n", ipv6AddrToString(&context->interface->ipv6Config.globalAddr, NULL));
-   TRACE_INFO("  Lease Start Time = %s\r\n", formatSystemTime(context->leaseStartTime, NULL));
-   TRACE_INFO("  T1 = %" PRIu32 "s\r\n", context->t1);
-   TRACE_INFO("  T2 = %" PRIu32 "s\r\n", context->t2);
-   TRACE_INFO("  Preferred Lifetime = %" PRIu32 "s\r\n", context->preferredLifetime);
-   TRACE_INFO("  Valid Lifetime = %" PRIu32 "s\r\n", context->validLifetime);
+   uint_t i;
+   NetInterface *interface;
+   Ipv6Context *ipv6Context;
 
-   //Display DNS servers
-   if(context->interface->ipv6Config.dnsServerCount >= 1)
-      TRACE_INFO("  Primary DNS = %s\r\n", ipv6AddrToString(&context->interface->ipv6Config.dnsServer[0], NULL));
-   if(context->interface->ipv6Config.dnsServerCount >= 2)
-      TRACE_INFO("  Secondary DNS = %s\r\n", ipv6AddrToString(&context->interface->ipv6Config.dnsServer[1], NULL));
+   //Point to the underlying network interface
+   interface = context->settings.interface;
+   //Point to the IPv6 context
+   ipv6Context = &interface->ipv6Context;
+
+   //Debug message
+   TRACE_INFO("\r\n");
+   TRACE_INFO("DHCPv6 configuration:\r\n");
+
+   //Lease start time
+   TRACE_INFO("  Lease Start Time = %s\r\n",
+      formatSystemTime(context->leaseStartTime, NULL));
+
+   //T1 parameter
+   TRACE_INFO("  T1 = %" PRIu32 "s\r\n", context->ia.t1);
+   //T2 parameter
+   TRACE_INFO("  T2 = %" PRIu32 "s\r\n", context->ia.t2);
+
+   //Global addresses
+   for(i = 1; i < IPV6_ADDR_LIST_SIZE; i++)
+   {
+      TRACE_INFO("  Global Address %u = %s\r\n", i,
+         ipv6AddrToString(&ipv6Context->addrList[i].addr, NULL));
+   }
+
+   //DNS servers
+   for(i = 0; i < IPV6_DNS_SERVER_LIST_SIZE; i++)
+   {
+      TRACE_INFO("  DNS Server %u = %s\r\n", i + 1,
+         ipv6AddrToString(&ipv6Context->dnsServerList[i], NULL));
+   }
+
+   //Debug message
+   TRACE_INFO("\r\n");
 }
 
 #endif

@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -912,6 +912,9 @@ void ftpServerProcessPasv(FtpServerContext *context,
    //Close the data connection, if any
    ftpServerCloseDataConnection(connection);
 
+   //Get the next passive port number to be used
+   port = ftpServerGetPassivePort(context);
+
    //Start of exception handling block
    do
    {
@@ -932,18 +935,25 @@ void ftpServerProcessPasv(FtpServerContext *context,
       if(error) break;
 
       //Change the size of the TX buffer
-      error = socketSetTxBufferSize(connection->dataSocket, FTP_SERVER_DATA_SOCKET_BUFFER_SIZE);
+      error = socketSetTxBufferSize(connection->dataSocket,
+         FTP_SERVER_DATA_SOCKET_BUFFER_SIZE);
       //Any error to report?
       if(error) break;
 
       //Change the size of the RX buffer
-      error = socketSetRxBufferSize(connection->dataSocket, FTP_SERVER_DATA_SOCKET_BUFFER_SIZE);
+      error = socketSetRxBufferSize(connection->dataSocket,
+         FTP_SERVER_DATA_SOCKET_BUFFER_SIZE);
       //Any error to report?
       if(error) break;
 
       //Associate the socket with the relevant interface
-      error = socketBindToInterface(connection->dataSocket, context->settings.interface);
+      error = socketBindToInterface(connection->dataSocket, connection->interface);
       //Unable to bind the socket to the desired interface?
+      if(error) break;
+
+      //Bind the socket to the passive port number
+      error = socketBind(connection->dataSocket, &IP_ADDR_ANY, port);
+      //Failed to bind the socket to the desired port?
       if(error) break;
 
       //Place the data socket in the listening state
@@ -965,11 +975,6 @@ void ftpServerProcessPasv(FtpServerContext *context,
          break;
       }
 
-      //Retrieve local port number
-      error = socketGetLocalAddr(connection->dataSocket, NULL, &port);
-      //Any error to report?
-      if(error) break;
-
       //End of exception handling block
    } while(0);
 
@@ -988,6 +993,10 @@ void ftpServerProcessPasv(FtpServerContext *context,
    connection->passiveMode = TRUE;
    //Update data connection state
    connection->dataState = FTP_DATA_STATE_LISTEN;
+
+#if defined(FTP_SERVER_PASV_HOOK)
+   FTP_SERVER_PASV_HOOK(connection, ipAddr);
+#endif
 
    //Format response message
    n = sprintf(connection->response, "227 Entering passive mode (");
@@ -1036,6 +1045,9 @@ void ftpServerProcessEpsv(FtpServerContext *context,
    //Close the data connection, if any
    ftpServerCloseDataConnection(connection);
 
+   //Get the next passive port number to be used
+   port = ftpServerGetPassivePort(context);
+
    //Start of exception handling block
    do
    {
@@ -1056,27 +1068,29 @@ void ftpServerProcessEpsv(FtpServerContext *context,
       if(error) break;
 
       //Change the size of the TX buffer
-      error = socketSetTxBufferSize(connection->dataSocket, FTP_SERVER_DATA_SOCKET_BUFFER_SIZE);
+      error = socketSetTxBufferSize(connection->dataSocket,
+         FTP_SERVER_DATA_SOCKET_BUFFER_SIZE);
       //Any error to report?
       if(error) break;
 
       //Change the size of the RX buffer
-      error = socketSetRxBufferSize(connection->dataSocket, FTP_SERVER_DATA_SOCKET_BUFFER_SIZE);
+      error = socketSetRxBufferSize(connection->dataSocket,
+         FTP_SERVER_DATA_SOCKET_BUFFER_SIZE);
       //Any error to report?
       if(error) break;
 
       //Associate the socket with the relevant interface
-      error = socketBindToInterface(connection->dataSocket, context->settings.interface);
+      error = socketBindToInterface(connection->dataSocket, connection->interface);
       //Unable to bind the socket to the desired interface?
+      if(error) break;
+
+      //Bind the socket to the passive port number
+      error = socketBind(connection->dataSocket, &IP_ADDR_ANY, port);
+      //Failed to bind the socket to the desired port?
       if(error) break;
 
       //Place the data socket in the listening state
       error = socketListen(connection->dataSocket, 1);
-      //Any error to report?
-      if(error) break;
-
-      //Retrieve local port number
-      error = socketGetLocalAddr(connection->dataSocket, NULL, &port);
       //Any error to report?
       if(error) break;
 
@@ -1100,8 +1114,8 @@ void ftpServerProcessEpsv(FtpServerContext *context,
    connection->dataState = FTP_DATA_STATE_LISTEN;
 
    //The response code for entering passive mode using an extended address must be 229
-   snprintf(connection->response, FTP_SERVER_MAX_LINE_LEN,
-      "229 Entering extended passive mode (|||%" PRIu16 "|)\r\n", port);
+   sprintf(connection->response, "229 Entering extended passive mode (|||%" PRIu16 "|)\r\n",
+      port);
 }
 
 
@@ -1183,8 +1197,7 @@ void ftpServerProcessPwd(FtpServerContext *context,
    }
 
    //A successful PWD command uses the 257 reply code
-   snprintf(connection->response, FTP_SERVER_MAX_LINE_LEN,
-      "257 \"%s\" is current directory\r\n",
+   sprintf(connection->response, "257 \"%s\" is current directory\r\n",
       ftpServerStripHomeDir(connection, connection->currentDir));
 }
 
@@ -1262,8 +1275,7 @@ void ftpServerProcessCwd(FtpServerContext *context,
    strcpy(connection->currentDir, connection->path);
 
    //A successful PWD command uses the 250 reply code
-   snprintf(connection->response, FTP_SERVER_MAX_LINE_LEN,
-      "250 Directory changed to %s\r\n",
+   sprintf(connection->response, "250 Directory changed to %s\r\n",
       ftpServerStripHomeDir(connection, connection->currentDir));
 }
 
@@ -1310,8 +1322,7 @@ void ftpServerProcessCdup(FtpServerContext *context,
    }
 
    //A successful PWD command uses the 250 reply code
-   snprintf(connection->response, FTP_SERVER_MAX_LINE_LEN,
-      "250 Directory changed to %s\r\n",
+   sprintf(connection->response, "250 Directory changed to %s\r\n",
       ftpServerStripHomeDir(connection, connection->currentDir));
 }
 
@@ -1408,7 +1419,7 @@ void ftpServerProcessList(FtpServerContext *context,
    else
    {
       //Open the data connection
-      error = ftpServerOpenDataConnection(connection);
+      error = ftpServerOpenDataConnection(context, connection);
 
       //Any error to report?
       if(error)
@@ -1510,8 +1521,7 @@ void ftpServerProcessMkd(FtpServerContext *context,
    }
 
    //The specified directory was successfully created
-   snprintf(connection->response, FTP_SERVER_MAX_LINE_LEN,
-      "257 \"%s\" created\r\n",
+   sprintf(connection->response, "257 \"%s\" created\r\n",
       ftpServerStripHomeDir(connection, connection->path));
 }
 
@@ -1751,7 +1761,7 @@ void ftpServerProcessRetr(FtpServerContext *context,
    else
    {
       //Open the data connection
-      error = ftpServerOpenDataConnection(connection);
+      error = ftpServerOpenDataConnection(context, connection);
 
       //Any error to report?
       if(error)
@@ -1862,7 +1872,7 @@ void ftpServerProcessStor(FtpServerContext *context,
    else
    {
       //Open the data connection
-      error = ftpServerOpenDataConnection(connection);
+      error = ftpServerOpenDataConnection(context, connection);
 
       //Any error to report?
       if(error)
@@ -1985,7 +1995,7 @@ void ftpServerProcessAppe(FtpServerContext *context,
    else
    {
       //Open the data connection
-      error = ftpServerOpenDataConnection(connection);
+      error = ftpServerOpenDataConnection(context, connection);
 
       //Any error to report?
       if(error)

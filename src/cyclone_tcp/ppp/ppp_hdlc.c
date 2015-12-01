@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -53,8 +53,9 @@ const NicDriver pppHdlcDriver =
    pppHdlcDriverEnableIrq,
    pppHdlcDriverDisableIrq,
    pppHdlcDriverEventHandler,
-   pppHdlcDriverSetMacFilter,
    pppHdlcDriverSendPacket,
+   pppHdlcDriverSetMulticastFilter,
+   NULL,
    NULL,
    NULL,
    FALSE,
@@ -91,9 +92,7 @@ error_t pppHdlcDriverInit(NetInterface *interface)
    //Initialize UART
    interface->uartDriver->init();
 
-   //Force the TCP/IP stack to check the link state
-   osSetEvent(&interface->nicRxEvent);
-   //PPP HDLC driver is now ready to send
+   //Accept any packets from the upper layer
    osSetEvent(&interface->nicTxEvent);
 
    //Successful initialization
@@ -165,7 +164,7 @@ void pppHdlcDriverEventHandler(NetInterface *interface)
          //Check whether a valid packet has been received
          if(!error && length > 0)
          {
-            TRACE_DEBUG("Trame PPP recue (%u bytes)\r\n", length);
+            TRACE_DEBUG("PPP frame received (%" PRIuSIZE " bytes)...\r\n", length);
             TRACE_DEBUG_ARRAY("  ", interface->ethFrame, length);
             //Pass the packet to the upper layer
             nicProcessPacket(interface, interface->ethFrame, length);
@@ -179,19 +178,6 @@ void pppHdlcDriverEventHandler(NetInterface *interface)
          __enable_irq();
       }
    }
-}
-
-
-/**
- * @brief Configure multicast MAC address filtering
- * @param[in] interface Underlying network interface
- * @return Error code
- **/
-
-error_t pppHdlcDriverSetMacFilter(NetInterface *interface)
-{
-   //Not implemented
-   return NO_ERROR;
 }
 
 
@@ -210,20 +196,30 @@ error_t pppHdlcDriverSendPacket(NetInterface *interface,
    size_t j;
    size_t n;
    uint8_t *p;
+   uint16_t protocol;
    uint32_t accm;
    PppContext *context;
-   PppFrame *frame;
 
    //Point to the PPP context
    context = interface->pppContext;
-   //Point to the beginning of the frame
-   frame = netBufferAt(buffer, offset);
 
-   //Retrieve ACCM
-   if(frame->protocol == HTONS(PPP_PROTOCOL_LCP))
-      accm = PPP_DEFAULT_ACCM;
-   else
+   //Point to the beginning of the frame
+   p = netBufferAt(buffer, offset);
+
+   //Parse the PPP frame header
+   pppParseFrameHeader(p, PPP_FRAME_HEADER_SIZE, &protocol);
+
+   //Check Protocol field
+   if(protocol == PPP_PROTOCOL_IP || protocol == PPP_PROTOCOL_IPV6)
+   {
+      //Use the ACCM value that has been negotiated
       accm = context->peerConfig.accm;
+   }
+   else
+   {
+      //Use default ACCM mapping
+      accm = PPP_DEFAULT_ACCM;
+   }
 
    //Send flag
    pppHdlcDriverWriteTxQueue(context, PPP_FLAG_CHAR);
@@ -244,7 +240,7 @@ error_t pppHdlcDriverSendPacket(NetInterface *interface,
          {
             if(p[j] < PPP_MASK_CHAR)
             {
-                //Check wether the character is flagged
+                //Check whether the character is flagged
                if(accm & (1 << p[j]))
                {
                   pppHdlcDriverWriteTxQueue(context, PPP_ESC_CHAR);
@@ -332,7 +328,7 @@ error_t pppHdlcDriverReceivePacket(NetInterface *interface,
 
       if(c < PPP_MASK_CHAR)
       {
-         //Check wether the character is flagged
+         //Check whether the character is flagged
          if(accm & (1 << c))
          {
             //The extra characters must be removed from the incoming data stream
@@ -370,6 +366,19 @@ error_t pppHdlcDriverReceivePacket(NetInterface *interface,
    *length = n;
 
    //Successful read operation
+   return NO_ERROR;
+}
+
+
+/**
+ * @brief Configure multicast MAC address filtering
+ * @param[in] interface Underlying network interface
+ * @return Error code
+ **/
+
+error_t pppHdlcDriverSetMulticastFilter(NetInterface *interface)
+{
+   //Not implemented
    return NO_ERROR;
 }
 
@@ -429,7 +438,7 @@ error_t pppHdlcDriverReceiveAtCommand(NetInterface *interface, char_t *data, siz
 
    //Point to the first byte of the receive buffer
    k = context->rxReadIndex;
-   //Number of characters pendingin the receive buffer
+   //Number of characters pending in the receive buffer
    n = context->rxBufferLen;
 
    //Loop through received data
@@ -680,8 +689,11 @@ bool_t pppHdlcDriverWriteRxQueue(NetInterface *interface, uint8_t c)
          {
             //Increment frame counter
             context->rxFrameCount++;
+
             //A complete HDLC frame has been received
-            flag = osSetEventFromIsr(&interface->nicRxEvent);
+            interface->nicEvent = TRUE;
+            //Notify the TCP/IP stack of the event
+            flag = osSetEventFromIsr(&netEvent);
          }
       }
    }

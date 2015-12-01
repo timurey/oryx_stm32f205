@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _NDP_H
@@ -42,15 +42,22 @@
 //NDP tick interval
 #ifndef NDP_TICK_INTERVAL
    #define NDP_TICK_INTERVAL 200
-#elif (NDP_TICK_INTERVAL < 100)
+#elif (NDP_TICK_INTERVAL < 10)
    #error NDP_TICK_INTERVAL parameter is not valid
 #endif
 
 //Neighbor cache size
-#ifndef NDP_CACHE_SIZE
-   #define NDP_CACHE_SIZE 8
-#elif (NDP_CACHE_SIZE < 4)
-   #error NDP_CACHE_SIZE parameter is not valid
+#ifndef NDP_NEIGHBOR_CACHE_SIZE
+   #define NDP_NEIGHBOR_CACHE_SIZE 8
+#elif (NDP_NEIGHBOR_CACHE_SIZE < 1)
+   #error NDP_NEIGHBOR_CACHE_SIZE parameter is not valid
+#endif
+
+//Destination cache size
+#ifndef NDP_DEST_CACHE_SIZE
+   #define NDP_DEST_CACHE_SIZE 8
+#elif (NDP_DEST_CACHE_SIZE < 1)
+   #error NDP_DEST_CACHE_SIZE parameter is not valid
 #endif
 
 //Maximum number of packets waiting for address resolution to complete
@@ -60,10 +67,59 @@
    #error NDP_MAX_PENDING_PACKETS parameter is not valid
 #endif
 
-//Delay before transmitting the first Router Solicitation message
+//Maximum time interval between Router Advertisements
+#ifndef NDP_MAX_RTR_ADVERT_INTERVAL
+   #define NDP_MAX_RTR_ADVERT_INTERVAL 600000
+#elif (NDP_MAX_RTR_ADVERT_INTERVAL < 1000)
+   #error NDP_MAX_RTR_ADVERT_INTERVAL parameter is not valid
+#endif
+
+//Maximum time interval between initial Router Advertisements
+#ifndef NDP_MAX_INITIAL_RTR_ADVERT_INTERVAL
+   #define NDP_MAX_INITIAL_RTR_ADVERT_INTERVAL 16000
+#elif (NDP_MAX_INITIAL_RTR_ADVERT_INTERVAL < 1000)
+   #error NDP_MAX_INITIAL_RTR_ADVERT_INTERVAL parameter is not valid
+#endif
+
+//Maximum number of initial Router Advertisements
+#ifndef NDP_MAX_INITIAL_RTR_ADVERTISEMENTS
+   #define NDP_MAX_INITIAL_RTR_ADVERTISEMENTS 3
+#elif (NDP_MAX_INITIAL_RTR_ADVERTISEMENTS < 1)
+   #error NDP_MAX_INITIAL_RTR_ADVERTISEMENTS parameter is not valid
+#endif
+
+//Maximum number of final Router Advertisements
+#ifndef NDP_MAX_FINAL_RTR_ADVERTISEMENTS
+   #define NDP_MAX_FINAL_RTR_ADVERTISEMENTS 3
+#elif (NDP_MAX_FINAL_RTR_ADVERTISEMENTS < 1)
+   #error NDP_MAX_FINAL_RTR_ADVERTISEMENTS parameter is not valid
+#endif
+
+//Minimum delay between Router Advertisements
+#ifndef NDP_MIN_DELAY_BETWEEN_RAS
+   #define NDP_MIN_DELAY_BETWEEN_RAS 3000
+#elif (NDP_MIN_DELAY_BETWEEN_RAS < 1000)
+   #error NDP_MIN_DELAY_BETWEEN_RAS parameter is not valid
+#endif
+
+//Maximum delay for Router Advertisements sent in response to a Router Solicitation
+#ifndef NDP_MAX_RA_DELAY_TIME
+   #define NDP_MAX_RA_DELAY_TIME 500
+#elif (NDP_MAX_RA_DELAY_TIME < 100)
+   #error NDP_MAX_RA_DELAY_TIME parameter is not valid
+#endif
+
+//Minimum delay before transmitting the first Router Solicitation message
+#ifndef NDP_MIN_RTR_SOLICITATION_DELAY
+   #define NDP_MIN_RTR_SOLICITATION_DELAY 0
+#elif (NDP_MIN_RTR_SOLICITATION_DELAY < 0)
+   #error NDP_MIN_RTR_SOLICITATION_DELAY parameter is not valid
+#endif
+
+//Maximum delay before transmitting the first Router Solicitation message
 #ifndef NDP_MAX_RTR_SOLICITATION_DELAY
    #define NDP_MAX_RTR_SOLICITATION_DELAY 1000
-#elif (NDP_MAX_RTR_SOLICITATION_DELAY < 100)
+#elif (NDP_MAX_RTR_SOLICITATION_DELAY < 0)
    #error NDP_MAX_RTR_SOLICITATION_DELAY parameter is not valid
 #endif
 
@@ -76,7 +132,7 @@
 
 //Number of retransmissions for Router Solicitation messages
 #ifndef NDP_MAX_RTR_SOLICITATIONS
-   #define NDP_MAX_RTR_SOLICITATIONS 5
+   #define NDP_MAX_RTR_SOLICITATIONS 3
 #elif (NDP_MAX_RTR_SOLICITATIONS < 1)
    #error NDP_MAX_RTR_SOLICITATIONS parameter is not valid
 #endif
@@ -102,11 +158,18 @@
    #error NDP_DUP_ADDR_DETECT_TRANSMITS parameter is not valid
 #endif
 
-//The time between retransmissions of Neighbor Solicitation messages
-#ifndef NDP_RETRANS_TIMER
-   #define NDP_RETRANS_TIMER 1000
-#elif (NDP_RETRANS_TIMER < 100)
-   #error NDP_RETRANS_TIMER parameter is not valid
+//Delay before sending Neighbor Advertisements if the target address is an anycast address
+#ifndef NDP_MAX_ANYCAST_DELAY_TIME
+   #define NDP_MAX_ANYCAST_DELAY_TIME 1000
+#elif (NDP_MAX_ANYCAST_DELAY_TIME < 100)
+   #error NDP_MAX_ANYCAST_DELAY_TIME parameter is not valid
+#endif
+
+//Maximum number of unsolicited Neighbor Advertisements
+#ifndef NDP_MAX_NEIGHBOR_ADVERTISEMENT
+   #define NDP_MAX_NEIGHBOR_ADVERTISEMENT 3
+#elif (NDP_MAX_NEIGHBOR_ADVERTISEMENT < 0)
+   #error NDP_MAX_NEIGHBOR_ADVERTISEMENT parameter is not valid
 #endif
 
 //The time a neighbor is considered reachable after receiving a reachability confirmation
@@ -114,6 +177,13 @@
    #define NDP_REACHABLE_TIME 30000
 #elif (NDP_REACHABLE_TIME < 1000)
    #error NDP_REACHABLE_TIME parameter is not valid
+#endif
+
+//The time between retransmissions of Neighbor Solicitation messages
+#ifndef NDP_RETRANS_TIMER
+   #define NDP_RETRANS_TIMER 1000
+#elif (NDP_RETRANS_TIMER < 100)
+   #error NDP_RETRANS_TIMER parameter is not valid
 #endif
 
 //Delay before sending the first probe
@@ -125,6 +195,9 @@
 
 //Hop Limit used by NDP messages
 #define NDP_HOP_LIMIT 255
+
+//Infinite lifetime
+#define NDP_INFINITE_LIFETIME 0xFFFFFFFF
 
 
 /**
@@ -138,9 +211,25 @@ typedef enum
    NDP_OPT_PREFIX_INFORMATION     = 3,
    NDP_OPT_REDIRECTED_HEADER      = 4,
    NDP_OPT_MTU                    = 5,
+   NDP_OPT_ROUTE_INFORMATION      = 24,
    NDP_OPT_RECURSIVE_DNS_SERVER   = 25,
-   NDP_OPT_DNS_SEARCH_LIST        = 31
+   NDP_OPT_DNS_SEARCH_LIST        = 31,
+   NDP_OPT_6LOWPAN_CONTEXT        = 34,
+   NDP_OPT_ANY                    = 255
 } NdpOptionType;
+
+
+/**
+ * @brief Router selection preferences
+ **/
+
+typedef enum
+{
+   NDP_ROUTER_SEL_PREFERENCE_MEDIUM   = 0,
+   NDP_ROUTER_SEL_PREFERENCE_HIGH     = 1,
+   NDP_ROUTER_SEL_PREFERENCE_RESERVED = 2,
+   NDP_ROUTER_SEL_PREFERENCE_LOW      = 3
+} NdpRouterSelPreference;
 
 
 /**
@@ -159,8 +248,8 @@ typedef enum
 } NdpState;
 
 
-//Win32 compiler?
-#if defined(_WIN32)
+//CodeWarrior or Win32 compiler?
+#if defined(__CWCC__) || defined(_WIN32)
    #pragma pack(push, 1)
 #endif
 
@@ -192,9 +281,15 @@ typedef __start_packed struct
 #ifdef _BIG_ENDIAN
    uint8_t m : 1;                 //5
    uint8_t o : 1;
-   uint8_t reserved : 6;
+   uint8_t h : 1;
+   uint8_t prf : 2;
+   uint8_t p : 1;
+   uint8_t reserved : 2;
 #else
-   uint8_t reserved : 6;          //5
+   uint8_t reserved : 2;          //5
+   uint8_t p : 1;
+   uint8_t prf : 2;
+   uint8_t h : 1;
    uint8_t o : 1;
    uint8_t m : 1;
 #endif
@@ -248,6 +343,22 @@ typedef __start_packed struct
 
 
 /**
+ * @brief Redirect message
+ **/
+
+typedef __start_packed struct
+{
+   uint8_t type;        //0
+   uint8_t code;        //1
+   uint16_t checksum;   //2-3
+   uint32_t reserved;   //4-7
+   Ipv6Addr targetAddr; //8-23
+   Ipv6Addr destAddr;   //24-39
+   uint8_t options[];   //40
+} __end_packed NdpRedirectMessage;
+
+
+/**
  * @brief Neighbor Discovery option general format
  **/
 
@@ -272,7 +383,7 @@ typedef __start_packed struct
 
 
 /**
- * @brief Prefix Information option
+ * @brief Prefix Information option (PIO)
  **/
 
 typedef __start_packed struct
@@ -297,7 +408,7 @@ typedef __start_packed struct
 
 
 /**
- * @brief Redirected Header option
+ * @brief Redirected Header option (RHO)
  **/
 
 typedef __start_packed struct
@@ -324,7 +435,30 @@ typedef __start_packed struct
 
 
 /**
- * @brief Recursive DNS Server (RDNSS) option
+ * @brief Route Information option (RIO)
+ **/
+
+typedef __start_packed struct
+{
+   uint8_t type;           //0
+   uint8_t length;         //1
+   uint8_t prefixLength;   //2
+#ifdef _BIG_ENDIAN
+   uint8_t reserved1 : 3;  //3
+   uint8_t prf : 2;
+   uint8_t reserved2 : 3;
+#else
+   uint8_t reserved2 : 3;  //3
+   uint8_t prf : 2;
+   uint8_t reserved1 : 3;
+#endif
+   uint32_t routeLifetime; //4-7
+   Ipv6Addr prefix;        //8
+} __end_packed NdpRouteInfoOption;
+
+
+/**
+ * @brief Recursive DNS Server option (RDNSS)
  **/
 
 typedef __start_packed struct
@@ -338,7 +472,7 @@ typedef __start_packed struct
 
 
 /**
- * @brief DNS Search List (DNSSL) option
+ * @brief DNS Search List option (DNSSL)
  **/
 
 typedef __start_packed struct
@@ -351,8 +485,32 @@ typedef __start_packed struct
 } __end_packed NdpDnsslOption;
 
 
-//Win32 compiler?
-#if defined(_WIN32)
+/**
+ * @brief 6LoWPAN Context option (6CO)
+ **/
+
+typedef __start_packed struct
+{
+   uint8_t type;           //0
+   uint8_t length;         //1
+   uint8_t contextLength;  //2
+#ifdef _BIG_ENDIAN
+   uint8_t reserved1 : 3;  //3
+   uint8_t c : 1;
+   uint8_t cid : 4;
+#else
+   uint8_t cid : 4;        //3
+   uint8_t c : 1;
+   uint8_t reserved1 : 3;
+#endif
+   uint16_t reserved2;     //4-5
+   uint16_t validLifetime; //6-7
+   Ipv6Addr contextPrefix; //8
+} __end_packed NdpContextOption;
+
+
+//CodeWarrior or Win32 compiler?
+#if defined(__CWCC__) || defined(_WIN32)
    #pragma pack(pop)
 #endif
 
@@ -363,8 +521,9 @@ typedef __start_packed struct
 
 typedef struct
 {
-   NetBuffer *buffer; //Packet waiting for address resolution
-   size_t offset;     //Offset to the first byte of the packet
+   NetInterface *srcInterface; //<Interface from which the packet has been received
+   NetBuffer *buffer;          ///<Packet waiting for address resolution
+   size_t offset;              ///<Offset to the first byte of the packet
 } NdpQueueItem;
 
 
@@ -377,30 +536,63 @@ typedef struct
    NdpState state;                              ///<Reachability state
    Ipv6Addr ipAddr;                             ///<Unicast IPv6 address
    MacAddr macAddr;                             ///<Link layer address associated with the IPv6 address
+   bool_t isRouter;                             ///<A flag indicating whether the neighbor is a router or a host
    systime_t timestamp;                         ///<Timestamp to manage entry lifetime
    systime_t timeout;                           ///<Timeout value
    uint_t retransmitCount;                      ///<Retransmission counter
    NdpQueueItem queue[NDP_MAX_PENDING_PACKETS]; ///<Packets waiting for address resolution to complete
    uint_t queueSize;                            ///<Number of queued packets
-} NdpCacheEntry;
+} NdpNeighborCacheEntry;
 
+
+/**
+ * @brief Destination cache entry
+ **/
+
+typedef struct
+{
+   Ipv6Addr destAddr;   ///<Destination IPv6 address
+   Ipv6Addr nextHop;    ///<IPv6 address of the next-hop neighbor
+   size_t pathMtu;      ///<Path MTU
+   systime_t timestamp; ///<Timestamp to manage entry lifetime
+} NdpDestCacheEntry;
+
+
+/**
+ * @brief NDP context
+ **/
+
+typedef struct
+{
+   uint32_t reachableTime;                                       ///<The time a node assumes a neighbor is reachable
+   uint32_t retransTimer;                                        ///<The time between retransmissions of NS messages
+   uint_t dupAddrDetectTransmits;                                ///<Maximum number of NS messages sent while performing DAD
+   systime_t minRtrSolicitationDelay;                            ///<Minimum delay before transmitting the first RS message
+   systime_t maxRtrSolicitationDelay;                            ///<Maximum delay before transmitting the first RS message
+   systime_t rtrSolicitationInterval;                            ///<Time interval between retransmissions of RS messages
+   uint_t maxRtrSolicitations;                                   ///<Number of retransmissions for RS messages
+   uint_t rtrSolicitationCount;                                  ///<Retransmission counter for RS messages
+   bool_t rtrAdvReceived;                                        ///<Valid RA message received
+   systime_t timestamp;                                          ///<Timestamp to manage retransmissions
+   systime_t timeout;                                            ///<Timeout value
+   NdpNeighborCacheEntry neighborCache[NDP_NEIGHBOR_CACHE_SIZE]; ///<Neighbor cache
+   NdpDestCacheEntry destCache[NDP_DEST_CACHE_SIZE];             ///<Destination cache
+} NdpContext;
+
+
+//Tick counter to handle periodic operations
+extern systime_t ndpTickCounter;
 
 //NDP related functions
 error_t ndpInit(NetInterface *interface);
-void ndpFlushCache(NetInterface *interface);
-
-NdpCacheEntry *ndpCreateEntry(NetInterface *interface);
-NdpCacheEntry *ndpFindEntry(NetInterface *interface, const Ipv6Addr *ipAddr);
-
-void ndpSendQueuedPackets(NetInterface *interface, NdpCacheEntry *entry);
-void ndpFlushQueuedPackets(NetInterface *interface, NdpCacheEntry *entry);
 
 error_t ndpResolve(NetInterface *interface, const Ipv6Addr *ipAddr, MacAddr *macAddr);
 
-error_t ndpEnqueuePacket(NetInterface *interface,
+error_t ndpEnqueuePacket(NetInterface *srcInterface, NetInterface *destInterface,
    const Ipv6Addr *ipAddr, NetBuffer *buffer, size_t offset);
 
 void ndpTick(NetInterface *interface);
+void ndpLinkChangeEvent(NetInterface *interface);
 
 void ndpProcessRouterAdv(NetInterface *interface, Ipv6PseudoHeader *pseudoHeader,
    const NetBuffer *buffer, size_t offset, uint8_t hopLimit);
@@ -411,21 +603,24 @@ void ndpProcessNeighborSol(NetInterface *interface, Ipv6PseudoHeader *pseudoHead
 void ndpProcessNeighborAdv(NetInterface *interface, Ipv6PseudoHeader *pseudoHeader,
    const NetBuffer *buffer, size_t offset, uint8_t hopLimit);
 
+void ndpProcessRedirect(NetInterface *interface, Ipv6PseudoHeader *pseudoHeader,
+   const NetBuffer *buffer, size_t offset, uint8_t hopLimit);
+
 error_t ndpSendRouterSol(NetInterface *interface);
 
-error_t ndpSendNeighborSol(NetInterface *interface, const Ipv6Addr *targetIpAddr);
+error_t ndpSendNeighborSol(NetInterface *interface,
+   const Ipv6Addr *targetIpAddr, bool_t multicast);
 
 error_t ndpSendNeighborAdv(NetInterface *interface,
    const Ipv6Addr *targetIpAddr, const Ipv6Addr *destIpAddr);
 
-void ndpAddOption(void *message, size_t *messageLength,
-   uint8_t type, const void *value, uint8_t length);
-
-void *ndpGetOption(uint8_t *options, size_t length, uint8_t type);
+error_t ndpSendRedirect(NetInterface *interface, const Ipv6Addr *targetAddr,
+   const NetBuffer *ipPacket, size_t ipPacketOffset);
 
 void ndpDumpRouterSolMessage(const NdpRouterSolMessage *message);
 void ndpDumpRouterAdvMessage(const NdpRouterAdvMessage *message);
 void ndpDumpNeighborSolMessage(const NdpNeighborSolMessage *message);
 void ndpDumpNeighborAdvMessage(const NdpNeighborAdvMessage *message);
+void ndpDumpRedirectMessage(const NdpRedirectMessage *message);
 
 #endif

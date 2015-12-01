@@ -31,7 +31,7 @@
  * - RFC 4039: Rapid Commit Option for the DHCP version 4
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -42,11 +42,27 @@
 #include "dhcp/dhcp_client.h"
 #include "dhcp/dhcp_common.h"
 #include "dhcp/dhcp_debug.h"
+#include "mdns/mdns_responder.h"
 #include "date_time.h"
 #include "debug.h"
 
 //Check TCP/IP stack configuration
-#if (IPV4_SUPPORT == ENABLED)
+#if (IPV4_SUPPORT == ENABLED && DHCP_CLIENT_SUPPORT == ENABLED)
+
+//Tick counter to handle periodic operations
+systime_t dhcpClientTickCounter;
+
+//Requested DHCP options
+const uint8_t dhcpOptionList[] =
+{
+   DHCP_OPT_SUBNET_MASK,
+   DHCP_OPT_ROUTER,
+   DHCP_OPT_DNS_SERVER,
+   DHCP_OPT_INTERFACE_MTU,
+   DHCP_OPT_IP_ADDRESS_LEASE_TIME,
+   DHCP_OPT_RENEWAL_TIME_VALUE,
+   DHCP_OPT_REBINDING_TIME_VALUE
+};
 
 
 /**
@@ -57,11 +73,23 @@
 void dhcpClientGetDefaultSettings(DhcpClientSettings *settings)
 {
    //Use default interface
-   settings->interface = NULL;
-   //No rapid commit
+   settings->interface = netGetDefaultInterface();
+
+   //Use default host name
+   strcpy(settings->hostname, "");
+
+   //Support for quick configuration using rapid commit
    settings->rapidCommit = FALSE;
    //Use the DNS servers provided by the DHCP server
    settings->manualDnsConfig = FALSE;
+   //DHCP configuration timeout
+   settings->timeout = 0;
+   //DHCP configuration timeout event
+   settings->timeoutEvent = NULL;
+   //Link state change event
+   settings->linkChangeEvent = NULL;
+   //FSM state change event
+   settings->stateChangeEvent = NULL;
 }
 
 
@@ -75,98 +103,58 @@ void dhcpClientGetDefaultSettings(DhcpClientSettings *settings)
 error_t dhcpClientInit(DhcpClientCtx *context, const DhcpClientSettings *settings)
 {
    error_t error;
-   OsTask *task;
+   size_t n;
+   NetInterface *interface;
 
    //Debug message
    TRACE_INFO("Initializing DHCP client...\r\n");
 
    //Ensure the parameters are valid
-   if(!context || !settings)
+   if(context == NULL || settings == NULL)
       return ERROR_INVALID_PARAMETER;
+
    //A valid pointer to the interface being configured is required
-   if(!settings->interface)
+   if(settings->interface == NULL)
       return ERROR_INVALID_PARAMETER;
+
+   //Point to the underlying network interface
+   interface = settings->interface;
 
    //Clear the DHCP client context
    memset(context, 0, sizeof(DhcpClientCtx));
+   //Save user settings
+   context->settings = *settings;
 
-   //Save the network interface to configure
-   context->interface = settings->interface;
-   //Check whether rapid commit is allowed
-   context->rapidCommit = settings->rapidCommit;
-   //Force manual DNS configuration?
-   context->manualDnsConfig = settings->manualDnsConfig;
-
-   //Open a UDP socket
-   context->socket = socketOpen(SOCKET_TYPE_DGRAM, SOCKET_IP_PROTO_UDP);
-   //Failed to open socket?
-   if(!context->socket)
-      return ERROR_OPEN_FAILED;
-
-   //Start of exception handling block
-   do
+   //No DHCP host name defined?
+   if(settings->hostname[0] == '\0')
    {
-      //Explicitly associate the socket with the relevant interface
-      error = socketBindToInterface(context->socket, context->interface);
-      //Unable to bind the socket to the desired interface?
-      if(error) break;
+      //Use default host name
+      n = strlen(interface->hostname);
+      //Limit the length of the string
+      n = MIN(n, DHCP_CLIENT_MAX_HOSTNAME_LEN);
 
-      //The client listens for DHCP messages on port 68
-      error = socketBind(context->socket, &IP_ADDR_ANY, DHCP_CLIENT_PORT);
-      //Unable to bind the socket to the desired port?
-      if(error) break;
-
-      //Only accept datagrams with source port number 67
-      error = socketConnect(context->socket, &IP_ADDR_ANY, DHCP_SERVER_PORT);
-      //Any error to report?
-      if(error) break;
-
-      //The socket operates in non-blocking mode
-      error = socketSetTimeout(context->socket, 0);
-      //Any error to report?
-      if(error) break;
-
-      //Initialize event object
-      if(!osCreateEvent(&context->event))
-      {
-         //Failed to create event object
-         error = ERROR_OUT_OF_RESOURCES;
-         //Stop processing
-         break;
-      }
-
-      //Initialize ACK event object
-      if(!osCreateEvent(&context->ackEvent))
-      {
-         //Failed to create event object
-         error = ERROR_OUT_OF_RESOURCES;
-         //Stop processing
-         break;
-      }
-
-      //Start the DHCP client service
-      task = osCreateTask("DHCP Client", dhcpClientTask,
-         context, DHCP_CLIENT_STACK_SIZE, DHCP_CLIENT_PRIORITY);
-
-      //Unable to create the task?
-      if(task == OS_INVALID_HANDLE)
-         error = ERROR_OUT_OF_RESOURCES;
-
-      //End of exception handling block
-   } while(0);
-
-   //Any error to report?
-   if(error)
-   {
-      //Close underlying socket
-      socketClose(context->socket);
-      //Delete event objects
-      osDeleteEvent(&context->event);
-      osDeleteEvent(&context->ackEvent);
+      //Copy host name
+      strncpy(context->settings.hostname, interface->hostname, n);
+      //Properly terminate the string with a NULL character
+      context->settings.hostname[n] = '\0';
    }
 
-   //Return status code
-   return error;
+   //Callback function to be called when a DHCP message is received
+   error = udpAttachRxCallback(interface, DHCP_CLIENT_PORT,
+      dhcpClientProcessMessage, context);
+   //Failed to register callback function?
+   if(error) return error;
+
+   //DHCP client is currently suspended
+   context->running = FALSE;
+   //Initialize state machine
+   context->state = DHCP_STATE_INIT;
+
+   //Attach the DHCP client context to the network interface
+   interface->dhcpClientContext = context;
+
+   //Successful initialization
+   return NO_ERROR;
 }
 
 
@@ -178,34 +166,23 @@ error_t dhcpClientInit(DhcpClientCtx *context, const DhcpClientSettings *setting
 
 error_t dhcpClientStart(DhcpClientCtx *context)
 {
-   //Check parameters
-   if(!context)
+   //Check parameter
+   if(context == NULL)
       return ERROR_INVALID_PARAMETER;
 
    //Debug message
    TRACE_INFO("Starting DHCP client...\r\n");
 
-   //Ignore the request if the DHCP client is already started
-   if(!context->startStop)
-   {
-      //Check whether the task is running
-      if(context->running)
-      {
-         //Reset ACK event before sending the signal
-         osResetEvent(&context->ackEvent);
-         //Activate DHCP client
-         context->startStop = TRUE;
-         //Send a signal to the task in order to abort any blocking operation
-         osSetEvent(&context->event);
-         //Wait for the task to acknowledge our request
-         osWaitForEvent(&context->ackEvent, INFINITE_DELAY);
-      }
-      else
-      {
-         //Activate DHCP client
-         context->startStop = TRUE;
-      }
-   }
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
+
+   //Start DHCP client
+   context->running = TRUE;
+   //Initialize state machine
+   context->state = DHCP_STATE_INIT;
+
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //Successful processing
    return NO_ERROR;
@@ -220,34 +197,23 @@ error_t dhcpClientStart(DhcpClientCtx *context)
 
 error_t dhcpClientStop(DhcpClientCtx *context)
 {
-   //Check parameters
-   if(!context)
+   //Check parameter
+   if(context == NULL)
       return ERROR_INVALID_PARAMETER;
 
    //Debug message
    TRACE_INFO("Stopping DHCP client...\r\n");
 
-   //Ignore the request if the DHCP client is already stopped
-   if(context->startStop)
-   {
-      //Check whether the task is running
-      if(context->running)
-      {
-         //Reset ACK event before sending the signal
-         osResetEvent(&context->ackEvent);
-         //Stop DHCP client
-         context->startStop = FALSE;
-         //Send a signal to the task in order to abort any blocking operation
-         osSetEvent(&context->event);
-         //Wait for the task to acknowledge our request
-         osWaitForEvent(&context->ackEvent, INFINITE_DELAY);
-      }
-      else
-      {
-         //Stop DHCP client
-         context->startStop = FALSE;
-      }
-   }
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
+
+   //Stop DHCP client
+   context->running = FALSE;
+   //Reinitialize state machine
+   context->state = DHCP_STATE_INIT;
+
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //Successful processing
    return NO_ERROR;
@@ -255,128 +221,162 @@ error_t dhcpClientStop(DhcpClientCtx *context)
 
 
 /**
- * @brief DHCP finite state machine
- * @param[in] param Pointer to the DHCP client context
+ * @brief Retrieve current state
+ * @param[in] context Pointer to the DHCP client context
+ * @return Current DHCP client state
  **/
 
-void dhcpClientTask(void *param)
+DhcpState dhcpClientGetState(DhcpClientCtx *context)
 {
-   //Point to the DHCP client context
-   DhcpClientCtx *context = (DhcpClientCtx *) param;
+   DhcpState state;
 
-   //The DHCP client task is running
-   context->running = TRUE;
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
+   //Get current state
+   state = context->state;
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
-   //Initialize DHCP client state
-   if(context->startStop)
-      context->state = DHCP_STATE_INIT;
-   else
-      context->state = DHCP_STATE_STOP;
+   //Return current state
+   return state;
+}
+
+
+/**
+ * @brief DHCP client timer handler
+ *
+ * This routine must be periodically called by the TCP/IP stack to
+ * manage DHCP client operation
+ *
+ * @param[in] context Pointer to the DHCP client context
+ **/
+
+
+void dhcpClientTick(DhcpClientCtx *context)
+{
+   //Make sure the DHCP client has been properly instantiated
+   if(context == NULL)
+      return;
 
    //DHCP client finite state machine
-   while(1)
+   switch(context->state)
    {
-      //Check current state
-      switch(context->state)
-      {
-      //Process STOP state
-      case DHCP_STATE_STOP:
-         //The service is suspended and the client is waiting to be started again
-         dhcpStateStop(context);
-         break;
-      //Process INIT state
-      case DHCP_STATE_INIT:
-         //This is the initialization state, where a client begins the process of
-         //acquiring a lease. It also returns here when a lease ends, or when a
-         //lease negotiation fails
-         dhcpStateInit(context);
-         break;
-      //Process SELECTING state
-      case DHCP_STATE_SELECTING:
-         //The client is waiting to receive DHCPOFFER messages from one or more
-         //DHCP servers, so it can choose one
-         dhcpStateSelecting(context);
-         break;
-      //Process REQUESTING state
-      case DHCP_STATE_REQUESTING:
-         //The client is waiting to hear back from the server to which
-         //it sent its request
-         dhcpStateRequesting(context);
-         break;
-      //Process INIT REBOOT state
-      case DHCP_STATE_INIT_REBOOT:
-         //When a client that already has a valid lease starts up after a
-         //power-down or reboot, it starts here instead of the INIT state
-         dhcpStateInitReboot(context);
-         break;
-      //Process REBOOTING state
-      case DHCP_STATE_REBOOTING:
-         //A client that has rebooted with an assigned address is waiting for
-         //a confirming reply from a server
-         dhcpStateRebooting(context);
-         break;
-      //Process BOUND state
-      case DHCP_STATE_BOUND:
-         //Client has a valid lease and is in its normal operating state
-         dhcpStateBound(context);
-         break;
-      //Process RENEWING state
-      case DHCP_STATE_RENEWING:
-         //Client is trying to renew its lease. It regularly sends DHCPREQUEST messages with
-         //the server that gave it its current lease specified, and waits for a reply
-         dhcpStateRenewing(context);
-         break;
-      //Process REBINDING state
-      case DHCP_STATE_REBINDING:
-         //The client has failed to renew its lease with the server that originally granted it,
-         //and now seeks a lease extension with any server that can hear it. It periodically sends
-         //DHCPREQUEST messages with no server specified until it gets a reply or the lease ends
-         dhcpStateRebinding(context);
-         break;
-      //Invalid state...
-      default:
-         //Switch to the INIT state
-         context->state = DHCP_STATE_INIT;
-         break;
-      }
+   //Process INIT state
+   case DHCP_STATE_INIT:
+      //This is the initialization state, where a client begins the process of
+      //acquiring a lease. It also returns here when a lease ends, or when a
+      //lease negotiation fails
+      dhcpClientStateInit(context);
+      break;
+   //Process SELECTING state
+   case DHCP_STATE_SELECTING:
+      //The client is waiting to receive DHCPOFFER messages from one or more
+      //DHCP servers, so it can choose one
+      dhcpClientStateSelecting(context);
+      break;
+   //Process REQUESTING state
+   case DHCP_STATE_REQUESTING:
+      //The client is waiting to hear back from the server to which
+      //it sent its request
+      dhcpClientStateRequesting(context);
+      break;
+   //Process INIT REBOOT state
+   case DHCP_STATE_INIT_REBOOT:
+      //When a client that already has a valid lease starts up after a
+      //power-down or reboot, it starts here instead of the INIT state
+      dhcpClientStateInitReboot(context);
+      break;
+   //Process REBOOTING state
+   case DHCP_STATE_REBOOTING:
+      //A client that has rebooted with an assigned address is waiting for
+      //a confirming reply from a server
+      dhcpClientStateRebooting(context);
+      break;
+   //Process PROBING state
+   case DHCP_STATE_PROBING:
+      //The client probes the newly received address
+      dhcpClientStateProbing(context);
+      break;
+   //Process BOUND state
+   case DHCP_STATE_BOUND:
+      //Client has a valid lease and is in its normal operating state
+      dhcpClientStateBound(context);
+      break;
+   //Process RENEWING state
+   case DHCP_STATE_RENEWING:
+      //Client is trying to renew its lease. It regularly sends DHCPREQUEST messages with
+      //the server that gave it its current lease specified, and waits for a reply
+      dhcpClientStateRenewing(context);
+      break;
+   //Process REBINDING state
+   case DHCP_STATE_REBINDING:
+      //The client has failed to renew its lease with the server that originally granted it,
+      //and now seeks a lease extension with any server that can hear it. It periodically sends
+      //DHCPREQUEST messages with no server specified until it gets a reply or the lease ends
+      dhcpClientStateRebinding(context);
+      break;
+   //Invalid state...
+   default:
+      //Switch to the INIT state
+      context->state = DHCP_STATE_INIT;
+      break;
    }
 }
 
 
 /**
- * @brief STOP state
- *
- * The service is suspended and the client is waiting to be started again
- *
+ * @brief Callback function for link change event
  * @param[in] context Pointer to the DHCP client context
  **/
 
-void dhcpStateStop(DhcpClientCtx *context)
+void dhcpClientLinkChangeEvent(DhcpClientCtx *context)
 {
-   //Debug message
-   TRACE_INFO("\r\n%s: DHCP client STOP state\r\n",
-      formatSystemTime(osGetSystemTime(), NULL));
+   NetInterface *interface;
 
-   //Wait for the service to be started again...
-   osWaitForEvent(&context->event, INFINITE_DELAY);
+   //Make sure the DHCP client has been properly instantiated
+   if(context == NULL)
+      return;
 
-   //Start request received?
-   if(context->startStop)
+   //Point to the underlying network interface
+   interface = context->settings.interface;
+
+   //Check whether the DHCP client is running
+   if(context->running)
    {
-      //Acknowledge the reception of the start request
-      osSetEvent(&context->ackEvent);
+      //The host address is no longer valid
+      interface->ipv4Context.addr = IPV4_UNSPECIFIED_ADDR;
+      interface->ipv4Context.addrState = IPV4_ADDR_STATE_INVALID;
 
-      //Check whether the host address is already configured
-      if(context->interface->ipv4Config.addr == IPV4_UNSPECIFIED_ADDR)
-      {
-         //Switch to the INIT state
-         context->state = DHCP_STATE_INIT;
-      }
-      else
-      {
-         //Switch to the INIT-REBOOT state
-         context->state = DHCP_STATE_INIT_REBOOT;
-      }
+#if (MDNS_RESPONDER_SUPPORT == ENABLED)
+      //Restart mDNS probing process
+      mdnsResponderStartProbing(interface->mdnsResponderContext);
+#endif
+
+      //Clear subnet mask
+      interface->ipv4Context.subnetMask = IPV4_UNSPECIFIED_ADDR;
+   }
+
+   //Check whether the client already has a valid lease
+   if(context->state >= DHCP_STATE_INIT_REBOOT)
+   {
+      //Switch to the INIT-REBOOT state
+      context->state = DHCP_STATE_INIT_REBOOT;
+   }
+   else
+   {
+      //Switch to the INIT state
+      context->state = DHCP_STATE_INIT;
+   }
+
+   //Any registered callback?
+   if(context->settings.linkChangeEvent != NULL)
+   {
+      //Release exclusive access
+      osReleaseMutex(&netMutex);
+      //Invoke user callback function
+      context->settings.linkChangeEvent(context, interface, interface->linkState);
+      //Get exclusive access
+      osAcquireMutex(&netMutex);
    }
 }
 
@@ -391,39 +391,33 @@ void dhcpStateStop(DhcpClientCtx *context)
  * @param[in] context Pointer to the DHCP client context
  **/
 
-void dhcpStateInit(DhcpClientCtx *context)
+void dhcpClientStateInit(DhcpClientCtx *context)
 {
-   error_t error;
-   SocketEventDesc eventDesc;
+   systime_t delay;
+   NetInterface *interface;
 
-   //Specify the events the application is interested in
-   eventDesc.socket = context->socket;
-   eventDesc.eventMask = SOCKET_EVENT_LINK_UP;
+   //Point to the underlying network interface
+   interface = context->settings.interface;
 
-   //Wait for the link to be up before starting DHCP configuration
-   error = socketPoll(&eventDesc, 1, &context->event, INFINITE_DELAY);
-
-   //Stop request received?
-   if(!context->startStop)
+   //Check whether the DHCP client is running
+   if(context->running)
    {
-      //Acknowledge the reception of the stop request
-      osSetEvent(&context->ackEvent);
-      //Switch to the STOP state
-      context->state = DHCP_STATE_STOP;
-   }
-   //Link is up?
-   else if(!error)
-   {
-      //Debug message
-      TRACE_INFO("\r\n%s: DHCP client INIT state\r\n",
-         formatSystemTime(osGetSystemTime(), NULL));
+      //Wait for the link to be up before starting DHCP configuration
+      if(interface->linkState)
+      {
+         //The client should wait for a random time to
+         //desynchronize the use of DHCP at startup
+         delay = netGetRandRange(0, DHCP_CLIENT_INIT_DELAY);
 
-      //The client should wait for a random time to
-      //desynchronize the use of DHCP at startup
-      osDelayTask(dhcpRandRange(0, DHCP_INIT_DELAY));
+         //Record the time at which the client started
+         //the address acquisition process
+         context->configStartTime = osGetSystemTime();
+         //Clear flag
+         context->timeoutEventDone = FALSE;
 
-      //Switch to the SELECTING state
-      context->state = DHCP_STATE_SELECTING;
+         //Switch to the SELECTING state
+         dhcpClientChangeState(context, DHCP_STATE_SELECTING, delay);
+      }
    }
 }
 
@@ -437,66 +431,56 @@ void dhcpStateInit(DhcpClientCtx *context)
  * @param[in] context Pointer to the DHCP client context
  **/
 
-void dhcpStateSelecting(DhcpClientCtx *context)
+void dhcpClientStateSelecting(DhcpClientCtx *context)
 {
-   error_t error;
-   systime_t timeout;
+   systime_t time;
 
-   //Debug message
-   TRACE_INFO("\r\n%s: DHCP client SELECTING state\r\n",
-      formatSystemTime(osGetSystemTime(), NULL));
+   //Get current time
+   time = osGetSystemTime();
 
-   //Record the time at which the client started the address acquisition process
-   context->configStartTime = osGetSystemTime();
-   //A transaction identifier is used by the client to
-   //match incoming DHCP messages with pending requests
-   context->transactionId = netGetRand();
-   //Initial timeout value
-   timeout = DHCP_DISCOVER_INIT_TIMEOUT;
-
-   //Retransmission loop
-   while(1)
+   //Check current time
+   if(timeCompare(time, context->timestamp + context->timeout) >= 0)
    {
-      //Send a DHCPDISCOVER message
-      dhcpSendDiscover(context);
+      //Check retransmission counter
+      if(context->retransmitCount == 0)
+      {
+         //A transaction identifier is used by the client to
+         //match incoming DHCP messages with pending requests
+         context->transactionId = netGetRand();
 
-      //Wait for a valid DHCPOFFER response
-      error = dhcpWaitForResponse(context, dhcpParseOffer,
-         timeout + dhcpRandRange(-DHCP_RAND_FACTOR, DHCP_RAND_FACTOR));
+         //Send a DHCPDISCOVER message
+         dhcpClientSendDiscover(context);
 
-      //DHCPOFFER message received?
-      if(!error)
-      {
-         //Switch to the REQUESTING state
-         context->state = DHCP_STATE_REQUESTING;
-         //Exit immediately
-         return;
+         //Initial timeout value
+         context->retransmitTimeout = DHCP_CLIENT_DISCOVER_INIT_RT;
       }
-      //Stop request received?
-      else if(error == ERROR_SERVICE_CLOSING)
+      else
       {
-         //Acknowledge the reception of the stop request
-         osSetEvent(&context->ackEvent);
-         //Switch to the STOP state
-         context->state = DHCP_STATE_STOP;
-         //Exit immediately
-         return;
-      }
-      //Link is down?
-      else if(error == ERROR_LINK_DOWN)
-      {
-         //The host address is no longer valid
-         ipv4SetHostAddrEx(context->interface, IPV4_UNSPECIFIED_ADDR, IPV4_ADDR_STATE_INVALID);
-         ipv4SetSubnetMask(context->interface, IPV4_UNSPECIFIED_ADDR);
-         //Restart DHCP configuration
-         context->state = DHCP_STATE_INIT;
-         //Exit immediately
-         return;
+         //Send a DHCPDISCOVER message
+         dhcpClientSendDiscover(context);
+
+         //The timeout value is doubled for each subsequent retransmission
+         context->retransmitTimeout *= 2;
+
+         //Limit the timeout value to a maximum of 64 seconds
+         if(context->retransmitTimeout > DHCP_CLIENT_DISCOVER_MAX_RT)
+            context->retransmitTimeout = DHCP_CLIENT_DISCOVER_MAX_RT;
       }
 
-      //The timeout value is doubled for each subsequent retransmission
-      timeout = MIN(timeout * 2, DHCP_DISCOVER_MAX_TIMEOUT);
+      //Save the time at which the message was sent
+      context->timestamp = time;
+
+      //The timeout value should be randomized by the value of a uniform
+      //number chosen from the range -1 to +1
+      context->timeout = context->retransmitTimeout +
+         netGetRandRange(-DHCP_CLIENT_RAND_FACTOR, DHCP_CLIENT_RAND_FACTOR);
+
+      //Increment retransmission counter
+      context->retransmitCount++;
    }
+
+   //Manage DHCP configuration timeout
+   dhcpClientCheckTimeout(context);
 }
 
 
@@ -509,84 +493,73 @@ void dhcpStateSelecting(DhcpClientCtx *context)
  * @param[in] context Pointer to the DHCP client context
  **/
 
-void dhcpStateRequesting(DhcpClientCtx *context)
+void dhcpClientStateRequesting(DhcpClientCtx *context)
 {
-   error_t error;
-   uint_t i;
-   systime_t timeout;
+   systime_t time;
 
-   //Debug message
-   TRACE_INFO("\r\n%s: DHCP client REQUESTING state\r\n",
-      formatSystemTime(osGetSystemTime(), NULL));
+   //Get current time
+   time = osGetSystemTime();
 
-   //A transaction identifier is used by the client to
-   //match incoming DHCP messages with pending requests
-   context->transactionId = netGetRand();
-   //Initial timeout value
-   timeout = DHCP_REQUEST_INIT_TIMEOUT;
-
-   //Retransmission loop
-   for(i = 0; i < DHCP_REQUEST_MAX_RETRIES; i++)
+   //Check current time
+   if(timeCompare(time, context->timestamp + context->timeout) >= 0)
    {
-      //Send a DHCPREQUEST message
-      dhcpSendRequest(context);
+      //Check retransmission counter
+      if(context->retransmitCount == 0)
+      {
+         //A transaction identifier is used by the client to
+         //match incoming DHCP messages with pending requests
+         context->transactionId = netGetRand();
 
-      //Wait for a valid DHCPACK/DHCPNAK response
-      error = dhcpWaitForResponse(context, dhcpParseAckNak,
-         timeout + dhcpRandRange(-DHCP_RAND_FACTOR, DHCP_RAND_FACTOR));
+         //Send a DHCPREQUEST message
+         dhcpClientSendRequest(context);
 
-      //DHCPACK message received?
-      if(!error)
-      {
-         //Save the time a which the lease was obtained
-         context->leaseStartTime = osGetSystemTime();
-         //Dump current DHCP configuration for debugging purpose
-         dhcpDumpConfig(context);
-         //The client transitions to the BOUND state
-         context->state = DHCP_STATE_BOUND;
-         //Exit immediately
-         return;
-      }
-      //DHCPNAK message received?
-      else if(error == ERROR_NAK_RECEIVED)
-      {
-         //The IPv4 address cannot be used on the link
-         ipv4SetHostAddrEx(context->interface, IPV4_UNSPECIFIED_ADDR, IPV4_ADDR_STATE_INVALID);
-         ipv4SetSubnetMask(context->interface, IPV4_UNSPECIFIED_ADDR);
-         //Restart DHCP configuration
-         context->state = DHCP_STATE_INIT;
-         //Exit immediately
-         return;
-      }
-      //Stop request received?
-      else if(error == ERROR_SERVICE_CLOSING)
-      {
-         //Acknowledge the reception of the stop request
-         osSetEvent(&context->ackEvent);
-         //Switch to the STOP state
-         context->state = DHCP_STATE_STOP;
-         //Exit immediately
-         return;
-      }
-      //Link is down?
-      else if(error == ERROR_LINK_DOWN)
-      {
-         //The host address is no longer valid
-         ipv4SetHostAddrEx(context->interface, IPV4_UNSPECIFIED_ADDR, IPV4_ADDR_STATE_INVALID);
-         ipv4SetSubnetMask(context->interface, IPV4_UNSPECIFIED_ADDR);
-         //Restart DHCP configuration
-         context->state = DHCP_STATE_INIT;
-         //Exit immediately
-         return;
-      }
+         //Initial timeout value
+         context->retransmitTimeout = DHCP_CLIENT_REQUEST_INIT_RT;
 
-      //The timeout value is doubled for each subsequent retransmission
-      timeout = MIN(timeout * 2, DHCP_REQUEST_MAX_TIMEOUT);
+         //Save the time at which the message was sent
+         context->timestamp = time;
+
+         //The timeout value should be randomized by the value of a uniform
+         //number chosen from the range -1 to +1
+         context->timeout = context->retransmitTimeout +
+            netGetRandRange(-DHCP_CLIENT_RAND_FACTOR, DHCP_CLIENT_RAND_FACTOR);
+
+         //Increment retransmission counter
+         context->retransmitCount++;
+      }
+      else if(context->retransmitCount < DHCP_CLIENT_REQUEST_MAX_RC)
+      {
+         //Send a DHCPREQUEST message
+         dhcpClientSendRequest(context);
+
+         //The timeout value is doubled for each subsequent retransmission
+         context->retransmitTimeout *= 2;
+
+         //Limit the timeout value to a maximum of 64 seconds
+         if(context->retransmitTimeout > DHCP_CLIENT_REQUEST_MAX_RT)
+            context->retransmitTimeout = DHCP_CLIENT_REQUEST_MAX_RT;
+
+         //Save the time at which the message was sent
+         context->timestamp = time;
+
+         //The timeout value should be randomized by the value of a uniform
+         //number chosen from the range -1 to +1
+         context->timeout = context->retransmitTimeout +
+            netGetRandRange(-DHCP_CLIENT_RAND_FACTOR, DHCP_CLIENT_RAND_FACTOR);
+
+         //Increment retransmission counter
+         context->retransmitCount++;
+      }
+      else
+      {
+         //If the client does not receive a response within a reasonable
+         //period of time, then it restarts the initialization procedure
+         dhcpClientChangeState(context, DHCP_STATE_INIT, 0);
+      }
    }
 
-   //If the client does not receive a response within a reasonable period
-   //of time, then it restarts the initialization procedure
-   context->state = DHCP_STATE_INIT;
+   //Manage DHCP configuration timeout
+   dhcpClientCheckTimeout(context);
 }
 
 
@@ -599,39 +572,33 @@ void dhcpStateRequesting(DhcpClientCtx *context)
  * @param[in] context Pointer to the DHCP client context
  **/
 
-void dhcpStateInitReboot(DhcpClientCtx *context)
+void dhcpClientStateInitReboot(DhcpClientCtx *context)
 {
-   error_t error;
-   SocketEventDesc eventDesc;
+   systime_t delay;
+   NetInterface *interface;
 
-   //Specify the events the application is interested in
-   eventDesc.socket = context->socket;
-   eventDesc.eventMask = SOCKET_EVENT_LINK_UP;
+   //Point to the underlying network interface
+   interface = context->settings.interface;
 
-   //Wait for the link to be up before sending out the first request
-   error = socketPoll(&eventDesc, 1, &context->event, INFINITE_DELAY);
-
-   //Stop request received?
-   if(!context->startStop)
+   //Check whether the DHCP client is running
+   if(context->running)
    {
-      //Acknowledge the reception of the stop request
-      osSetEvent(&context->ackEvent);
-      //Switch to the STOP state
-      context->state = DHCP_STATE_STOP;
-   }
-   //Link is up?
-   else if(!error)
-   {
-      //Debug message
-      TRACE_INFO("\r\n%s: DHCP client INIT-REBOOT state\r\n",
-         formatSystemTime(osGetSystemTime(), NULL));
+      //Wait for the link to be up before starting DHCP configuration
+      if(interface->linkState)
+      {
+         //The client should wait for a random time to
+         //desynchronize the use of DHCP at startup
+         delay = netGetRandRange(0, DHCP_CLIENT_INIT_DELAY);
 
-      //The client should wait for a random time to
-      //desynchronize the use of DHCP at startup
-      osDelayTask(dhcpRandRange(0, DHCP_INIT_DELAY));
+         //Record the time at which the client started
+         //the address acquisition process
+         context->configStartTime = osGetSystemTime();
+         //Clear flag
+         context->timeoutEventDone = FALSE;
 
-      //Switch to the REBOOTING state
-      context->state = DHCP_STATE_REBOOTING;
+         //Switch to the REBOOTING state
+         dhcpClientChangeState(context, DHCP_STATE_REBOOTING, delay);
+      }
    }
 }
 
@@ -645,87 +612,140 @@ void dhcpStateInitReboot(DhcpClientCtx *context)
  * @param[in] context Pointer to the DHCP client context
  **/
 
-void dhcpStateRebooting(DhcpClientCtx *context)
+void dhcpClientStateRebooting(DhcpClientCtx *context)
 {
-   error_t error;
-   uint_t i;
-   systime_t timeout;
+   systime_t time;
 
-   //Debug message
-   TRACE_INFO("\r\n%s: DHCP client REBOOTING state\r\n",
-      formatSystemTime(osGetSystemTime(), NULL));
+   //Get current time
+   time = osGetSystemTime();
 
-   //Record the time at which the client started the address acquisition process
-   context->configStartTime = osGetSystemTime();
-   //A transaction identifier is used by the client to
-   //match incoming DHCP messages with pending requests
-   context->transactionId = netGetRand();
-   //Initial timeout value
-   timeout = DHCP_REQUEST_INIT_TIMEOUT;
-
-   //Retransmission loop
-   for(i = 0; i < DHCP_REQUEST_MAX_RETRIES; i++)
+   //Check current time
+   if(timeCompare(time, context->timestamp + context->timeout) >= 0)
    {
-      //Send a DHCPREQUEST message
-      dhcpSendRequest(context);
+      //Check retransmission counter
+      if(context->retransmitCount == 0)
+      {
+         //A transaction identifier is used by the client to
+         //match incoming DHCP messages with pending requests
+         context->transactionId = netGetRand();
 
-      //Wait for a valid DHCPACK/DHCPNAK response
-      error = dhcpWaitForResponse(context, dhcpParseAckNak,
-         timeout + dhcpRandRange(-DHCP_RAND_FACTOR, DHCP_RAND_FACTOR));
+         //Send a DHCPREQUEST message
+         dhcpClientSendRequest(context);
 
-      //DHCPACK message received?
-      if(!error)
-      {
-         //Save the time a which the lease was obtained
-         context->leaseStartTime = osGetSystemTime();
-         //Dump current DHCP configuration for debugging purpose
-         dhcpDumpConfig(context);
-         //The client transitions to the BOUND state
-         context->state = DHCP_STATE_BOUND;
-         //Exit immediately
-         return;
-      }
-      //DHCPNAK message received?
-      else if(error == ERROR_NAK_RECEIVED)
-      {
-         //The address is no longer appropriate for the link
-         //to which the client is connected
-         ipv4SetHostAddrEx(context->interface, IPV4_UNSPECIFIED_ADDR, IPV4_ADDR_STATE_INVALID);
-         ipv4SetSubnetMask(context->interface, IPV4_UNSPECIFIED_ADDR);
-         //Restart DHCP configuration
-         context->state = DHCP_STATE_INIT;
-         //Exit immediately
-         return;
-      }
-      //Stop request received?
-      else if(error == ERROR_SERVICE_CLOSING)
-      {
-         //Acknowledge the reception of the stop request
-         osSetEvent(&context->ackEvent);
-         //Switch to the STOP state
-         context->state = DHCP_STATE_STOP;
-         //Exit immediately
-         return;
-      }
-      //Link is down?
-      else if(error == ERROR_LINK_DOWN)
-      {
-         //The host address is no longer valid
-         ipv4SetHostAddrEx(context->interface, IPV4_UNSPECIFIED_ADDR, IPV4_ADDR_STATE_INVALID);
-         ipv4SetSubnetMask(context->interface, IPV4_UNSPECIFIED_ADDR);
-         //Back to INIT-REBOOT state
-         context->state = DHCP_STATE_INIT_REBOOT;
-         //Exit immediately
-         return;
-      }
+         //Initial timeout value
+         context->retransmitTimeout = DHCP_CLIENT_REQUEST_INIT_RT;
 
-      //The timeout value is doubled for each subsequent retransmission
-      timeout = MIN(timeout * 2, DHCP_REQUEST_MAX_TIMEOUT);
+         //Save the time at which the message was sent
+         context->timestamp = time;
+
+         //The timeout value should be randomized by the value of a uniform
+         //number chosen from the range -1 to +1
+         context->timeout = context->retransmitTimeout +
+            netGetRandRange(-DHCP_CLIENT_RAND_FACTOR, DHCP_CLIENT_RAND_FACTOR);
+
+         //Increment retransmission counter
+         context->retransmitCount++;
+      }
+      else if(context->retransmitCount < DHCP_CLIENT_REQUEST_MAX_RC)
+      {
+         //Send a DHCPREQUEST message
+         dhcpClientSendRequest(context);
+
+         //The timeout value is doubled for each subsequent retransmission
+         context->retransmitTimeout *= 2;
+
+         //Limit the timeout value to a maximum of 64 seconds
+         if(context->retransmitTimeout > DHCP_CLIENT_REQUEST_MAX_RT)
+            context->retransmitTimeout = DHCP_CLIENT_REQUEST_MAX_RT;
+
+         //Save the time at which the message was sent
+         context->timestamp = time;
+
+         //The timeout value should be randomized by the value of a uniform
+         //number chosen from the range -1 to +1
+         context->timeout = context->retransmitTimeout +
+            netGetRandRange(-DHCP_CLIENT_RAND_FACTOR, DHCP_CLIENT_RAND_FACTOR);
+
+         //Increment retransmission counter
+         context->retransmitCount++;
+      }
+      else
+      {
+         //If the client does not receive a response within a reasonable
+         //period of time, then it restarts the initialization procedure
+         dhcpClientChangeState(context, DHCP_STATE_INIT, 0);
+      }
    }
 
-   //If the client does not receive a response within a reasonable period
-   //of time, then it restarts the initialization procedure
-   context->state = DHCP_STATE_INIT;
+   //Manage DHCP configuration timeout
+   dhcpClientCheckTimeout(context);
+}
+
+
+/**
+ * @brief PROBING state
+ *
+ * The client probes the newly received address
+ *
+ * @param[in] context Pointer to the DHCP client context
+ **/
+
+void dhcpClientStateProbing(DhcpClientCtx *context)
+{
+   systime_t time;
+   NetInterface *interface;
+
+   //Point to the underlying network interface
+   interface = context->settings.interface;
+   //Get current time
+   time = osGetSystemTime();
+
+   //Check current time
+   if(timeCompare(time, context->timestamp + context->timeout) >= 0)
+   {
+      //The address is already in use?
+      if(interface->ipv4Context.addrConflict)
+      {
+         //If the client detects that the address is already in use, the
+         //client must send a DHCPDECLINE message to the server and
+         //restarts the configuration process
+         dhcpClientSendDecline(context);
+
+         //The client should wait a minimum of ten seconds before
+         //restarting the configuration process to avoid excessive
+         //network traffic in case of looping
+         dhcpClientChangeState(context, DHCP_STATE_INIT, 0);
+      }
+      //Probing is on-going?
+      else if(context->retransmitCount < DHCP_CLIENT_PROBE_NUM)
+      {
+         //Conflict detection is done using ARP probes
+         arpSendRequest(interface, interface->ipv4Context.addr, &MAC_BROADCAST_ADDR);
+
+         //Save the time at which the packet was sent
+         context->timestamp = time;
+         //Delay until repeated probe
+         context->timeout = DHCP_CLIENT_PROBE_DELAY;
+         //Increment retransmission counter
+         context->retransmitCount++;
+      }
+      //Probing is complete?
+      else
+      {
+         //The use of the IPv4 address is now unrestricted
+         interface->ipv4Context.addrState = IPV4_ADDR_STATE_VALID;
+
+#if (MDNS_RESPONDER_SUPPORT == ENABLED)
+         //Restart mDNS probing process
+         mdnsResponderStartProbing(interface->mdnsResponderContext);
+#endif
+         //Dump current DHCP configuration for debugging purpose
+         dhcpDumpConfig(context);
+
+         //The client transitions to the BOUND state
+         dhcpClientChangeState(context, DHCP_STATE_BOUND, 0);
+      }
+   }
 }
 
 
@@ -737,69 +757,33 @@ void dhcpStateRebooting(DhcpClientCtx *context)
  * @param[in] context Pointer to the DHCP client context
  **/
 
-void dhcpStateBound(DhcpClientCtx *context)
+void dhcpClientStateBound(DhcpClientCtx *context)
 {
-   error_t error;
    systime_t t1;
    systime_t time;
-   SocketEventDesc eventDesc;
 
-   //Debug message
-   TRACE_INFO("\r\n%s: DHCP client BOUND state\r\n",
-      formatSystemTime(osGetSystemTime(), NULL));
-
-   //Specify the events the application is interested in
-   eventDesc.socket = context->socket;
-   eventDesc.eventMask = SOCKET_EVENT_LINK_DOWN;
+   //Get current time
+   time = osGetSystemTime();
 
    //A client will never attempt to extend the lifetime
    //of the address when T1 set to 0xFFFFFFFF
-   if(context->t1 == DHCP_INFINITE_TIME)
-   {
-      //Monitor link changes
-      error = socketPoll(&eventDesc, 1, &context->event, INFINITE_DELAY);
-   }
-   else
+   if(context->t1 != DHCP_INFINITE_TIME)
    {
       //Convert T1 to milliseconds
-      t1 = context->t1 * 1000;
-      //Compute the time elapsed since the lease was obtained
-      time = osGetSystemTime() - context->leaseStartTime;
-      //Remaining time until T1 expires
-      time = (t1 > time) ? (t1 - time) : 0;
+      if(context->t1 < (MAX_DELAY / 1000))
+         t1 = context->t1 * 1000;
+      else
+         t1 = MAX_DELAY;
 
-      //Wait for the specified amount of time while tracking link changes
-      error = socketPoll(&eventDesc, 1, &context->event, time);
-   }
+      //Check the time elapsed since the lease was obtained
+      if(timeCompare(time, context->leaseStartTime + t1) >= 0)
+      {
+         //Record the time at which the client started the address renewal process
+         context->configStartTime = time;
 
-   //Stop request received?
-   if(!context->startStop)
-   {
-      //Acknowledge the reception of the stop request
-      osSetEvent(&context->ackEvent);
-      //Switch to the STOP state
-      context->state = DHCP_STATE_STOP;
-   }
-   //Timeout error?
-   else if(error == ERROR_TIMEOUT)
-   {
-      //Enter the RENEWING state
-      context->state = DHCP_STATE_RENEWING;
-   }
-   //Any other failure to report?
-   else if(error)
-   {
-      //Stay in BOUND state
-      context->state = DHCP_STATE_BOUND;
-   }
-   //Link is down?
-   else if(eventDesc.eventFlags & SOCKET_EVENT_LINK_DOWN)
-   {
-      //The host address is no longer valid
-      ipv4SetHostAddrEx(context->interface, IPV4_UNSPECIFIED_ADDR, IPV4_ADDR_STATE_INVALID);
-      ipv4SetSubnetMask(context->interface, IPV4_UNSPECIFIED_ADDR);
-      //Back to INIT-REBOOT state
-      context->state = DHCP_STATE_INIT_REBOOT;
+         //Enter the RENEWING state
+         dhcpClientChangeState(context, DHCP_STATE_RENEWING, 0);
+      }
    }
 }
 
@@ -814,89 +798,57 @@ void dhcpStateBound(DhcpClientCtx *context)
  * @param[in] context Pointer to the DHCP client context
  **/
 
-void dhcpStateRenewing(DhcpClientCtx *context)
+void dhcpClientStateRenewing(DhcpClientCtx *context)
 {
-   error_t error;
+   systime_t t2;
    systime_t time;
-   systime_t timeout;
 
-   //Debug message
-   TRACE_INFO("\r\n%s: DHCP client RENEWING state\r\n",
-      formatSystemTime(osGetSystemTime(), NULL));
-
-   //Record the time at which the client started the address renewal process
-   context->configStartTime = osGetSystemTime();
-   //A transaction identifier is used by the client to
-   //match incoming DHCP messages with pending requests
-   context->transactionId = netGetRand();
    //Get current time
    time = osGetSystemTime();
 
-   //Retransmission loop
-   while((time - context->leaseStartTime) < (context->t2 * 1000))
+   //Check current time
+   if(timeCompare(time, context->timestamp + context->timeout) >= 0)
    {
-      //Compute the remaining time until T2 expires
-      timeout = context->leaseStartTime + (context->t2 * 1000) - time;
-      //The client should wait one-half of the remaining time until T2, down to
-      //a minimum of 60 seconds, before retransmitting the DHCPREQUEST message
-      if(timeout > (2 * DHCP_REQUEST_MIN_INTERVAL)) timeout /= 2;
+      //Convert T2 to milliseconds
+      if(context->t2 < (MAX_DELAY / 1000))
+         t2 = context->t2 * 1000;
+      else
+         t2 = MAX_DELAY;
 
-      //Send a DHCPREQUEST message
-      dhcpSendRequest(context);
-      //Wait for a valid DHCPACK/DHCPNAK response
-      error = dhcpWaitForResponse(context, dhcpParseAckNak, timeout);
+      //Check whether T2 timer has expired
+      if(timeCompare(time, context->leaseStartTime + t2) < 0)
+      {
+         //First DHCPREQUEST message?
+         if(context->retransmitCount == 0)
+         {
+            //A transaction identifier is used by the client to
+            //match incoming DHCP messages with pending requests
+            context->transactionId = netGetRand();
+         }
 
-      //DHCPACK message received?
-      if(!error)
-      {
-         //Save the time a which the lease was obtained
-         context->leaseStartTime = osGetSystemTime();
-         //Dump current DHCP configuration for debugging purpose
-         dhcpDumpConfig(context);
-         //The client transitions to the BOUND state
-         context->state = DHCP_STATE_BOUND;
-         //Exit immediately
-         return;
-      }
-      //DHCPNAK message received?
-      else if(error == ERROR_NAK_RECEIVED)
-      {
-         //The address is no longer valid
-         ipv4SetHostAddrEx(context->interface, IPV4_UNSPECIFIED_ADDR, IPV4_ADDR_STATE_INVALID);
-         ipv4SetSubnetMask(context->interface, IPV4_UNSPECIFIED_ADDR);
-         //Restart DHCP configuration
-         context->state = DHCP_STATE_INIT;
-         //Exit immediately
-         return;
-      }
-      //Stop request received?
-      else if(error == ERROR_SERVICE_CLOSING)
-      {
-         //Acknowledge the reception of the stop request
-         osSetEvent(&context->ackEvent);
-         //Switch to the STOP state
-         context->state = DHCP_STATE_STOP;
-         //Exit immediately
-         return;
-      }
-      //Link is down?
-      else if(error == ERROR_LINK_DOWN)
-      {
-         //The host address is no longer valid
-         ipv4SetHostAddrEx(context->interface, IPV4_UNSPECIFIED_ADDR, IPV4_ADDR_STATE_INVALID);
-         ipv4SetSubnetMask(context->interface, IPV4_UNSPECIFIED_ADDR);
-         //Back to INIT-REBOOT state
-         context->state = DHCP_STATE_INIT_REBOOT;
-         //Exit immediately
-         return;
-      }
+         //Send a DHCPREQUEST message
+         dhcpClientSendRequest(context);
 
-      //Get current time
-      time = osGetSystemTime();
+         //Save the time at which the message was sent
+         context->timestamp = time;
+
+         //Compute the remaining time until T2 expires
+         context->timeout = context->leaseStartTime + t2 - time;
+
+         //The client should wait one-half of the remaining time until T2, down to
+         //a minimum of 60 seconds, before retransmitting the DHCPREQUEST message
+         if(context->timeout > (2 * DHCP_CLIENT_REQUEST_MIN_DELAY))
+            context->timeout /= 2;
+
+         //Increment retransmission counter
+         context->retransmitCount++;
+      }
+      else
+      {
+         //If no DHCPACK arrives before time T2, the client moves to REBINDING
+         dhcpClientChangeState(context, DHCP_STATE_REBINDING, 0);
+      }
    }
-
-   //If no DHCPACK arrives before time T2, the client moves to REBINDING
-   context->state = DHCP_STATE_REBINDING;
 }
 
 
@@ -911,159 +863,74 @@ void dhcpStateRenewing(DhcpClientCtx *context)
  * @param[in] context Pointer to the DHCP client context
  **/
 
-void dhcpStateRebinding(DhcpClientCtx *context)
+void dhcpClientStateRebinding(DhcpClientCtx *context)
 {
-   error_t error;
    systime_t time;
-   systime_t timeout;
+   systime_t leaseTime;
+   NetInterface *interface;
 
-   //Debug message
-   TRACE_INFO("\r\n%s: DHCP client REBINDING state\r\n",
-      formatSystemTime(osGetSystemTime(), NULL));
+   //Point to the underlying network interface
+   interface = context->settings.interface;
 
-   //A transaction identifier is used by the client to
-   //match incoming DHCP messages with pending requests
-   context->transactionId = netGetRand();
    //Get current time
    time = osGetSystemTime();
 
-   //Retransmission loop
-   while((time - context->leaseStartTime) < (context->leaseTime * 1000))
+   //Check current time
+   if(timeCompare(time, context->timestamp + context->timeout) >= 0)
    {
-      //Compute the remaining time until the lease expires
-      timeout = context->leaseStartTime + (context->leaseTime * 1000) - time;
-      //The client should wait one-half of the remaining lease time, down to a
-      //minimum of 60 seconds, before retransmitting the DHCPREQUEST message
-      if(timeout > (2 * DHCP_REQUEST_MIN_INTERVAL)) timeout /= 2;
+      //Convert the lease time to milliseconds
+      if(context->leaseTime < (MAX_DELAY / 1000))
+         leaseTime = context->leaseTime * 1000;
+      else
+         leaseTime = MAX_DELAY;
 
-      //Send a DHCPREQUEST message
-      dhcpSendRequest(context);
-      //Wait for a valid DHCPACK/DHCPNAK response
-      error = dhcpWaitForResponse(context, dhcpParseAckNak, timeout);
+      //Check whether the lease has expired
+      if(timeCompare(time, context->leaseStartTime + leaseTime) < 0)
+      {
+         //First DHCPREQUEST message?
+         if(context->retransmitCount == 0)
+         {
+            //A transaction identifier is used by the client to
+            //match incoming DHCP messages with pending requests
+            context->transactionId = netGetRand();
+         }
 
-      //DHCPACK message received?
-      if(!error)
-      {
-         //Save the time a which the lease was obtained
-         context->leaseStartTime = osGetSystemTime();
-         //Dump current DHCP configuration for debugging purpose
-         dhcpDumpConfig(context);
-         //The client transitions to the BOUND state
-         context->state = DHCP_STATE_BOUND;
-         //Exit immediately
-         return;
-      }
-      //DHCPNAK message received?
-      else if(error == ERROR_NAK_RECEIVED)
-      {
-         //The host address is no longer valid
-         ipv4SetHostAddrEx(context->interface, IPV4_UNSPECIFIED_ADDR, IPV4_ADDR_STATE_INVALID);
-         ipv4SetSubnetMask(context->interface, IPV4_UNSPECIFIED_ADDR);
-         //Restart DHCP configuration
-         context->state = DHCP_STATE_INIT;
-         //Exit immediately
-         return;
-      }
-      //Stop request received?
-      else if(error == ERROR_SERVICE_CLOSING)
-      {
-         //Acknowledge the reception of the stop request
-         osSetEvent(&context->ackEvent);
-         //Switch to the STOP state
-         context->state = DHCP_STATE_STOP;
-         //Exit immediately
-         return;
-      }
-      //Link is down?
-      else if(error == ERROR_LINK_DOWN)
-      {
-         //The host address is no longer valid
-         ipv4SetHostAddrEx(context->interface, IPV4_UNSPECIFIED_ADDR, IPV4_ADDR_STATE_INVALID);
-         ipv4SetSubnetMask(context->interface, IPV4_UNSPECIFIED_ADDR);
-         //Back to INIT-REBOOT state
-         context->state = DHCP_STATE_INIT_REBOOT;
-         //Exit immediately
-         return;
-      }
+         //Send a DHCPREQUEST message
+         dhcpClientSendRequest(context);
 
-      //Get current time
-      time = osGetSystemTime();
+         //Save the time at which the message was sent
+         context->timestamp = time;
+
+         //Compute the remaining time until the lease expires
+         context->timeout = context->leaseStartTime + leaseTime - time;
+
+         //The client should wait one-half of the remaining lease time, down to a
+         //minimum of 60 seconds, before retransmitting the DHCPREQUEST message
+         if(context->timeout > (2 * DHCP_CLIENT_REQUEST_MIN_DELAY))
+            context->timeout /= 2;
+
+         //Increment retransmission counter
+         context->retransmitCount++;
+      }
+      else
+      {
+         //The host address is no longer valid...
+         interface->ipv4Context.addr = IPV4_UNSPECIFIED_ADDR;
+         interface->ipv4Context.addrState = IPV4_ADDR_STATE_INVALID;
+
+         //Clear subnet mask
+         interface->ipv4Context.subnetMask = IPV4_UNSPECIFIED_ADDR;
+
+#if (MDNS_RESPONDER_SUPPORT == ENABLED)
+         //Restart mDNS probing process
+         mdnsResponderStartProbing(interface->mdnsResponderContext);
+#endif
+
+         //If the lease expires before the client receives
+         //a DHCPACK, the client moves to INIT state
+         dhcpClientChangeState(context, DHCP_STATE_INIT, 0);
+      }
    }
-
-   //If the lease expires before the client receives
-   //a DHCPACK, the client moves to INIT state
-   context->state = DHCP_STATE_INIT;
-}
-
-
-/**
- * @brief Wait for a valid response from the DHCP server
- * @param[in] context Pointer to the DHCP client context
- * @param[in] parseResponse Callback function responsible for parsing server responses
- * @param[in] timeout Maximum time period to wait
- * @return Error code
- **/
-
-error_t dhcpWaitForResponse(DhcpClientCtx *context,
-   DhcpParseCallback parseResponse, systime_t timeout)
-{
-   error_t error;
-   size_t length;
-   systime_t startTime;
-   systime_t elapsedTime;
-   SocketEventDesc eventDesc;
-
-   //Save the time at which the client request was sent
-   startTime = osGetSystemTime();
-   //Time elapsed since the client request was sent
-   elapsedTime = 0;
-
-   //Keep listening as long as the retransmission timeout has not been reached
-   while(elapsedTime < timeout)
-   {
-      //Specify the events the application is interested in
-      eventDesc.socket = context->socket;
-      eventDesc.eventMask = SOCKET_EVENT_RX_READY | SOCKET_EVENT_LINK_DOWN;
-
-      //Wait for an event to be fired
-      error = socketPoll(&eventDesc, 1, &context->event, timeout - elapsedTime);
-      //Timeout error or any other exception to report?
-      if(error) return error;
-
-      //Stop request received?
-      if(!context->startStop)
-      {
-         //Notify the caller that the service should stop
-         return ERROR_SERVICE_CLOSING;
-      }
-      //Message received on port 68?
-      else if(eventDesc.eventFlags & SOCKET_EVENT_RX_READY)
-      {
-         //Read the pending message
-         error = socketReceiveFrom(context->socket, NULL, NULL,
-            context->buffer, DHCP_MSG_MAX_SIZE, &length, 0);
-         //Sanity check
-         if(error) return error;
-
-         //Parse the received message
-         error = parseResponse(context, length);
-         //Check whether the received message is valid
-         if(error != ERROR_INVALID_MESSAGE)
-            return error;
-      }
-      //Link is down?
-      else if(eventDesc.eventFlags & SOCKET_EVENT_LINK_DOWN)
-      {
-         //Notify the caller that the link is down
-         return ERROR_LINK_DOWN;
-      }
-
-      //Compute the time elapsed since the client request was sent
-      elapsedTime = osGetSystemTime() - startTime;
-   }
-
-   //The timeout period elapsed
-   return ERROR_TIMEOUT;
 }
 
 
@@ -1073,29 +940,42 @@ error_t dhcpWaitForResponse(DhcpClientCtx *context,
  * @return Error code
  **/
 
-error_t dhcpSendDiscover(DhcpClientCtx *context)
+error_t dhcpClientSendDiscover(DhcpClientCtx *context)
 {
-   size_t n;
+   error_t error;
+   size_t length;
+   size_t offset;
+   NetBuffer *buffer;
+   NetInterface *interface;
    DhcpMessage *message;
-   IpAddr ipAddr;
+   IpAddr destIpAddr;
 
    //DHCP message type
    const uint8_t messageType = DHCP_MESSAGE_TYPE_DISCOVER;
 
-   //Point to buffer where the DHCP message will be formatted
-   message = (DhcpMessage *) context->buffer;
+   //Point to the underlying network interface
+   interface = context->settings.interface;
+
+   //Allocate a memory buffer to hold the DHCP message
+   buffer = udpAllocBuffer(DHCP_MIN_MSG_SIZE, &offset);
+   //Failed to allocate buffer?
+   if(!buffer) return ERROR_OUT_OF_MEMORY;
+
+   //Point to the beginning of the DHCP message
+   message = netBufferAt(buffer, offset);
    //Clear memory buffer contents
-   memset(message, 0, DHCP_MSG_MAX_SIZE);
+   memset(message, 0, DHCP_MIN_MSG_SIZE);
 
    //Format DHCPDISCOVER message
    message->op = DHCP_OPCODE_BOOTREQUEST;
    message->htype = DHCP_HARDWARE_TYPE_ETH;
    message->hlen = sizeof(MacAddr);
    message->xid = htonl(context->transactionId);
-   message->secs = dhcpComputeElapsedTime(context);
+   message->secs = dhcpClientComputeElapsedTime(context);
    message->flags = HTONS(DHCP_FLAG_BROADCAST);
    message->ciaddr = IPV4_UNSPECIFIED_ADDR;
-   message->chaddr = context->interface->macAddr;
+   message->chaddr = interface->macAddr;
+
    //Write magic cookie before setting any option
    message->magicCookie = HTONL(DHCP_MAGIC_COOKIE);
    //Properly terminate options field
@@ -1106,17 +986,18 @@ error_t dhcpSendDiscover(DhcpClientCtx *context)
       &messageType, sizeof(messageType));
 
    //Retrieve the length of the host name
-   n = strlen(context->interface->hostname);
+   length = strlen(context->settings.hostname);
 
-   //The Host Name option specifies the name of the client
-   if(n > 0)
+   //Any host name defined?
+   if(length > 0)
    {
+      //The Host Name option specifies the name of the client
       dhcpAddOption(message, DHCP_OPT_HOST_NAME,
-         context->interface->hostname, n);
+         context->settings.hostname, length);
    }
 
    //Check whether rapid commit is enabled
-   if(context->rapidCommit)
+   if(context->settings.rapidCommit)
    {
       //Include the Rapid Commit option if the client is prepared
       //to perform the DHCPDISCOVER-DHCPACK message exchange
@@ -1124,18 +1005,24 @@ error_t dhcpSendDiscover(DhcpClientCtx *context)
    }
 
    //Set destination IP address
-   ipAddr.length = sizeof(Ipv4Addr);
-   ipAddr.ipv4Addr = IPV4_BROADCAST_ADDR;
+   destIpAddr.length = sizeof(Ipv4Addr);
+   destIpAddr.ipv4Addr = IPV4_BROADCAST_ADDR;
 
    //Debug message
-   TRACE_INFO("\r\n%s: Sending DHCP message (%" PRIuSIZE " bytes)...\r\n",
-      formatSystemTime(osGetSystemTime(), NULL), DHCP_MSG_MIN_SIZE);
+   TRACE_DEBUG("\r\n%s: Sending DHCP message (%" PRIuSIZE " bytes)...\r\n",
+      formatSystemTime(osGetSystemTime(), NULL), DHCP_MIN_MSG_SIZE);
+
    //Dump the contents of the message for debugging purpose
-   dhcpDumpMessage(message, DHCP_MSG_MIN_SIZE);
+   dhcpDumpMessage(message, DHCP_MIN_MSG_SIZE);
 
    //Broadcast DHCPDISCOVER message
-   return socketSendTo(context->socket, &ipAddr,
-      DHCP_SERVER_PORT, message, DHCP_MSG_MIN_SIZE, NULL, 0);
+   error = udpSendDatagramEx(interface, DHCP_CLIENT_PORT, &destIpAddr,
+      DHCP_SERVER_PORT, buffer, offset, IPV4_DEFAULT_TTL);
+
+   //Free previously allocated memory
+   netBufferFree(buffer);
+   //Return status code
+   return error;
 }
 
 
@@ -1145,38 +1032,38 @@ error_t dhcpSendDiscover(DhcpClientCtx *context)
  * @return Error code
  **/
 
-error_t dhcpSendRequest(DhcpClientCtx *context)
+error_t dhcpClientSendRequest(DhcpClientCtx *context)
 {
-   size_t n;
+   error_t error;
+   size_t length;
+   size_t offset;
+   NetBuffer *buffer;
+   NetInterface *interface;
    DhcpMessage *message;
-   IpAddr ipAddr;
+   IpAddr destIpAddr;
 
    //DHCP message type
    const uint8_t messageType = DHCP_MESSAGE_TYPE_REQUEST;
 
-   //Requested DHCP options
-   const uint8_t optionList[] =
-   {
-      DHCP_OPT_SUBNET_MASK,
-      DHCP_OPT_ROUTER,
-      DHCP_OPT_DNS_SERVER,
-      DHCP_OPT_INTERFACE_MTU,
-      DHCP_OPT_IP_ADDRESS_LEASE_TIME,
-      DHCP_OPT_RENEWAL_TIME_VALUE,
-      DHCP_OPT_REBINDING_TIME_VALUE
-   };
+   //Point to the underlying network interface
+   interface = context->settings.interface;
 
-   //Point to buffer where the DHCP message will be formatted
-   message = (DhcpMessage *) context->buffer;
+   //Allocate a memory buffer to hold the DHCP message
+   buffer = udpAllocBuffer(DHCP_MIN_MSG_SIZE, &offset);
+   //Failed to allocate buffer?
+   if(!buffer) return ERROR_OUT_OF_MEMORY;
+
+   //Point to the beginning of the DHCP message
+   message = netBufferAt(buffer, offset);
    //Clear memory buffer contents
-   memset(message, 0, DHCP_MSG_MAX_SIZE);
+   memset(message, 0, DHCP_MIN_MSG_SIZE);
 
    //Format DHCPREQUEST message
    message->op = DHCP_OPCODE_BOOTREQUEST;
    message->htype = DHCP_HARDWARE_TYPE_ETH;
    message->hlen = sizeof(MacAddr);
    message->xid = htonl(context->transactionId);
-   message->secs = dhcpComputeElapsedTime(context);
+   message->secs = dhcpClientComputeElapsedTime(context);
 
    //The client IP address must be included if the client
    //is fully configured and can respond to ARP requests
@@ -1184,7 +1071,7 @@ error_t dhcpSendRequest(DhcpClientCtx *context)
       context->state == DHCP_STATE_REBINDING)
    {
       message->flags = 0;
-      message->ciaddr = context->interface->ipv4Config.addr;
+      message->ciaddr = interface->ipv4Context.addr;
    }
    else
    {
@@ -1193,7 +1080,7 @@ error_t dhcpSendRequest(DhcpClientCtx *context)
    }
 
    //Client hardware address
-   message->chaddr = context->interface->macAddr;
+   message->chaddr = interface->macAddr;
    //Write magic cookie before setting any option
    message->magicCookie = HTONL(DHCP_MAGIC_COOKIE);
    //Properly terminate options field
@@ -1204,13 +1091,14 @@ error_t dhcpSendRequest(DhcpClientCtx *context)
       &messageType, sizeof(messageType));
 
    //Retrieve the length of the host name
-   n = strlen(context->interface->hostname);
+   length = strlen(context->settings.hostname);
 
-   //The Host Name option specifies the name of the client
-   if(n > 0)
+   //Any host name defined?
+   if(length > 0)
    {
+      //The Host Name option specifies the name of the client
       dhcpAddOption(message, DHCP_OPT_HOST_NAME,
-         context->interface->hostname, n);
+         context->settings.hostname, length);
    }
 
    //Server Identifier option
@@ -1230,32 +1118,38 @@ error_t dhcpSendRequest(DhcpClientCtx *context)
 
    //Parameter Request List option
    dhcpAddOption(message, DHCP_OPT_PARAM_REQUEST_LIST,
-      optionList, sizeof(optionList));
+      dhcpOptionList, sizeof(dhcpOptionList));
 
    //IP address is being renewed?
    if(context->state == DHCP_STATE_RENEWING)
    {
       //The client transmits the message directly to the
       //server that initially granted the lease
-      ipAddr.length = sizeof(Ipv4Addr);
-      ipAddr.ipv4Addr = context->serverIpAddr;
+      destIpAddr.length = sizeof(Ipv4Addr);
+      destIpAddr.ipv4Addr = context->serverIpAddr;
    }
    else
    {
       //Broadcast the message
-      ipAddr.length = sizeof(Ipv4Addr);
-      ipAddr.ipv4Addr = IPV4_BROADCAST_ADDR;
+      destIpAddr.length = sizeof(Ipv4Addr);
+      destIpAddr.ipv4Addr = IPV4_BROADCAST_ADDR;
    }
 
    //Debug message
-   TRACE_INFO("\r\n%s: Sending DHCP message (%" PRIuSIZE " bytes)...\r\n",
-      formatSystemTime(osGetSystemTime(), NULL), DHCP_MSG_MIN_SIZE);
+   TRACE_DEBUG("\r\n%s: Sending DHCP message (%" PRIuSIZE " bytes)...\r\n",
+      formatSystemTime(osGetSystemTime(), NULL), DHCP_MIN_MSG_SIZE);
+
    //Dump the contents of the message for debugging purpose
-   dhcpDumpMessage(message, DHCP_MSG_MIN_SIZE);
+   dhcpDumpMessage(message, DHCP_MIN_MSG_SIZE);
 
    //Send DHCPREQUEST message
-   return socketSendTo(context->socket, &ipAddr,
-      DHCP_SERVER_PORT, message, DHCP_MSG_MIN_SIZE, NULL, 0);
+   error = udpSendDatagramEx(interface, DHCP_CLIENT_PORT, &destIpAddr,
+      DHCP_SERVER_PORT, buffer, offset, IPV4_DEFAULT_TTL);
+
+   //Free previously allocated memory
+   netBufferFree(buffer);
+   //Return status code
+   return error;
 }
 
 
@@ -1265,18 +1159,30 @@ error_t dhcpSendRequest(DhcpClientCtx *context)
  * @return Error code
  **/
 
-error_t dhcpSendDecline(DhcpClientCtx *context)
+error_t dhcpClientSendDecline(DhcpClientCtx *context)
 {
+   error_t error;
+   size_t offset;
+   NetBuffer *buffer;
+   NetInterface *interface;
    DhcpMessage *message;
-   IpAddr ipAddr;
+   IpAddr destIpAddr;
 
    //DHCP message type
    const uint8_t messageType = DHCP_MESSAGE_TYPE_DECLINE;
 
-   //Point to buffer where the DHCP message will be formatted
-   message = (DhcpMessage *) context->buffer;
+   //Point to the underlying network interface
+   interface = context->settings.interface;
+
+   //Allocate a memory buffer to hold the DHCP message
+   buffer = udpAllocBuffer(DHCP_MIN_MSG_SIZE, &offset);
+   //Failed to allocate buffer?
+   if(!buffer) return ERROR_OUT_OF_MEMORY;
+
+   //Point to the beginning of the DHCP message
+   message = netBufferAt(buffer, offset);
    //Clear memory buffer contents
-   memset(message, 0, DHCP_MSG_MAX_SIZE);
+   memset(message, 0, DHCP_MIN_MSG_SIZE);
 
    //Format DHCPDECLINE message
    message->op = DHCP_OPCODE_BOOTREQUEST;
@@ -1286,7 +1192,8 @@ error_t dhcpSendDecline(DhcpClientCtx *context)
    message->secs = 0;
    message->flags = 0;
    message->ciaddr = IPV4_UNSPECIFIED_ADDR;
-   message->chaddr = context->interface->macAddr;
+   message->chaddr = interface->macAddr;
+
    //Write magic cookie before setting any option
    message->magicCookie = HTONL(DHCP_MAGIC_COOKIE);
    //Properly terminate options field
@@ -1303,271 +1210,483 @@ error_t dhcpSendDecline(DhcpClientCtx *context)
       &context->requestedIpAddr, sizeof(Ipv4Addr));
 
    //Set destination IP address
-   ipAddr.length = sizeof(Ipv4Addr);
-   ipAddr.ipv4Addr = IPV4_BROADCAST_ADDR;
+   destIpAddr.length = sizeof(Ipv4Addr);
+   destIpAddr.ipv4Addr = IPV4_BROADCAST_ADDR;
 
    //Debug message
-   TRACE_INFO("\r\n%s: Sending DHCP message (%" PRIuSIZE " bytes)...\r\n",
-      formatSystemTime(osGetSystemTime(), NULL), DHCP_MSG_MIN_SIZE);
+   TRACE_DEBUG("\r\n%s: Sending DHCP message (%" PRIuSIZE " bytes)...\r\n",
+      formatSystemTime(osGetSystemTime(), NULL), DHCP_MIN_MSG_SIZE);
+
    //Dump the contents of the message for debugging purpose
-   dhcpDumpMessage(message, DHCP_MSG_MIN_SIZE);
+   dhcpDumpMessage(message, DHCP_MIN_MSG_SIZE);
 
    //Broadcast DHCPDECLINE message
-   return socketSendTo(context->socket, &ipAddr,
-      DHCP_SERVER_PORT, message, DHCP_MSG_MIN_SIZE, NULL, 0);
+   error = udpSendDatagramEx(interface, DHCP_CLIENT_PORT, &destIpAddr,
+      DHCP_SERVER_PORT, buffer, offset, IPV4_DEFAULT_TTL);
+
+   //Free previously allocated memory
+   netBufferFree(buffer);
+   //Return status code
+   return error;
+}
+
+
+/**
+ * @brief Process incoming DHCP message
+ * @param[in] interface Underlying network interface
+ * @param[in] pseudoHeader UDP pseudo header
+ * @param[in] udpHeader UDP header
+ * @param[in] buffer Multi-part buffer containing the incoming DHCP message
+ * @param[in] offset Offset to the first byte of the DHCP message
+ * @param[in] params Pointer to the DHCP client context
+ **/
+
+void dhcpClientProcessMessage(NetInterface *interface,
+   const IpPseudoHeader *pseudoHeader, const UdpHeader *udpHeader,
+   const NetBuffer *buffer, size_t offset, void *params)
+{
+   size_t length;
+   DhcpClientCtx *context;
+   DhcpMessage *message;
+
+   //Point to the DHCP client context
+   context = (DhcpClientCtx *) params;
+
+   //Retrieve the length of the DHCP message
+   length = netBufferGetLength(buffer) - offset;
+
+   //Make sure the DHCP message is valid
+   if(length < sizeof(DhcpMessage))
+      return;
+   if(length > DHCP_MAX_MSG_SIZE)
+      return;
+
+   //Point to the beginning of the DHCP message
+   message = netBufferAt(buffer, offset);
+   //Sanity check
+   if(!message) return;
+
+   //Debug message
+   TRACE_DEBUG("\r\n%s: DHCP message received (%" PRIuSIZE " bytes)...\r\n",
+      formatSystemTime(osGetSystemTime(), NULL), length);
+
+   //Dump the contents of the message for debugging purpose
+   dhcpDumpMessage(message, length);
+
+   //Check current state
+   switch(context->state)
+   {
+   //SELECTING state?
+   case DHCP_STATE_SELECTING:
+      //Parse DHCPOFFER message
+      dhcpClientParseOffer(context, message, length);
+      break;
+   //REQUESTING, REBOOTING, RENEWING or REBINDING state?
+   case DHCP_STATE_REQUESTING:
+   case DHCP_STATE_REBOOTING:
+   case DHCP_STATE_RENEWING:
+   case DHCP_STATE_REBINDING:
+      //Parse DHCPACK or DHCPNAK message
+      dhcpClientParseAckNak(context, message, length);
+      break;
+   //Any other state?
+   default:
+      //Drop incoming message
+      break;
+   }
 }
 
 
 /**
  * @brief Parse DHCPOFFER message
  * @param[in] context Pointer to the DHCP client context
+ * @param[in] message Pointer to the incoming DHCP message
  * @param[in] length Length of the incoming message to parse
- * @return Error code
  **/
 
-error_t dhcpParseOffer(DhcpClientCtx *context, size_t length)
+void dhcpClientParseOffer(DhcpClientCtx *context,
+   const DhcpMessage *message, size_t length)
 {
-   DhcpMessage *message;
    DhcpOption *option;
+   NetInterface *interface;
 
-   //Point to the DHCP message to parse
-   message = (DhcpMessage *) context->buffer;
+   //Point to the underlying network interface
+   interface = context->settings.interface;
 
-   //Debug message
-   TRACE_INFO("\r\n%s: DHCP message received (%" PRIuSIZE " bytes)...\r\n",
-      formatSystemTime(osGetSystemTime(), NULL), length);
-   //Dump the contents of the message for debugging purpose
-   dhcpDumpMessage(message, length);
-
-   //Make sure the DHCP message is valid
-   if(length < sizeof(DhcpMessage))
-      return ERROR_INVALID_MESSAGE;
    //The DHCP server shall respond with a BOOTREPLY opcode
    if(message->op != DHCP_OPCODE_BOOTREPLY)
-      return ERROR_INVALID_MESSAGE;
+      return;
    //Enforce hardware type
    if(message->htype != DHCP_HARDWARE_TYPE_ETH)
-      return ERROR_INVALID_MESSAGE;
+      return;
    //Check the length of the hardware address
    if(message->hlen != sizeof(MacAddr))
-      return ERROR_INVALID_MESSAGE;
+      return;
    //Discard any received packet that does not match the transaction ID
    if(ntohl(message->xid) != context->transactionId)
-      return ERROR_INVALID_MESSAGE;
+      return;
    //Make sure the IP address offered to the client is valid
    if(message->yiaddr == IPV4_UNSPECIFIED_ADDR)
-      return ERROR_INVALID_MESSAGE;
+      return;
    //Check MAC address
-   if(!macCompAddr(&message->chaddr, &context->interface->macAddr))
-      return ERROR_INVALID_MESSAGE;
+   if(!macCompAddr(&message->chaddr, &interface->macAddr))
+      return;
    //Check magic cookie
    if(message->magicCookie != HTONL(DHCP_MAGIC_COOKIE))
-      return ERROR_INVALID_MESSAGE;
+      return;
 
    //Retrieve DHCP Message Type option
    option = dhcpGetOption(message, length, DHCP_OPT_DHCP_MESSAGE_TYPE);
 
    //Failed to retrieve specified option?
    if(!option || option->length != 1)
-      return ERROR_INVALID_MESSAGE;
+      return;
    //Check message type
    if(option->value[0] != DHCP_MESSAGE_TYPE_OFFER)
-      return ERROR_INVALID_MESSAGE;
+      return;
 
    //Retrieve Server Identifier option
    option = dhcpGetOption(message, length, DHCP_OPT_SERVER_IDENTIFIER);
 
    //Failed to retrieve specified option?
    if(!option || option->length != 4)
-      return ERROR_INVALID_MESSAGE;
+      return;
+
    //Record the DHCP server IP address
    ipv4CopyAddr(&context->serverIpAddr, option->value);
 
    //Record the IP address offered to the client
    context->requestedIpAddr = message->yiaddr;
 
-   //The DHCPOFFER message was successfully parsed
-   return NO_ERROR;
+   //Switch to the REQUESTING state
+   dhcpClientChangeState(context, DHCP_STATE_REQUESTING, 0);
 }
 
 
 /**
  * @brief Parse DHCPACK or DHCPNAK message
  * @param[in] context Pointer to the DHCP client context
+ * @param[in] message Pointer to the incoming DHCP message
  * @param[in] length Length of the incoming message to parse
  * @return Error code
  **/
 
-error_t dhcpParseAckNak(DhcpClientCtx *context, size_t length)
+void dhcpClientParseAckNak(DhcpClientCtx *context,
+   const DhcpMessage *message, size_t length)
 {
+   uint_t i;
    uint_t n;
-   DhcpMessage *message;
    DhcpOption *option;
+   NetInterface *interface;
 
-   //Point to the DHCP message to parse
-   message = (DhcpMessage *) context->buffer;
+   //Point to the underlying network interface
+   interface = context->settings.interface;
 
-   //Debug message
-   TRACE_INFO("\r\n%s: DHCP message received (%" PRIuSIZE " bytes)...\r\n",
-      formatSystemTime(osGetSystemTime(), NULL), length);
-   //Dump the contents of the message for debugging purpose
-   dhcpDumpMessage(message, length);
-
-   //Make sure the DHCP message is valid
-   if(length < sizeof(DhcpMessage))
-      return ERROR_INVALID_MESSAGE;
    //The DHCP server shall respond with a BOOTREPLY opcode
    if(message->op != DHCP_OPCODE_BOOTREPLY)
-      return ERROR_INVALID_MESSAGE;
+      return;
    //Enforce hardware type
    if(message->htype != DHCP_HARDWARE_TYPE_ETH)
-      return ERROR_INVALID_MESSAGE;
+      return;
    //Check the length of the hardware address
    if(message->hlen != sizeof(MacAddr))
-      return ERROR_INVALID_MESSAGE;
+      return;
    //Discard any received packet that does not match the transaction ID
    if(ntohl(message->xid) != context->transactionId)
-      return ERROR_INVALID_MESSAGE;
+      return;
    //Check MAC address
-   if(!macCompAddr(&message->chaddr, &context->interface->macAddr))
-      return ERROR_INVALID_MESSAGE;
+   if(!macCompAddr(&message->chaddr, &interface->macAddr))
+      return;
    //Check magic cookie
    if(message->magicCookie != HTONL(DHCP_MAGIC_COOKIE))
-      return ERROR_INVALID_MESSAGE;
+      return;
 
    //Retrieve DHCP Message Type option
    option = dhcpGetOption(message, length, DHCP_OPT_DHCP_MESSAGE_TYPE);
 
    //Failed to retrieve specified option?
    if(!option || option->length != 1)
-      return ERROR_INVALID_MESSAGE;
+      return;
 
    //Check message type (DHCPACK or DHCPNAK)
    if(option->value[0] == DHCP_MESSAGE_TYPE_NAK)
-      return ERROR_NAK_RECEIVED;
-   else if(option->value[0] != DHCP_MESSAGE_TYPE_ACK)
-      return ERROR_INVALID_MESSAGE;
-
-   //Retrieve Server Identifier option
-   option = dhcpGetOption(message, length, DHCP_OPT_SERVER_IDENTIFIER);
-
-   //Failed to retrieve specified option?
-   if(!option || option->length != 4)
-      return ERROR_INVALID_MESSAGE;
-   //Unexpected server identifier?
-   if(!ipv4CompAddr(option->value, &context->serverIpAddr))
-      return ERROR_INVALID_MESSAGE;
-
-   //Retrieve IP Address Lease Time option
-   option = dhcpGetOption(message, length, DHCP_OPT_IP_ADDRESS_LEASE_TIME);
-
-   //Failed to retrieve specified option?
-   if(!option  || option->length != 4)
-      return ERROR_INVALID_MESSAGE;
-
-   //Record the lease time
-   context->leaseTime = LOAD32BE(option->value);
-
-   //Retrieve Renewal Time Value option
-   option = dhcpGetOption(message, length, DHCP_OPT_RENEWAL_TIME_VALUE);
-
-   //Specified option found?
-   if(option && option->length == 4)
    {
-      //This option specifies the time interval from address assignment
-      //until the client transitions to the RENEWING state
-      context->t1 = LOAD32BE(option->value);
+      //The host address is no longer appropriate for the link
+      interface->ipv4Context.addr = IPV4_UNSPECIFIED_ADDR;
+      interface->ipv4Context.addrState = IPV4_ADDR_STATE_INVALID;
+
+      //Clear subnet mask
+      interface->ipv4Context.subnetMask = IPV4_UNSPECIFIED_ADDR;
+
+#if (MDNS_RESPONDER_SUPPORT == ENABLED)
+      //Restart mDNS probing process
+      mdnsResponderStartProbing(interface->mdnsResponderContext);
+#endif
+
+      //Restart DHCP configuration
+      dhcpClientChangeState(context, DHCP_STATE_INIT, 0);
    }
-   else if(context->leaseTime != DHCP_INFINITE_TIME)
+   else if(option->value[0] == DHCP_MESSAGE_TYPE_ACK)
    {
-      //By default, T1 is set to 50% of the lease time
-      context->t1 = context->leaseTime / 2;
-   }
-   else
-   {
-      //Infinite lease
-      context->t1 = DHCP_INFINITE_TIME;
-   }
+      //Retrieve Server Identifier option
+      option = dhcpGetOption(message, length, DHCP_OPT_SERVER_IDENTIFIER);
 
-   //Retrieve Rebinding Time value option
-   option = dhcpGetOption(message, length, DHCP_OPT_REBINDING_TIME_VALUE);
+      //Failed to retrieve specified option?
+      if(!option || option->length != 4)
+         return;
+      //Unexpected server identifier?
+      if(!ipv4CompAddr(option->value, &context->serverIpAddr))
+         return;
 
-   //Specified option found?
-   if(option && option->length == 4)
-   {
-      //This option specifies the time interval from address assignment
-      //until the client transitions to the REBINDING state
-      context->t2 = LOAD32BE(option->value);
-   }
-   else if(context->leaseTime != DHCP_INFINITE_TIME)
-   {
-      //By default, T2 is set to 87.5% of the lease time
-      context->t2 = context->leaseTime * 7 / 8;
-   }
-   else
-   {
-      //Infinite lease
-      context->t2 = DHCP_INFINITE_TIME;
-   }
+      //Retrieve IP Address Lease Time option
+      option = dhcpGetOption(message, length, DHCP_OPT_IP_ADDRESS_LEASE_TIME);
 
-   //Retrieve Subnet Mask option
-   option = dhcpGetOption(message, length, DHCP_OPT_SUBNET_MASK);
+      //Failed to retrieve specified option?
+      if(!option  || option->length != 4)
+         return;
 
-   //The specified option has been found?
-   if(option && option->length == sizeof(Ipv4Addr))
-   {
-      //Record subnet mask
-      ipv4CopyAddr(&context->interface->ipv4Config.subnetMask, option->value);
-   }
+      //Record the lease time
+      context->leaseTime = LOAD32BE(option->value);
 
-   //Retrieve Router option
-   option = dhcpGetOption(message, length, DHCP_OPT_ROUTER);
+      //Retrieve Renewal Time Value option
+      option = dhcpGetOption(message, length, DHCP_OPT_RENEWAL_TIME_VALUE);
 
-   //The specified option has been found?
-   if(option && !(option->length % sizeof(Ipv4Addr)))
-   {
-      //Save default gateway
-      if(option->length >= sizeof(Ipv4Addr))
-         ipv4CopyAddr(&context->interface->ipv4Config.defaultGateway, option->value);
-   }
+      //Specified option found?
+      if(option && option->length == 4)
+      {
+         //This option specifies the time interval from address assignment
+         //until the client transitions to the RENEWING state
+         context->t1 = LOAD32BE(option->value);
+      }
+      else if(context->leaseTime != DHCP_INFINITE_TIME)
+      {
+         //By default, T1 is set to 50% of the lease time
+         context->t1 = context->leaseTime / 2;
+      }
+      else
+      {
+         //Infinite lease
+         context->t1 = DHCP_INFINITE_TIME;
+      }
 
-   //Use the DNS servers provided by the DHCP server?
-   if(!context->manualDnsConfig)
-   {
-      //Retrieve DNS Server option
-      option = dhcpGetOption(message, length, DHCP_OPT_DNS_SERVER);
+      //Retrieve Rebinding Time value option
+      option = dhcpGetOption(message, length, DHCP_OPT_REBINDING_TIME_VALUE);
 
-       //The specified option has been found?
+      //Specified option found?
+      if(option && option->length == 4)
+      {
+         //This option specifies the time interval from address assignment
+         //until the client transitions to the REBINDING state
+         context->t2 = LOAD32BE(option->value);
+      }
+      else if(context->leaseTime != DHCP_INFINITE_TIME)
+      {
+         //By default, T2 is set to 87.5% of the lease time
+         context->t2 = context->leaseTime * 7 / 8;
+      }
+      else
+      {
+         //Infinite lease
+         context->t2 = DHCP_INFINITE_TIME;
+      }
+
+      //Retrieve Subnet Mask option
+      option = dhcpGetOption(message, length, DHCP_OPT_SUBNET_MASK);
+
+      //The specified option has been found?
+      if(option && option->length == sizeof(Ipv4Addr))
+      {
+         //Record subnet mask
+         ipv4CopyAddr(&interface->ipv4Context.subnetMask, option->value);
+      }
+
+      //Retrieve Router option
+      option = dhcpGetOption(message, length, DHCP_OPT_ROUTER);
+
+      //The specified option has been found?
       if(option && !(option->length % sizeof(Ipv4Addr)))
       {
-         //Get the number of addresses provided in the response
-         n = option->length / sizeof(Ipv4Addr);
-         //Only a limited set of DNS servers is supported
-         n = MIN(n, IPV4_MAX_DNS_SERVERS);
-         //Record DNS server addresses
-         memcpy(context->interface->ipv4Config.dnsServer, option->value, n * sizeof(Ipv4Addr));
-         //Save the number of DNS servers
-         context->interface->ipv4Config.dnsServerCount = n;
+         //Save default gateway
+         if(option->length >= sizeof(Ipv4Addr))
+            ipv4CopyAddr(&interface->ipv4Context.defaultGateway, option->value);
+      }
+
+      //Use the DNS servers provided by the DHCP server?
+      if(!context->settings.manualDnsConfig)
+      {
+         //Retrieve DNS Server option
+         option = dhcpGetOption(message, length, DHCP_OPT_DNS_SERVER);
+
+          //The specified option has been found?
+         if(option && !(option->length % sizeof(Ipv4Addr)))
+         {
+            //Get the number of addresses provided in the response
+            n = option->length / sizeof(Ipv4Addr);
+
+            //Loop through the list of addresses
+            for(i = 0; i < n && i < IPV4_DNS_SERVER_LIST_SIZE; i++)
+            {
+               //Record DNS server address
+               ipv4CopyAddr(&interface->ipv4Context.dnsServerList[i],
+                  option->value + i * sizeof(Ipv4Addr));
+            }
+         }
+      }
+
+      //Retrieve MTU option
+      option = dhcpGetOption(message, length, DHCP_OPT_INTERFACE_MTU);
+
+      //The specified option has been found?
+      if(option && option->length == 2)
+      {
+         //This option specifies the MTU to use on this interface
+         n = LOAD16BE(option->value);
+
+         //Make sure that the option's value is acceptable
+         if(n >= IPV4_MINIMUM_MTU && n <= interface->nicDriver->mtu)
+         {
+            //Set the MTU to be used on the interface
+            interface->ipv4Context.linkMtu = n;
+         }
+      }
+
+      //Save the time a which the lease was obtained
+      context->leaseStartTime = osGetSystemTime();
+
+      //Check current state
+      if(context->state == DHCP_STATE_REQUESTING ||
+         context->state == DHCP_STATE_REBOOTING)
+      {
+         //Use the IP address as a tentative address
+         interface->ipv4Context.addr = message->yiaddr;
+         interface->ipv4Context.addrState = IPV4_ADDR_STATE_TENTATIVE;
+
+         //Clear conflict flag
+         interface->ipv4Context.addrConflict = FALSE;
+
+         //The client should probe the newly received address
+         dhcpClientChangeState(context, DHCP_STATE_PROBING, 0);
+      }
+      else
+      {
+         //Record the IP address assigned to the client
+         interface->ipv4Context.addr = message->yiaddr;
+         interface->ipv4Context.addrState = IPV4_ADDR_STATE_VALID;
+
+#if (MDNS_RESPONDER_SUPPORT == ENABLED)
+         //Restart mDNS probing process
+         mdnsResponderStartProbing(interface->mdnsResponderContext);
+#endif
+         //The client transitions to the BOUND state
+         dhcpClientChangeState(context, DHCP_STATE_BOUND, 0);
       }
    }
+}
 
-   //Retrieve MTU option
-   option = dhcpGetOption(message, length, DHCP_OPT_INTERFACE_MTU);
 
-   //The specified option has been found?
-   if(option && option->length == 2)
+/**
+ * @brief Update DHCP FSM state
+ * @param[in] context Pointer to the DHCP client context
+ * @param[in] newState New DHCP state to switch to
+ * @param[in] delay Initial delay
+ **/
+
+void dhcpClientChangeState(DhcpClientCtx *context,
+   DhcpState newState, systime_t delay)
+{
+   systime_t time;
+
+   //Get current time
+   time = osGetSystemTime();
+
+#if (DHCP_TRACE_LEVEL >= TRACE_LEVEL_INFO)
+   //Sanity check
+   if(newState <= DHCP_STATE_REBINDING)
    {
-      //This option specifies the MTU to use on this interface
-      n = LOAD16BE(option->value);
-      //Save MTU
-      ipv4SetMtu(context->interface, n);
+      //DHCP FSM states
+      static const char_t *stateLabel[] =
+      {
+         "INIT",
+         "SELECTING",
+         "REQUESTING",
+         "INIT-REBOOT",
+         "REBOOTING",
+         "PROBING",
+         "BOUND",
+         "RENEWING",
+         "REBINDING"
+      };
+
+      //Debug message
+      TRACE_INFO("%s: DHCP client %s state\r\n",
+         formatSystemTime(time, NULL), stateLabel[newState]);
    }
+#endif
 
-   //Record the IP address assigned to the client
-   ipv4SetHostAddrEx(context->interface, message->yiaddr, IPV4_ADDR_STATE_VALID);
+   //Set time stamp
+   context->timestamp = time;
+   //Set initial delay
+   context->timeout = delay;
+   //Reset retransmission counter
+   context->retransmitCount = 0;
+   //Switch to the new state
+   context->state = newState;
 
-   //The DHCPACK message was successfully parsed
-   return NO_ERROR;
+   //Any registered callback?
+   if(context->settings.stateChangeEvent != NULL)
+   {
+      NetInterface *interface;
+
+      //Point to the underlying network interface
+      interface = context->settings.interface;
+
+      //Release exclusive access
+      osReleaseMutex(&netMutex);
+      //Invoke user callback function
+      context->settings.stateChangeEvent(context, interface, newState);
+      //Get exclusive access
+      osAcquireMutex(&netMutex);
+   }
+}
+
+
+/**
+ * @brief Manage DHCP configuration timeout
+ * @param[in] context Pointer to the DHCP client context
+ **/
+
+void dhcpClientCheckTimeout(DhcpClientCtx *context)
+{
+   systime_t time;
+   NetInterface *interface;
+
+   //Point to the underlying network interface
+   interface = context->settings.interface;
+
+   //Get current time
+   time = osGetSystemTime();
+
+   //Any registered callback?
+   if(context->settings.timeoutEvent != NULL)
+   {
+      //DHCP configuration timeout?
+      if(timeCompare(time, context->configStartTime + context->settings.timeout) >= 0)
+      {
+         //Ensure the callback function is only called once
+         if(!context->timeoutEventDone)
+         {
+            //Release exclusive access
+            osReleaseMutex(&netMutex);
+            //Invoke user callback function
+            context->settings.timeoutEvent(context, interface);
+            //Get exclusive access
+            osAcquireMutex(&netMutex);
+
+            //Set flag
+            context->timeoutEventDone = TRUE;
+         }
+      }
+   }
 }
 
 
@@ -1578,10 +1697,10 @@ error_t dhcpParseAckNak(DhcpClientCtx *context, size_t length)
  * address acquisition or renewal process
  *
  * @param[in] context Pointer to the DHCP client context
- * @return The elapsed time expressed in hundredths of a second
+ * @return The elapsed time expressed in seconds
  **/
 
-uint16_t dhcpComputeElapsedTime(DhcpClientCtx *context)
+uint16_t dhcpClientComputeElapsedTime(DhcpClientCtx *context)
 {
    systime_t time;
 
@@ -1590,24 +1709,10 @@ uint16_t dhcpComputeElapsedTime(DhcpClientCtx *context)
 
    //The value 0xFFFF is used to represent any elapsed time values
    //greater than the largest time value that can be represented
-   if(time > 0xFFFF) time = 0xFFFF;
+   time = MIN(time, 0xFFFF);
 
    //Convert the 16-bit value to network byte order
-   return htons((uint16_t) time);
-}
-
-
-/**
- * @brief Get a random value in the specified range
- * @param[in] min Lower bound
- * @param[in] max Upper bound
- * @return Random value in the specified range
- **/
-
-int32_t dhcpRandRange(int32_t min, int32_t max)
-{
-   //Return a random value in the given range
-   return min + netGetRand() % (max - min + 1);
+   return htons(time);
 }
 
 
@@ -1619,14 +1724,22 @@ int32_t dhcpRandRange(int32_t min, int32_t max)
 void dhcpDumpConfig(DhcpClientCtx *context)
 {
    uint_t i;
-   size_t mtu;
-   Ipv4Addr ipv4Addr;
+   NetInterface *interface;
+   Ipv4Context *ipv4Context;
 
-   //Dump current DHCP configuration
-   TRACE_INFO("\r\nDHCP configuration:\r\n");
+   //Point to the underlying network interface
+   interface = context->settings.interface;
+   //Point to the IPv4 context
+   ipv4Context = &interface->ipv4Context;
+
+   //Debug message
+   TRACE_INFO("\r\n");
+   TRACE_INFO("DHCP configuration:\r\n");
 
    //Lease start time
-   TRACE_INFO("  Lease Start Time = %s\r\n", formatSystemTime(context->leaseStartTime, NULL));
+   TRACE_INFO("  Lease Start Time = %s\r\n",
+      formatSystemTime(context->leaseStartTime, NULL));
+
    //Lease time
    TRACE_INFO("  Lease Time = %" PRIu32 "s\r\n", context->leaseTime);
    //Renewal time
@@ -1635,27 +1748,27 @@ void dhcpDumpConfig(DhcpClientCtx *context)
    TRACE_INFO("  T2 = %" PRIu32 "s\r\n", context->t2);
 
    //Host address
-   ipv4GetHostAddr(context->interface, &ipv4Addr);
-   TRACE_INFO("  IPv4 Address = %s\r\n", ipv4AddrToString(ipv4Addr, NULL));
+   TRACE_INFO("  IPv4 Address = %s\r\n",
+      ipv4AddrToString(ipv4Context->addr, NULL));
 
    //Subnet mask
-   ipv4GetSubnetMask(context->interface, &ipv4Addr);
-   TRACE_INFO("  Subnet Mask = %s\r\n", ipv4AddrToString(ipv4Addr, NULL));
+   TRACE_INFO("  Subnet Mask = %s\r\n",
+      ipv4AddrToString(ipv4Context->subnetMask, NULL));
 
    //Default gateway
-   ipv4GetDefaultGateway(context->interface, &ipv4Addr);
-   TRACE_INFO("  Default Gateway = %s\r\n", ipv4AddrToString(ipv4Addr, NULL));
+   TRACE_INFO("  Default Gateway = %s\r\n",
+      ipv4AddrToString(ipv4Context->defaultGateway, NULL));
 
    //DNS servers
-   for(i = 0; i < IPV4_MAX_DNS_SERVERS; i++)
+   for(i = 0; i < IPV4_DNS_SERVER_LIST_SIZE; i++)
    {
-      ipv4GetDnsServer(context->interface, i, &ipv4Addr);
-      TRACE_INFO("  DNS Server %u = %s\r\n", i + 1, ipv4AddrToString(ipv4Addr, NULL));
+      TRACE_INFO("  DNS Server %u = %s\r\n", i + 1,
+         ipv4AddrToString(ipv4Context->dnsServerList[i], NULL));
    }
 
    //Maximum transmit unit
-   ipv4GetMtu(context->interface, &mtu);
-   TRACE_INFO("  MTU = %" PRIuSIZE "\r\n", mtu);
+   TRACE_INFO("  MTU = %" PRIuSIZE "\r\n", interface->ipv4Context.linkMtu);
+   TRACE_INFO("\r\n");
 }
 
 #endif

@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -35,10 +35,12 @@
 #include "core/ip.h"
 #include "ipv4/ipv4.h"
 #include "ipv6/ipv6.h"
+#include "ipv6/ipv6_misc.h"
 #include "debug.h"
 
 //Special IP address
 const IpAddr IP_ADDR_ANY = {0};
+const IpAddr IP_ADDR_UNSPECIFIED = {0};
 
 
 /**
@@ -93,7 +95,7 @@ error_t ipSendDatagram(NetInterface *interface, IpPseudoHeader *pseudoHeader,
  * This function selects the source address and the relevant network interface
  * to be used in order to join the specified destination address
  *
- * @param[in,out] interface A pointer to a valid network interface may provided as
+ * @param[in,out] interface A pointer to a valid network interface may be provided as
  *   a hint. The function returns a pointer identifying the interface to be used
  * @param[in] destAddr Destination IP address
  * @param[out] srcAddr Local IP address to be used
@@ -462,22 +464,24 @@ NetBuffer *ipAllocBuffer(size_t length, size_t *offset)
 #endif
 
 #if (ETH_SUPPORT == ENABLED)
-   //Allocate a buffer to hold the IP header and the payload
+   //Allocate a buffer to hold the Ethernet header and the IP packet
    buffer = ethAllocBuffer(length + headerLength, offset);
-   //Failed to allocate buffer?
-   if(!buffer) return NULL;
-
-   //Offset to the first byte of the payload
-   *offset += headerLength;
+#elif (PPP_SUPPORT == ENABLED)
+   //Allocate a buffer to hold the PPP header and the IP packet
+   buffer = pppAllocBuffer(length + headerLength, offset);
 #else
-   //Allocate a buffer to hold the IP header and the payload
+   //Allocate a buffer to hold the IP packet
    buffer = netBufferAlloc(length + headerLength);
-   //Failed to allocate buffer?
-   if(!buffer) return NULL;
-
-   //Offset to the first byte of the payload
-   *offset = headerLength;
+   //Clear offset value
+   *offset = 0;
 #endif
+
+   //Successful memory allocation?
+   if(buffer != NULL)
+   {
+      //Offset to the first byte of the payload
+      *offset += headerLength;
+   }
 
    //Return a pointer to the freshly allocated buffer
    return buffer;
@@ -493,16 +497,21 @@ NetBuffer *ipAllocBuffer(size_t length, size_t *offset)
 
 error_t ipJoinMulticastGroup(NetInterface *interface, const IpAddr *groupAddr)
 {
+   error_t error;
+
    //Use default network interface?
    if(!interface)
       interface = netGetDefaultInterface();
+
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
 
 #if (IPV4_SUPPORT == ENABLED)
    //IPv4 multicast address?
    if(groupAddr->length == sizeof(Ipv4Addr))
    {
       //Join the specified host group
-      return ipv4JoinMulticastGroup(interface, groupAddr->ipv4Addr);
+      error = ipv4JoinMulticastGroup(interface, groupAddr->ipv4Addr);
    }
    else
 #endif
@@ -511,14 +520,21 @@ error_t ipJoinMulticastGroup(NetInterface *interface, const IpAddr *groupAddr)
    if(groupAddr->length == sizeof(Ipv6Addr))
    {
       //Join the specified host group
-      return ipv6JoinMulticastGroup(interface, &groupAddr->ipv6Addr);
+      error = ipv6JoinMulticastGroup(interface, &groupAddr->ipv6Addr);
    }
    else
 #endif
    //Invalid IP address?
    {
-      return ERROR_INVALID_ADDRESS;
+      //Report an error
+      error = ERROR_INVALID_ADDRESS;
    }
+
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
+
+   //Return status code
+   return error;
 }
 
 

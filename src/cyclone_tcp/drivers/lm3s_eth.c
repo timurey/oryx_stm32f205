@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -48,6 +48,9 @@
 #include "drivers/lm3s_eth.h"
 #include "debug.h"
 
+//Underlying network interface
+static NetInterface *nicDriverInterface;
+
 //Transmit buffer
 static uint8_t txBuffer[1538] __attribute__((aligned(4)));
 
@@ -65,8 +68,9 @@ const NicDriver lm3sEthDriver =
    lm3sEthEnableIrq,
    lm3sEthDisableIrq,
    lm3sEthEventHandler,
-   lm3sEthSetMacFilter,
    lm3sEthSendPacket,
+   lm3sEthSetMulticastFilter,
+   NULL,
    NULL,
    NULL,
    TRUE,
@@ -88,6 +92,9 @@ error_t lm3sEthInit(NetInterface *interface)
    //Debug message
    TRACE_INFO("Initializing Stellaris LM3S Ethernet controller...\r\n");
 
+   //Save underlying network interface
+   nicDriverInterface = interface;
+
    //Enable Ethernet controller clock
    SysCtlPeripheralEnable(SYSCTL_PERIPH_ETH);
    //Reset Ethernet controller
@@ -106,11 +113,11 @@ error_t lm3sEthInit(NetInterface *interface)
    //Wait for the reset to complete
    while(lm3sEthReadPhyReg(PHY_MR0) & PHY_MR0_RESET);
 
-   //Configure LED0 and LED1
-   lm3sEthWritePhyReg(PHY_MR23, PHY_MR23_LED0_RXTX | PHY_MR23_LED1_LINK);
-
    //Dump PHY registers for debugging purpose
    lm3sEthDumpPhyReg();
+
+   //Configure LED0 and LED1
+   lm3sEthWritePhyReg(PHY_MR23, PHY_MR23_LED0_RXTX | PHY_MR23_LED1_LINK);
 
    //Set the MAC address
    MAC_IA0_R = interface->macAddr.w[0] | (interface->macAddr.w[1] << 16);
@@ -136,9 +143,7 @@ error_t lm3sEthInit(NetInterface *interface)
    //Enable receiver
    MAC_RCTL_R |= MAC_RCTL_RXEN;
 
-   //Force the TCP/IP stack to check the link state
-   osSetEvent(&interface->nicRxEvent);
-   //Stellaris LM3S Ethernet controller is now ready to send
+   //Accept any packets from the upper layer
    osSetEvent(&interface->nicTxEvent);
 
    //Successful initialization
@@ -212,13 +217,10 @@ void ETH_IRQHandler(void)
 {
    bool_t flag;
    uint32_t status;
-   NetInterface *interface;
 
    //Enter interrupt service routine
    osEnterIsr();
 
-   //Point to the structure describing the network interface
-   interface = &netInterface[0];
    //This flag will be set if a higher priority task must be woken
    flag = FALSE;
 
@@ -230,9 +232,13 @@ void ETH_IRQHandler(void)
    {
       //Disable PHYINT interrupt
       MAC_IM_R &= ~MAC_IM_PHYINTM;
-      //Notify the user that the link state has changed
-      flag |= osSetEventFromIsr(&interface->nicRxEvent);
+
+      //Set event flag
+      nicDriverInterface->nicEvent = TRUE;
+      //Notify the TCP/IP stack of the event
+      flag |= osSetEventFromIsr(&netEvent);
    }
+
    //Transmit FIFO empty?
    if(status & MAC_RIS_TXEMP)
    {
@@ -242,17 +248,21 @@ void ETH_IRQHandler(void)
       //Check whether the transmit FIFO is available for writing
       if(!(MAC_TR_R & MAC_TR_NEWTX))
       {
-         //Notify the user that the transmitter is ready to send
-         flag |= osSetEventFromIsr(&interface->nicTxEvent);
+         //Notify the TCP/IP stack that the transmitter is ready to send
+         flag |= osSetEventFromIsr(&nicDriverInterface->nicTxEvent);
       }
    }
+
    //Packet received?
    if(status & MAC_RIS_RXINT)
    {
       //Disable RXINT interrupt
       MAC_IM_R &= ~MAC_IM_RXINTM;
-      //Notify the user that a packet has been received
-      flag |= osSetEventFromIsr(&interface->nicRxEvent);
+
+      //Set event flag
+      nicDriverInterface->nicEvent = TRUE;
+      //Notify the TCP/IP stack of the event
+      flag |= osSetEventFromIsr(&netEvent);
    }
 
    //Leave interrupt service routine
@@ -299,46 +309,37 @@ void lm3sEthEventHandler(NetInterface *interface)
             if(value & PHY_MR18_RATE)
             {
                //100BASE-TX operation
-               interface->speed100 = TRUE;
+               interface->linkSpeed = NIC_LINK_SPEED_100MBPS;
             }
             else
             {
                //10BASE-T operation
-               interface->speed100 = FALSE;
+               interface->linkSpeed = NIC_LINK_SPEED_10MBPS;
             }
 
             //Get current duplex mode
             if(value & PHY_MR18_DPLX)
             {
                //Full-Duplex mode
-               interface->fullDuplex = TRUE;
+               interface->duplexMode = NIC_FULL_DUPLEX_MODE;
                //Update MAC configuration
                MAC_TCTL_R |= MAC_TCTL_DUPLEX;
             }
             else
             {
                //Half-Duplex mode
-               interface->fullDuplex = FALSE;
+               interface->duplexMode = NIC_HALF_DUPLEX_MODE;
                //Update MAC configuration
                MAC_TCTL_R &= ~MAC_TCTL_DUPLEX;
             }
 
             //Update link state
             interface->linkState = TRUE;
-            //Display link state
-            TRACE_INFO("Link is up (%s)...\r\n", interface->name);
-
-            //Display actual speed and duplex mode
-            TRACE_INFO("%s %s\r\n",
-               interface->speed100 ? "100BASE-TX" : "10BASE-T",
-               interface->fullDuplex ? "Full-Duplex" : "Half-Duplex");
          }
          else
          {
             //Update link state
             interface->linkState = FALSE;
-            //Display link state
-            TRACE_INFO("Link is down (%s)...\r\n", interface->name);
          }
 
          //Process link state change event
@@ -370,25 +371,6 @@ void lm3sEthEventHandler(NetInterface *interface)
 
    //Re-enable Ethernet interrupts
    MAC_IM_R = MAC_IM_PHYINTM | MAC_IM_TXEMPM | MAC_IM_RXINTM;
-}
-
-
-/**
- * @brief Configure multicast MAC address filtering
- * @param[in] interface Underlying network interface
- * @return Error code
- **/
-
-error_t lm3sEthSetMacFilter(NetInterface *interface)
-{
-   //Enable the reception of multicast frames if necessary
-   if(interface->macFilterSize > 0)
-      MAC_RCTL_R |= MAC_RCTL_AMUL;
-   else
-      MAC_RCTL_R &= ~MAC_RCTL_AMUL;
-
-   //Successful processing
-   return NO_ERROR;
 }
 
 
@@ -536,6 +518,45 @@ error_t lm3sEthReceivePacket(NetInterface *interface,
 
 
 /**
+ * @brief Configure multicast MAC address filtering
+ * @param[in] interface Underlying network interface
+ * @return Error code
+ **/
+
+error_t lm3sEthSetMulticastFilter(NetInterface *interface)
+{
+   uint_t i;
+   bool_t acceptMulticast;
+
+   //This flag will be set if multicast addresses should be accepted
+   acceptMulticast = FALSE;
+
+   //The MAC filter table contains the multicast MAC addresses
+   //to accept when receiving an Ethernet frame
+   for(i = 0; i < MAC_MULTICAST_FILTER_SIZE; i++)
+   {
+      //Valid entry?
+      if(interface->macMulticastFilter[i].refCount > 0)
+      {
+         //Accept multicast addresses
+         acceptMulticast = TRUE;
+         //We are done
+         break;
+      }
+   }
+
+   //Enable the reception of multicast frames if necessary
+   if(acceptMulticast)
+      MAC_RCTL_R |= MAC_RCTL_AMUL;
+   else
+      MAC_RCTL_R &= ~MAC_RCTL_AMUL;
+
+   //Successful processing
+   return NO_ERROR;
+}
+
+
+/**
  * @brief Write PHY register
  * @param[in] address Register address
  * @param[in] data Register value
@@ -547,6 +568,7 @@ void lm3sEthWritePhyReg(uint8_t address, uint16_t data)
    MAC_MTXD_R = data & MAC_MTXD_MDTX_M;
    //Start a write operation
    MAC_MCTL_R = (address << 3) | MAC_MCTL_WRITE | MAC_MCTL_START;
+
    //Wait for the write to complete
    while(MAC_MCTL_R & MAC_MCTL_START);
 }
@@ -562,8 +584,10 @@ uint16_t lm3sEthReadPhyReg(uint8_t address)
 {
    //Start a read operation
    MAC_MCTL_R = (address << 3) | MAC_MCTL_START;
+
    //Wait for the read to complete
    while(MAC_MCTL_R & MAC_MCTL_START);
+
    //Return PHY register contents
    return MAC_MRXD_R & MAC_MRXD_MDRX_M;
 }

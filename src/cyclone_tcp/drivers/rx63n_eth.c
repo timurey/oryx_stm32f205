@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -35,6 +35,9 @@
 #include "core/net.h"
 #include "drivers/rx63n_eth.h"
 #include "debug.h"
+
+//Underlying network interface
+static NetInterface *nicDriverInterface;
 
 //Transmit buffer
 #pragma data_alignment = 32
@@ -68,8 +71,9 @@ const NicDriver rx63nEthDriver =
    rx63nEthEnableIrq,
    rx63nEthDisableIrq,
    rx63nEthEventHandler,
-   rx63nEthSetMacFilter,
    rx63nEthSendPacket,
+   rx63nEthSetMulticastFilter,
+   rx63nEthUpdateMacConfig,
    rx63nEthWritePhyReg,
    rx63nEthReadPhyReg,
    TRUE,
@@ -90,6 +94,9 @@ error_t rx63nEthInit(NetInterface *interface)
 
    //Debug message
    TRACE_INFO("Initializing RX63N Ethernet MAC...\r\n");
+
+   //Save underlying network interface
+   nicDriverInterface = interface;
 
    //Disable protection
    SYSTEM.PRCR.WORD = 0xA50B;
@@ -160,9 +167,7 @@ error_t rx63nEthInit(NetInterface *interface)
    //Instruct the DMA to poll the receive descriptor list
    EDMAC.EDRRR.BIT.RR = 1;
 
-   //Force the TCP/IP stack to check the link state
-   osSetEvent(&interface->nicRxEvent);
-   //RX63N Ethernet MAC is now ready to send
+   //Accept any packets from the upper layer
    osSetEvent(&interface->nicTxEvent);
 
    //Successful initialization
@@ -344,13 +349,10 @@ __interrupt void rx63nEthIrqHandler(void)
 {
    bool_t flag;
    uint32_t status;
-   NetInterface *interface;
 
    //Allow nested interrupts
    __enable_interrupt();
 
-   //Point to the structure describing the network interface
-   interface = &netInterface[0];
    //This flag will be set if a higher priority task must be woken
    flag = FALSE;
 
@@ -366,18 +368,21 @@ __interrupt void rx63nEthIrqHandler(void)
       //Check whether the TX buffer is available for writing
       if(!(txDmaDesc[txIndex].td0 & EDMAC_TD0_TACT))
       {
-         //Notify the user that the transmitter is ready to send
-         flag |= osSetEventFromIsr(&interface->nicTxEvent);
+         //Notify the TCP/IP stack that the transmitter is ready to send
+         flag |= osSetEventFromIsr(&nicDriverInterface->nicTxEvent);
       }
    }
+
    //A packet has been received?
    if(status & EDMAC_EESR_FR)
    {
       //Disable FR interrupts
       EDMAC.EESIPR.BIT.FRIP = 0;
 
-      //Notify the user that a packet has been received
-      flag |= osSetEventFromIsr(&interface->nicRxEvent);
+      //Set event flag
+      nicDriverInterface->nicEvent = TRUE;
+      //Notify the TCP/IP stack of the event
+      flag |= osSetEventFromIsr(&netEvent);
    }
 
    //Leave interrupt service routine
@@ -394,39 +399,6 @@ void rx63nEthEventHandler(NetInterface *interface)
 {
    error_t error;
    size_t length;
-   bool_t linkStateChange;
-
-   //PHY event is pending?
-   if(interface->phyEvent)
-   {
-      //Acknowledge the event by clearing the flag
-      interface->phyEvent = FALSE;
-      //Handle PHY specific events
-      linkStateChange = interface->phyDriver->eventHandler(interface);
-
-      //Check whether the link state has changed?
-      if(linkStateChange)
-      {
-         //Set speed and duplex mode for proper operation
-         if(interface->linkState)
-         {
-            //10BASE-T or 100BASE-TX operation mode?
-            if(interface->speed100)
-               ETHERC.ECMR.BIT.RTM = 1;
-            else
-               ETHERC.ECMR.BIT.RTM = 0;
-
-            //Half-duplex or full-duplex mode?
-            if(interface->fullDuplex)
-               ETHERC.ECMR.BIT.DM = 1;
-            else
-               ETHERC.ECMR.BIT.DM = 0;
-         }
-
-         //Process link state change event
-         nicNotifyLinkChange(interface);
-      }
-   }
 
    //Packet received?
    if(EDMAC.EESR.LONG & EDMAC_EESR_FR)
@@ -455,25 +427,6 @@ void rx63nEthEventHandler(NetInterface *interface)
    //Re-enable EDMAC interrupts
    EDMAC.EESIPR.BIT.TWBIP = 1;
    EDMAC.EESIPR.BIT.FRIP = 1;
-}
-
-
-/**
- * @brief Configure multicast MAC address filtering
- * @param[in] interface Underlying network interface
- * @return Error code
- **/
-
-error_t rx63nEthSetMacFilter(NetInterface *interface)
-{
-   //Enable the reception of multicast frames if necessary
-   if(interface->macFilterSize > 0)
-      EDMAC.EESR.BIT.RMAF = 1;
-   else
-      EDMAC.EESR.BIT.RMAF = 0;
-
-   //Successful processing
-   return NO_ERROR;
 }
 
 
@@ -628,6 +581,70 @@ error_t rx63nEthReceivePacket(NetInterface *interface,
 
    //Return status code
    return error;
+}
+
+
+/**
+ * @brief Configure multicast MAC address filtering
+ * @param[in] interface Underlying network interface
+ * @return Error code
+ **/
+
+error_t rx63nEthSetMulticastFilter(NetInterface *interface)
+{
+   uint_t i;
+   bool_t acceptMulticast;
+
+   //This flag will be set if multicast addresses should be accepted
+   acceptMulticast = FALSE;
+
+   //The MAC filter table contains the multicast MAC addresses
+   //to accept when receiving an Ethernet frame
+   for(i = 0; i < MAC_MULTICAST_FILTER_SIZE; i++)
+   {
+      //Valid entry?
+      if(interface->macMulticastFilter[i].refCount > 0)
+      {
+         //Accept multicast addresses
+         acceptMulticast = TRUE;
+         //We are done
+         break;
+      }
+   }
+
+   //Enable the reception of multicast frames if necessary
+   if(acceptMulticast)
+      EDMAC.EESR.BIT.RMAF = 1;
+   else
+      EDMAC.EESR.BIT.RMAF = 0;
+
+   //Successful processing
+   return NO_ERROR;
+}
+
+
+/**
+ * @brief Adjust MAC configuration parameters for proper operation
+ * @param[in] interface Underlying network interface
+ * @return Error code
+ **/
+
+error_t rx63nEthUpdateMacConfig(NetInterface *interface)
+{
+   //10BASE-T or 100BASE-TX operation mode?
+   if(interface->linkSpeed == NIC_LINK_SPEED_100MBPS)
+      ETHERC.ECMR.BIT.RTM = 1;
+   else
+      ETHERC.ECMR.BIT.RTM = 0;
+
+   //Half-duplex or full-duplex mode?
+   if(interface->duplexMode == NIC_FULL_DUPLEX_MODE)
+      ETHERC.ECMR.BIT.DM = 1;
+   else
+      ETHERC.ECMR.BIT.DM = 0;
+
+   //Successful processing
+   return NO_ERROR;
 }
 
 

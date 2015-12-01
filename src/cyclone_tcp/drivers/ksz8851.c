@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -51,8 +51,9 @@ const NicDriver ksz8851Driver =
    ksz8851EnableIrq,
    ksz8851DisableIrq,
    ksz8851EventHandler,
-   ksz8851SetMacFilter,
    ksz8851SendPacket,
+   ksz8851SetMulticastFilter,
+   NULL,
    NULL,
    NULL,
    TRUE,
@@ -75,8 +76,11 @@ error_t ksz8851Init(NetInterface *interface)
    //Debug message
    TRACE_INFO("Initializing KSZ8851 Ethernet controller...\r\n");
 
+#if (KSZ8851_SPI_SUPPORT == ENABLED)
    //Initialize SPI
    interface->spiDriver->init();
+#endif
+
    //Initialize external interrupt line
    interface->extIntDriver->init();
 
@@ -138,10 +142,13 @@ error_t ksz8851Init(NetInterface *interface)
    //Enable RX operation
    ksz8851SetBit(interface, KSZ8851_REG_RXCR1, RXCR1_RXE);
 
-   //Force the TCP/IP stack to check the link state
-   osSetEvent(&interface->nicRxEvent);
-   //KSZ8851 transmitter is now ready to send
+   //Accept any packets from the upper layer
    osSetEvent(&interface->nicTxEvent);
+
+   //Force the TCP/IP stack to poll the link state at startup
+   interface->nicEvent = TRUE;
+   //Notify the TCP/IP stack of the event
+   osSetEvent(&netEvent);
 
    //Successful initialization
    return NO_ERROR;
@@ -191,38 +198,56 @@ void ksz8851DisableIrq(NetInterface *interface)
 bool_t ksz8851IrqHandler(NetInterface *interface)
 {
    bool_t flag;
-   uint16_t status;
+   uint16_t ier;
+   uint16_t isr;
 
    //This flag will be set if a higher priority task must be woken
    flag = FALSE;
 
+   //Save IER register value
+   ier = ksz8851ReadReg(interface, KSZ8851_REG_IER);
+   //Disable interrupts to release the interrupt line
+   ksz8851WriteReg(interface, KSZ8851_REG_IER, 0);
+
    //Read interrupt status register
-   status = ksz8851ReadReg(interface, KSZ8851_REG_ISR);
+   isr = ksz8851ReadReg(interface, KSZ8851_REG_ISR);
 
    //Link status change?
-   if(status & ISR_LCIS)
+   if(isr & ISR_LCIS)
    {
       //Disable LCIE interrupt
-      ksz8851ClearBit(interface, KSZ8851_REG_IER, IER_LCIE);
-      //Notify the user that the link state has changed
-      flag |= osSetEventFromIsr(&interface->nicRxEvent);
+      ier &= ~IER_LCIE;
+
+      //Set event flag
+      interface->nicEvent = TRUE;
+      //Notify the TCP/IP stack of the event
+      flag |= osSetEventFromIsr(&netEvent);
    }
+
    //Packet transmission complete?
-   if(status & ISR_TXIS)
+   if(isr & ISR_TXIS)
    {
-      //Notify the user that the transmitter is ready to send
-      flag |= osSetEventFromIsr(&interface->nicTxEvent);
       //Clear interrupt flag
       ksz8851WriteReg(interface, KSZ8851_REG_ISR, ISR_TXIS);
+
+      //Notify the TCP/IP stack that the transmitter is ready to send
+      flag |= osSetEventFromIsr(&interface->nicTxEvent);
    }
+
    //Packet received?
-   if(status & ISR_RXIS)
+   if(isr & ISR_RXIS)
    {
       //Disable RXIE interrupt
       ksz8851ClearBit(interface, KSZ8851_REG_IER, IER_RXIE);
-      //Notify the user that a packet has been received
-      flag |= osSetEventFromIsr(&interface->nicRxEvent);
+
+      //Set event flag
+      interface->nicEvent = TRUE;
+      //Notify the TCP/IP stack of the event
+      flag |= osSetEventFromIsr(&netEvent);
    }
+
+   //Re-enable interrupts once the interrupt has been serviced
+   ksz8851WriteReg(interface, KSZ8851_REG_IER, ier);
 
    //A higher priority task must be woken?
    return flag;
@@ -239,7 +264,7 @@ void ksz8851EventHandler(NetInterface *interface)
    error_t error;
    uint16_t status;
    uint_t frameCount;
-   uint_t length;
+   size_t length;
 
    //Read interrupt status register
    status = ksz8851ReadReg(interface, KSZ8851_REG_ISR);
@@ -255,32 +280,31 @@ void ksz8851EventHandler(NetInterface *interface)
       //Check link state
       if(status & P1SR_LINK_GOOD)
       {
+         //Get current speed
+         if(status & P1SR_OPERATION_SPEED)
+            interface->linkSpeed = NIC_LINK_SPEED_100MBPS;
+         else
+            interface->linkSpeed = NIC_LINK_SPEED_10MBPS;
+
+         //Determine the new duplex mode
+         if(status & P1SR_OPERATION_DUPLEX)
+            interface->duplexMode = NIC_FULL_DUPLEX_MODE;
+         else
+            interface->duplexMode = NIC_HALF_DUPLEX_MODE;
+
          //Link is up
          interface->linkState = TRUE;
-         //Get current speed
-         interface->speed100 = (status & P1SR_OPERATION_SPEED) ? TRUE : FALSE;
-         //Determine the new duplex mode
-         interface->fullDuplex = (status & P1SR_OPERATION_DUPLEX) ? TRUE : FALSE;
-
-         //Display link state
-         TRACE_INFO("Link is up (%s)...\r\n", interface->name);
-
-         //Display actual speed and duplex mode
-         TRACE_INFO("%s %s\r\n",
-            interface->speed100 ? "100BASE-TX" : "10BASE-T",
-            interface->fullDuplex ? "Full-Duplex" : "Half-Duplex");
       }
       else
       {
          //Link is down
          interface->linkState = FALSE;
-         //Display link state
-         TRACE_INFO("Link is down (%s)...\r\n", interface->name);
       }
 
       //Process link state change event
       nicNotifyLinkChange(interface);
    }
+
    //Check whether a packet has been received?
    if(status & ISR_RXIS)
    {
@@ -310,54 +334,6 @@ void ksz8851EventHandler(NetInterface *interface)
 
    //Re-enable LCIE and RXIE interrupts
    ksz8851SetBit(interface, KSZ8851_REG_IER, IER_LCIE | IER_RXIE);
-}
-
-
-/**
- * @brief Configure multicast MAC address filtering
- * @param[in] interface Underlying network interface
- * @return Error code
- **/
-
-error_t ksz8851SetMacFilter(NetInterface *interface)
-{
-   uint_t i;
-   uint_t k;
-   uint32_t crc;
-   uint16_t hashTable[4];
-
-   //Debug message
-   TRACE_INFO("Updating KSZ8851 hash table...\r\n");
-
-   //Clear hash table
-   memset(hashTable, 0, sizeof(hashTable));
-
-   //The MAC filter table contains the multicast MAC addresses
-   //to accept when receiving an Ethernet frame
-   for(i = 0; i < interface->macFilterSize; i++)
-   {
-      //Compute CRC over the current MAC address
-      crc = ksz8851CalcCrc(&interface->macFilter[i].addr, sizeof(MacAddr));
-      //Calculate the corresponding index in the table
-      k = (crc >> 26) & 0x3F;
-      //Update hash table contents
-      hashTable[k / 16] |= (1 << (k % 16));
-   }
-
-   //Write the hash table to the KSZ8851 controller
-   ksz8851WriteReg(interface, KSZ8851_REG_MAHTR0, hashTable[0]);
-   ksz8851WriteReg(interface, KSZ8851_REG_MAHTR1, hashTable[1]);
-   ksz8851WriteReg(interface, KSZ8851_REG_MAHTR2, hashTable[2]);
-   ksz8851WriteReg(interface, KSZ8851_REG_MAHTR3, hashTable[3]);
-
-   //Debug message
-   TRACE_INFO("  MAHTR0 = %04" PRIX16 "\r\n", ksz8851ReadReg(interface, KSZ8851_REG_MAHTR0));
-   TRACE_INFO("  MAHTR1 = %04" PRIX16 "\r\n", ksz8851ReadReg(interface, KSZ8851_REG_MAHTR1));
-   TRACE_INFO("  MAHTR2 = %04" PRIX16 "\r\n", ksz8851ReadReg(interface, KSZ8851_REG_MAHTR2));
-   TRACE_INFO("  MAHTR3 = %04" PRIX16 "\r\n", ksz8851ReadReg(interface, KSZ8851_REG_MAHTR3));
-
-   //Successful processing
-   return NO_ERROR;
 }
 
 
@@ -479,6 +455,62 @@ error_t ksz8851ReceivePacket(NetInterface *interface,
 
 
 /**
+ * @brief Configure multicast MAC address filtering
+ * @param[in] interface Underlying network interface
+ * @return Error code
+ **/
+
+error_t ksz8851SetMulticastFilter(NetInterface *interface)
+{
+   uint_t i;
+   uint_t k;
+   uint32_t crc;
+   uint16_t hashTable[4];
+   MacFilterEntry *entry;
+
+   //Debug message
+   TRACE_DEBUG("Updating KSZ8851 hash table...\r\n");
+
+   //Clear hash table
+   memset(hashTable, 0, sizeof(hashTable));
+
+   //The MAC filter table contains the multicast MAC addresses
+   //to accept when receiving an Ethernet frame
+   for(i = 0; i < MAC_MULTICAST_FILTER_SIZE; i++)
+   {
+      //Point to the current entry
+      entry = &interface->macMulticastFilter[i];
+
+      //Valid entry?
+      if(entry->refCount > 0)
+      {
+         //Compute CRC over the current MAC address
+         crc = ksz8851CalcCrc(&entry->addr, sizeof(MacAddr));
+         //Calculate the corresponding index in the table
+         k = (crc >> 26) & 0x3F;
+         //Update hash table contents
+         hashTable[k / 16] |= (1 << (k % 16));
+      }
+   }
+
+   //Write the hash table to the KSZ8851 controller
+   ksz8851WriteReg(interface, KSZ8851_REG_MAHTR0, hashTable[0]);
+   ksz8851WriteReg(interface, KSZ8851_REG_MAHTR1, hashTable[1]);
+   ksz8851WriteReg(interface, KSZ8851_REG_MAHTR2, hashTable[2]);
+   ksz8851WriteReg(interface, KSZ8851_REG_MAHTR3, hashTable[3]);
+
+   //Debug message
+   TRACE_DEBUG("  MAHTR0 = %04" PRIX16 "\r\n", ksz8851ReadReg(interface, KSZ8851_REG_MAHTR0));
+   TRACE_DEBUG("  MAHTR1 = %04" PRIX16 "\r\n", ksz8851ReadReg(interface, KSZ8851_REG_MAHTR1));
+   TRACE_DEBUG("  MAHTR2 = %04" PRIX16 "\r\n", ksz8851ReadReg(interface, KSZ8851_REG_MAHTR2));
+   TRACE_DEBUG("  MAHTR3 = %04" PRIX16 "\r\n", ksz8851ReadReg(interface, KSZ8851_REG_MAHTR3));
+
+   //Successful processing
+   return NO_ERROR;
+}
+
+
+/**
  * @brief Write KSZ8851 register
  * @param[in] interface Underlying network interface
  * @param[in] address Register address
@@ -487,6 +519,7 @@ error_t ksz8851ReceivePacket(NetInterface *interface,
 
 void ksz8851WriteReg(NetInterface *interface, uint8_t address, uint16_t data)
 {
+#if (KSZ8851_SPI_SUPPORT == ENABLED)
    uint8_t command;
 
    //Form the write command
@@ -508,6 +541,16 @@ void ksz8851WriteReg(NetInterface *interface, uint8_t address, uint16_t data)
 
    //Terminate the operation by raising the CS pin
    interface->spiDriver->deassertCs();
+#else
+   //Set register address
+   if(address & 0x02)
+      KSZ8851_CMD_REG = KSZ8851_CMD_B3 | KSZ8851_CMD_B2 | address;
+   else
+      KSZ8851_CMD_REG = KSZ8851_CMD_B1 | KSZ8851_CMD_B0 | address;
+
+   //Write register value
+   KSZ8851_DATA_REG = data;
+#endif
 }
 
 
@@ -520,6 +563,7 @@ void ksz8851WriteReg(NetInterface *interface, uint8_t address, uint16_t data)
 
 uint16_t ksz8851ReadReg(NetInterface *interface, uint8_t address)
 {
+#if (KSZ8851_SPI_SUPPORT == ENABLED)
    uint8_t command;
    uint16_t data;
 
@@ -546,6 +590,16 @@ uint16_t ksz8851ReadReg(NetInterface *interface, uint8_t address)
 
    //Return register value
    return data;
+#else
+   //Set register address
+   if(address & 0x02)
+      KSZ8851_CMD_REG = KSZ8851_CMD_B3 | KSZ8851_CMD_B2 | address;
+   else
+      KSZ8851_CMD_REG = KSZ8851_CMD_B1 | KSZ8851_CMD_B0 | address;
+
+   //Return register value
+   return KSZ8851_DATA_REG;
+#endif
 }
 
 
@@ -558,6 +612,7 @@ uint16_t ksz8851ReadReg(NetInterface *interface, uint8_t address)
 
 void ksz8851WriteFifo(NetInterface *interface, const uint8_t *data, size_t length)
 {
+#if (KSZ8851_SPI_SUPPORT == ENABLED)
    uint_t i;
 
    //Pull the CS pin low
@@ -576,6 +631,17 @@ void ksz8851WriteFifo(NetInterface *interface, const uint8_t *data, size_t lengt
 
    //Terminate the operation by raising the CS pin
    interface->spiDriver->deassertCs();
+#else
+   uint_t i;
+
+   //Data phase
+   for(i = 0; i < length; i+=2)
+      KSZ8851_DATA_REG = data[i] | data[i+1]<<8;
+
+   //Maintain alignment to 4-byte boundaries
+   for(; i % 4; i+=2)
+      KSZ8851_DATA_REG = 0x0000;
+#endif
 }
 
 
@@ -588,6 +654,7 @@ void ksz8851WriteFifo(NetInterface *interface, const uint8_t *data, size_t lengt
 
 void ksz8851ReadFifo(NetInterface *interface, uint8_t *data, size_t length)
 {
+#if (KSZ8851_SPI_SUPPORT == ENABLED)
    uint_t i;
 
    //Pull the CS pin low
@@ -614,6 +681,29 @@ void ksz8851ReadFifo(NetInterface *interface, uint8_t *data, size_t length)
 
    //Terminate the operation by raising the CS pin
    interface->spiDriver->deassertCs();
+#else
+   uint_t i;
+   uint16_t temp;
+
+   //The first 2 bytes are dummy data and must be discarded
+   temp = KSZ8851_DATA_REG;
+
+   //Ignore RX packet header
+   temp = KSZ8851_DATA_REG;
+   temp = KSZ8851_DATA_REG;
+
+   //Data phase
+   for(i = 0; i < length; i+=2)
+   {
+      temp = KSZ8851_DATA_REG;
+      data [i] = temp & 0xFF;
+      data [i+1] = (temp>>8) & 0xFF;
+   }
+
+   //Maintain alignment to 4-byte boundaries
+   for(; i % 4; i+=2)
+      temp = KSZ8851_DATA_REG;
+#endif
 }
 
 
@@ -626,8 +716,10 @@ void ksz8851ReadFifo(NetInterface *interface, uint8_t *data, size_t length)
 
 void ksz8851SetBit(NetInterface *interface, uint8_t address, uint16_t mask)
 {
+   uint16_t value;
+
    //Read current register value
-   uint16_t value = ksz8851ReadReg(interface, address);
+   value = ksz8851ReadReg(interface, address);
    //Set specified bits
    ksz8851WriteReg(interface, address, value | mask);
 }
@@ -642,8 +734,10 @@ void ksz8851SetBit(NetInterface *interface, uint8_t address, uint16_t mask)
 
 void ksz8851ClearBit(NetInterface *interface, uint8_t address, uint16_t mask)
 {
+   uint16_t value;
+
    //Read current register value
-   uint16_t value = ksz8851ReadReg(interface, address);
+   value = ksz8851ReadReg(interface, address);
    //Clear specified bits
    ksz8851WriteReg(interface, address, value & ~mask);
 }

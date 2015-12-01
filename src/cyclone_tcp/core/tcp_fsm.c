@@ -32,7 +32,7 @@
  * - RFC 1122: Requirements for Internet Hosts - Communication Layers
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -136,9 +136,6 @@ void tcpProcessSegment(NetInterface *interface,
       //Exit immediately
       return;
    }
-
-   //Enter critical section
-   osAcquireMutex(&socketMutex);
 
    //No matching socket in the LISTEN state for the moment
    passiveSocket = NULL;
@@ -264,8 +261,7 @@ void tcpProcessSegment(NetInterface *interface,
       //a reset to be sent in response
       if(!(segment->flags & TCP_FLAG_RST))
          tcpSendResetSegment(interface, pseudoHeader, segment, length);
-      //Leave critical section
-      osReleaseMutex(&socketMutex);
+
       //Return immediately
       return;
    }
@@ -349,9 +345,6 @@ void tcpProcessSegment(NetInterface *interface,
       //Silently discard incoming packet
       break;
    }
-
-   //Leave critical section
-   osReleaseMutex(&socketMutex);
 }
 
 
@@ -599,10 +592,12 @@ void tcpStateSynSent(Socket *socket, TcpHeader *segment, size_t length)
          socket->mss = MAX(socket->mss, TCP_MIN_MSS);
       }
 
+#if (TCP_CONGESTION_CONTROL_SUPPORT == ENABLED)
       //Initial congestion window
       socket->cwnd = MIN(TCP_INITIAL_WINDOW * socket->mss, socket->txBufferSize);
       //Slow start threshold should be set arbitrarily high
       socket->ssthresh = UINT16_MAX;
+#endif
 
       //Check whether our SYN has been acknowledged (SND.UNA > ISS)
       if(TCP_CMP_SEQ(socket->sndUna, socket->iss) > 0)

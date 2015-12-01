@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.2
+ * @version 1.6.5
  **/
 
 #ifndef _ENC28J60_H
@@ -44,8 +44,8 @@
 
 //Receive and transmit buffers
 #define ENC28J60_RX_BUFFER_START 0x0000
-#define ENC28J60_RX_BUFFER_STOP  0x19FF
-#define ENC28J60_TX_BUFFER_START 0x1A00
+#define ENC28J60_RX_BUFFER_STOP  0x17FF
+#define ENC28J60_TX_BUFFER_START 0x1800
 #define ENC28J60_TX_BUFFER_STOP  0x1FFF
 
 //SPI command set
@@ -400,13 +400,15 @@ void enc28j60DisableIrq(NetInterface *interface);
 bool_t enc28j60IrqHandler(NetInterface *interface);
 void enc28j60EventHandler(NetInterface *interface);
 
-error_t enc28j60SetMacFilter(NetInterface *interface);
 
 error_t enc28j60SendPacket(NetInterface *interface,
    const NetBuffer *buffer, size_t offset);
 
 error_t enc28j60ReceivePacket(NetInterface *interface,
    uint8_t *buffer, size_t size, size_t *length);
+
+
+error_t enc28j60SetMulticastFilter(NetInterface *interface);
 
 void enc28j60SoftReset(NetInterface *interface);
 void enc28j60SelectBank(NetInterface *interface, uint16_t address);
@@ -430,6 +432,7 @@ uint32_t enc28j60CalcCrc(const void *data, size_t length);
 
 void enc28j60DumpReg(NetInterface *interface);
 void enc28j60DumpPhyReg(NetInterface *interface);
+
 void DMA2_Stream0_IRQHandler(void);
 void DMA2_Stream5_IRQHandler(void);
 

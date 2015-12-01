@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -31,6 +31,8 @@
 
 //Dependencies
 #include "core/net.h"
+#include "ipv6/ipv6.h"
+#include "ipv6/ipv6_misc.h"
 #include "mdns/mdns_client.h"
 #include "mdns/mdns_responder.h"
 #include "mdns/mdns_common.h"
@@ -49,18 +51,21 @@
  * @param[out] ipAddr IP address corresponding to the specified host name
  **/
 
-error_t mdnsResolve(NetInterface *interface,
+error_t mdnsClientResolve(NetInterface *interface,
    const char_t *name, HostType type, IpAddr *ipAddr)
 {
    error_t error;
-   systime_t delay;
    DnsCacheEntry *entry;
+
+#if (NET_RTOS_SUPPORT == ENABLED)
+   systime_t delay;
 
    //Debug message
    TRACE_INFO("Resolving host name %s (mDNS resolver)...\r\n", name);
+#endif
 
-   //Acquire exclusive access to the DNS cache
-   osAcquireMutex(&dnsCacheMutex);
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
 
    //Search the DNS cache for the specified host name
    entry = dnsFindEntry(interface, name, type, HOST_NAME_RESOLVER_MDNS);
@@ -99,7 +104,7 @@ error_t mdnsResolve(NetInterface *interface,
       //Initialize retransmission counter
       entry->retransmitCount = MDNS_CLIENT_MAX_RETRIES;
       //Send mDNS query
-      error = mdnsSendQuery(entry);
+      error = mdnsClientSendQuery(entry);
 
       //mDNS message successfully sent?
       if(!error)
@@ -119,9 +124,10 @@ error_t mdnsResolve(NetInterface *interface,
       }
    }
 
-   //Release exclusive access to the DNS cache
-   osReleaseMutex(&dnsCacheMutex);
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
+#if (NET_RTOS_SUPPORT == ENABLED)
    //Set default polling interval
    delay = DNS_CACHE_INIT_POLLING_INTERVAL;
 
@@ -131,8 +137,8 @@ error_t mdnsResolve(NetInterface *interface,
       //Wait until the next polling period
       osDelayTask(delay);
 
-      //Acquire exclusive access to the DNS cache
-      osAcquireMutex(&dnsCacheMutex);
+      //Get exclusive access
+      osAcquireMutex(&netMutex);
 
       //Search the DNS cache for the specified host name
       entry = dnsFindEntry(interface, name, type, HOST_NAME_RESOLVER_MDNS);
@@ -155,8 +161,8 @@ error_t mdnsResolve(NetInterface *interface,
          error = ERROR_FAILURE;
       }
 
-      //Release exclusive access to the DNS cache
-      osReleaseMutex(&dnsCacheMutex);
+      //Release exclusive access
+      osReleaseMutex(&netMutex);
 
       //Backoff support for less aggressive polling
       delay = MIN(delay * 2, DNS_CACHE_MAX_POLLING_INTERVAL);
@@ -173,6 +179,7 @@ error_t mdnsResolve(NetInterface *interface,
       //Successful host name resolution
       TRACE_INFO("Host name resolved to %s...\r\n", ipAddrToString(ipAddr, NULL));
    }
+#endif
 
    //Return status code
    return error;
@@ -185,75 +192,23 @@ error_t mdnsResolve(NetInterface *interface,
  * @return Error code
  **/
 
-error_t mdnsSendQuery(DnsCacheEntry *entry)
+error_t mdnsClientSendQuery(DnsCacheEntry *entry)
 {
    error_t error;
-   size_t length;
-   size_t offset;
-   NetBuffer *buffer;
-   DnsHeader *message;
    DnsQuestion *dnsQuestion;
-   IpAddr destIpAddr;
+   MdnsMessage message;
 
-#if (IPV4_SUPPORT == ENABLED)
-   //An IPv4 address is expected?
-   if(entry->type == HOST_TYPE_IPV4)
-   {
-      //Select the relevant multicast address (224.0.0.251)
-      destIpAddr.length = sizeof(Ipv4Addr);
-      destIpAddr.ipv4Addr = MDNS_IPV4_MULTICAST_ADDR;
-   }
-   else
-#endif
-#if (IPV6_SUPPORT == ENABLED)
-   //An IPv6 address is expected?
-   if(entry->type == HOST_TYPE_IPV6)
-   {
-      //Select the relevant multicast address (ff02::fb)
-      destIpAddr.length = sizeof(Ipv6Addr);
-      destIpAddr.ipv6Addr = MDNS_IPV6_MULTICAST_ADDR;
-   }
-   else
-#endif
-   //Invalid host type?
-   {
-      //Report an error
-      return ERROR_INVALID_PARAMETER;
-   }
-
-   //Allocate a memory buffer to hold the mDNS query message
-   buffer = udpAllocBuffer(DNS_MESSAGE_MAX_SIZE, &offset);
-   //Failed to allocate buffer?
-   if(!buffer) return ERROR_OUT_OF_MEMORY;
-
-   //Point to the mDNS header
-   message = netBufferAt(buffer, offset);
-
-   //Format mDNS query message
-   message->id = 0;
-   message->qr = 0;
-   message->opcode = DNS_OPCODE_QUERY;
-   message->aa = 0;
-   message->tc = 0;
-   message->rd = 0;
-   message->ra = 0;
-   message->z = 0;
-   message->rcode = DNS_RCODE_NO_ERROR;
-
-   //The mDNS query contains one question
-   message->qdcount = HTONS(1);
-   message->ancount = 0;
-   message->nscount = 0;
-   message->arcount = 0;
-
-   //Length of the mDNS query message
-   length = sizeof(DnsHeader);
+   //Create an empty mDNS query message
+   error = mdnsCreateMessage(&message, FALSE);
+   //Any error to report?
+   if(error)
+      return error;
 
    //Encode the host name using the DNS name notation
-   length += dnsEncodeName(entry->name, message->questions);
+   message.length += dnsEncodeName(entry->name, message.dnsHeader->questions);
 
    //Point to the corresponding question structure
-   dnsQuestion = DNS_GET_QUESTION(message, length);
+   dnsQuestion = DNS_GET_QUESTION(message.dnsHeader, message.length);
 
 #if (IPV4_SUPPORT == ENABLED)
    //An IPv4 address is expected?
@@ -275,265 +230,115 @@ error_t mdnsSendQuery(DnsCacheEntry *entry)
 #endif
 
    //Update the length of the mDNS query message
-   length += sizeof(DnsQuestion);
+   message.length += sizeof(DnsQuestion);
+   //Number of questions in the Question Section
+   message.dnsHeader->qdcount = 1;
 
-   //Adjust the length of the multi-part buffer
-   netBufferSetLength(buffer, offset + length);
-
-   //Debug message
-   TRACE_INFO("Sending mDNS message (%" PRIuSIZE " bytes)...\r\n", length);
-   //Dump message
-   dnsDumpMessage(message, length);
-
-   //All multicast DNS queries should be sent with an IP TTL set to 255
-   error = udpSendDatagramEx(entry->interface, MDNS_PORT,
-      &destIpAddr, MDNS_PORT, buffer, offset, MDNS_DEFAULT_IP_TTL);
+   //Send mDNS message
+   error = mdnsSendMessage(entry->interface, &message, NULL, MDNS_PORT);
 
    //Free previously allocated memory
-   netBufferFree(buffer);
+   mdnsDeleteMessage(&message);
+
    //Return status code
    return error;
 }
 
 
 /**
- * @brief Process mDNS response message
+ * @brief Parse a resource record from the Answer Section
  * @param[in] interface Underlying network interface
- * @param[in] pseudoHeader UDP pseudo header
- * @param[in] udpHeader UDP header
- * @param[in] message Pointer to the mDNS response message
- * @param[in] length Length of the message
+ * @param[in] message Pointer to the mDNS message
+ * @param[in] offset Offset to first byte of the resource record
+ * @param[in] record Pointer to the resource record
  **/
 
-void mdnsProcessResponse(NetInterface *interface, const IpPseudoHeader *pseudoHeader,
-   const UdpHeader *udpHeader, const DnsHeader *message, size_t length)
+void mdnsClientParseAnRecord(NetInterface *interface,
+   const MdnsMessage *message, size_t offset, const DnsResourceRecord *record)
 {
    uint_t i;
-   uint_t j;
-   size_t n;
-   size_t pos;
    uint16_t rclass;
-   DnsResourceRecord *resourceRecord;
    DnsCacheEntry *entry;
 
-   //Source address check (refer to RFC 6762 section 11)
-   if(!mdnsCheckSourceAddr(interface, pseudoHeader))
-      return;
-
-   //Acquire exclusive access to the DNS cache
-   osAcquireMutex(&dnsCacheMutex);
-
-   //Point to the question section
-   pos = sizeof(DnsHeader);
-
-   //Any questions in the question section of a received mDNS
-   //response must be silently ignored
-   for(j = 0; j < ntohs(message->qdcount); j++)
+   //Loop through DNS cache entries
+   for(i = 0; i < DNS_CACHE_SIZE; i++)
    {
-      //Parse domain name
-      pos = dnsParseName(message, length, pos, NULL, 0);
-      //Invalid name?
-      if(!pos) break;
+      //Point to the current entry
+      entry = &dnsCache[i];
 
-      //Point to the next question
-      pos += sizeof(DnsQuestion);
-      //Make sure the mDNS message is valid
-      if(pos > length) break;
-   }
-
-   //Discard malformed mDNS messages...
-   if(j == ntohs(message->qdcount))
-   {
-      //Parse answer resource records
-      for(j = 0; j < ntohs(message->ancount); j++)
+      //mDNS name resolution in progress?
+      if(entry->state == DNS_STATE_IN_PROGRESS &&
+         entry->protocol == HOST_NAME_RESOLVER_MDNS)
       {
-         //Parse domain name
-         n = dnsParseName(message, length, pos, NULL, 0);
-         //Invalid name?
-         if(!n) break;
-
-         //Point to the associated resource record
-         resourceRecord = DNS_GET_RESOURCE_RECORD(message, n);
-         //Point to the resource data
-         n += sizeof(DnsResourceRecord);
-
-         //Make sure the resource record is valid
-         if(n > length)
-            break;
-         if((n + ntohs(resourceRecord->rdlength)) > length)
-            break;
-
-#if (MDNS_RESPONDER_SUPPORT == ENABLED)
-         //Check for conflicts
-         if(mdnsCompareName(message, length, pos, interface->hostname, "", ".local", 0))
+         //Compare resource record name
+         if(!dnsCompareName(message->dnsHeader, message->length, offset, entry->name, 0))
          {
-            //The hostname is already in use by some other host
-            interface->mdnsContext.conflict = TRUE;
-         }
-#endif
+            //Convert the class to host byte order
+            rclass = ntohs(record->rclass);
+            //Discard Cache Flush flag
+            rclass &= ~MDNS_RCLASS_CACHE_FLUSH;
 
-         //Loop through DNS cache entries
-         for(i = 0; i < DNS_CACHE_SIZE; i++)
-         {
-            //Point to the current entry
-            entry = &dnsCache[i];
-
-            //mDNS name resolution in progress?
-            if(entry->state == DNS_STATE_IN_PROGRESS &&
-               entry->protocol == HOST_NAME_RESOLVER_MDNS)
+            //Check the class of the resource record
+            if(rclass == DNS_RR_CLASS_IN)
             {
-               //Compare domain name
-               if(dnsCompareName(message, length, pos, entry->name, 0))
-               {
-                  //Convert the class to host byte order
-                  rclass = ntohs(resourceRecord->rclass);
-                  //Discard Cache Flush flag
-                  rclass &= ~MDNS_RCLASS_CACHE_FLUSH;
-
-                  //Check the class of the resource record
-                  if(rclass == DNS_RR_CLASS_IN)
-                  {
 #if (IPV4_SUPPORT == ENABLED)
-                     //IPv4 address expected?
-                     if(entry->type == HOST_TYPE_IPV4)
+               //IPv4 address expected?
+               if(entry->type == HOST_TYPE_IPV4)
+               {
+                  //A resource record found?
+                  if(ntohs(record->rtype) == DNS_RR_TYPE_A)
+                  {
+                     //Verify the length of the data field
+                     if(ntohs(record->rdlength) == sizeof(Ipv4Addr))
                      {
-                        //A resource record found?
-                        if(ntohs(resourceRecord->rtype) == DNS_RR_TYPE_A)
-                        {
-                           //Verify the length of the data field
-                           if(ntohs(resourceRecord->rdlength) == sizeof(Ipv4Addr))
-                           {
-                              //Copy the IPv4 address
-                              entry->ipAddr.length = sizeof(Ipv4Addr);
-                              ipv4CopyAddr(&entry->ipAddr.ipv4Addr, resourceRecord->rdata);
+                        //Copy the IPv4 address
+                        entry->ipAddr.length = sizeof(Ipv4Addr);
+                        ipv4CopyAddr(&entry->ipAddr.ipv4Addr, record->rdata);
 
-                              //Save current time
-                              entry->timestamp = osGetSystemTime();
-                              //Save TTL value
-                              entry->timeout = ntohl(resourceRecord->ttl) * 1000;
-                              //Limit the lifetime of the mDNS cache entries
-                              entry->timeout = MIN(entry->timeout, MDNS_MAX_LIFETIME);
+                        //Save current time
+                        entry->timestamp = osGetSystemTime();
+                        //Save TTL value
+                        entry->timeout = ntohl(record->ttl) * 1000;
+                        //Limit the lifetime of the mDNS cache entries
+                        entry->timeout = MIN(entry->timeout, MDNS_MAX_LIFETIME);
 
-                              //Host name successfully resolved
-                              entry->state = DNS_STATE_RESOLVED;
-                           }
-                        }
+                        //Host name successfully resolved
+                        entry->state = DNS_STATE_RESOLVED;
                      }
-#endif
-#if (IPV6_SUPPORT == ENABLED)
-                     //IPv6 address expected?
-                     if(entry->type == HOST_TYPE_IPV6)
-                     {
-                        //AAAA resource record found?
-                        if(ntohs(resourceRecord->rtype) == DNS_RR_TYPE_AAAA)
-                        {
-                           //Verify the length of the data field
-                           if(ntohs(resourceRecord->rdlength) == sizeof(Ipv6Addr))
-                           {
-                              //Copy the IPv6 address
-                              entry->ipAddr.length = sizeof(Ipv6Addr);
-                              ipv6CopyAddr(&entry->ipAddr.ipv6Addr, resourceRecord->rdata);
-
-                              //Save current time
-                              entry->timestamp = osGetSystemTime();
-                              //Save TTL value
-                              entry->timeout = ntohl(resourceRecord->ttl) * 1000;
-                              //Limit the lifetime of the mDNS cache entries
-                              entry->timeout = MIN(entry->timeout, MDNS_MAX_LIFETIME);
-
-                              //Host name successfully resolved
-                              entry->state = DNS_STATE_RESOLVED;
-                           }
-                        }
-                     }
-#endif
                   }
                }
+#endif
+#if (IPV6_SUPPORT == ENABLED)
+               //IPv6 address expected?
+               if(entry->type == HOST_TYPE_IPV6)
+               {
+                  //AAAA resource record found?
+                  if(ntohs(record->rtype) == DNS_RR_TYPE_AAAA)
+                  {
+                     //Verify the length of the data field
+                     if(ntohs(record->rdlength) == sizeof(Ipv6Addr))
+                     {
+                        //Copy the IPv6 address
+                        entry->ipAddr.length = sizeof(Ipv6Addr);
+                        ipv6CopyAddr(&entry->ipAddr.ipv6Addr, record->rdata);
+
+                        //Save current time
+                        entry->timestamp = osGetSystemTime();
+                        //Save TTL value
+                        entry->timeout = ntohl(record->ttl) * 1000;
+                        //Limit the lifetime of the mDNS cache entries
+                        entry->timeout = MIN(entry->timeout, MDNS_MAX_LIFETIME);
+
+                        //Host name successfully resolved
+                        entry->state = DNS_STATE_RESOLVED;
+                     }
+                  }
+               }
+#endif
             }
          }
-
-         //Point to the next resource record
-         pos = n + ntohs(resourceRecord->rdlength);
       }
    }
-
-   //Release exclusive access to the DNS cache
-   osReleaseMutex(&dnsCacheMutex);
-}
-
-
-/**
- * @brief Source address check
- * @param[in] interface Underlying network interface
- * @param[in] pseudoHeader UDP pseudo header
- * @return TRUE if the source address is valid, else FALSE
- **/
-
-bool_t mdnsCheckSourceAddr(NetInterface *interface,
-   const IpPseudoHeader *pseudoHeader)
-{
-   bool_t valid = FALSE;
-
-#if (IPV4_SUPPORT == ENABLED)
-   //An IPv4 packet was received?
-   if(pseudoHeader->length == sizeof(Ipv4PseudoHeader))
-   {
-      //Perform source address check (refer to RFC 6762 section 11)
-      if(pseudoHeader->ipv4Data.destAddr == MDNS_IPV4_MULTICAST_ADDR)
-      {
-         //All responses received with the destination address 224.0.0.251
-         //are necessarily deemed to have originated on the local link,
-         //regardless of source IP address
-         valid = TRUE;
-      }
-      else if(ipv4IsInLocalSubnet(interface, pseudoHeader->ipv4Data.srcAddr))
-      {
-         //The source IP address is on the local subnet
-         valid = TRUE;
-      }
-      else
-      {
-         //Only accept responses that originate from the local link, and
-         //silently discard any other response packets
-         valid = FALSE;
-      }
-   }
-#endif
-
-#if (IPV6_SUPPORT == ENABLED)
-   //An IPv6 packet was received?
-   if(pseudoHeader->length == sizeof(Ipv6PseudoHeader))
-   {
-      //Perform source address check (refer to RFC 6762 section 11)
-      if(ipv6CompAddr(&pseudoHeader->ipv6Data.destAddr, &MDNS_IPV6_MULTICAST_ADDR))
-      {
-         //All responses received with the destination address ff02::fb
-         //are necessarily deemed to have originated on the local link,
-         //regardless of source IP address
-         valid = TRUE;
-      }
-      else if(ipv6IsLinkLocalUnicastAddr(&pseudoHeader->ipv6Data.srcAddr))
-      {
-         //The source IP address is a link-local address
-         valid = TRUE;
-      }
-      else if(ipv6CompPrefix(&pseudoHeader->ipv6Data.srcAddr,
-         &interface->ipv6Config.prefix, interface->ipv6Config.prefixLength))
-      {
-         //The source IP address is on the local link
-         valid = TRUE;
-      }
-      else
-      {
-         //Only accept responses that originate from the local link, and
-         //silently discard any other response packets
-         valid = FALSE;
-      }
-   }
-#endif
-
-   //Return flag value
-   return valid;
 }
 
 #endif

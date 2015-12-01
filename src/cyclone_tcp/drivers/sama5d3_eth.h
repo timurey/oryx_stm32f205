@@ -23,18 +23,11 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 #ifndef _SAMA5D3_ETH_H
 #define _SAMA5D3_ETH_H
-
-//Network interface
-#ifndef SAMA5D3_ETH_INTERFACE_ID
-   #define SAMA5D3_ETH_INTERFACE_ID 1
-#elif (SAMA5D3_ETH_INTERFACE_ID < 0)
-   #error SAMA5D3_ETH_INTERFACE_ID parameter is not valid
-#endif
 
 //Number of TX buffers
 #ifndef SAMA5D3_ETH_TX_BUFFER_COUNT
@@ -150,13 +143,14 @@ void sama5d3EthDisableIrq(NetInterface *interface);
 void sama5d3EthIrqHandler(void);
 void sama5d3EthEventHandler(NetInterface *interface);
 
-error_t sama5d3EthSetMacFilter(NetInterface *interface);
-
 error_t sama5d3EthSendPacket(NetInterface *interface,
    const NetBuffer *buffer, size_t offset);
 
 uint_t sama5d3EthReceivePacket(NetInterface *interface,
    uint8_t *buffer, size_t size);
+
+error_t sama5d3EthSetMulticastFilter(NetInterface *interface);
+error_t sama5d3EthUpdateMacConfig(NetInterface *interface);
 
 void sama5d3EthWritePhyReg(uint8_t phyAddr, uint8_t regAddr, uint16_t data);
 uint16_t sama5d3EthReadPhyReg(uint8_t phyAddr, uint8_t regAddr);

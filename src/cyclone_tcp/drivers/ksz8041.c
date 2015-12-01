@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -75,6 +75,11 @@ error_t ksz8041Init(NetInterface *interface)
    //The PHY will generate interrupts when link status changes are detected
    ksz8041WritePhyReg(interface, KSZ8041_PHY_REG_ICSR, ICSR_LINK_DOWN_IE | ICSR_LINK_UP_IE);
 
+   //Force the TCP/IP stack to poll the link state at startup
+   interface->phyEvent = TRUE;
+   //Notify the TCP/IP stack of the event
+   osSetEvent(&netEvent);
+
    //Successful initialization
    return NO_ERROR;
 }
@@ -87,12 +92,12 @@ error_t ksz8041Init(NetInterface *interface)
 
 void ksz8041Tick(NetInterface *interface)
 {
+   uint16_t value;
+   bool_t linkState;
+
    //No external interrupt line driver?
    if(interface->extIntDriver == NULL)
    {
-      uint16_t value;
-      bool_t linkState;
-
       //Read basic status register
       value = ksz8041ReadPhyReg(interface, KSZ8041_PHY_REG_BMSR);
       //Retrieve current link state
@@ -101,18 +106,18 @@ void ksz8041Tick(NetInterface *interface)
       //Link up event?
       if(linkState && !interface->linkState)
       {
-         //A PHY event is pending...
+         //Set event flag
          interface->phyEvent = TRUE;
-         //Notify the user that the link state has changed
-         osSetEvent(&interface->nicRxEvent);
+         //Notify the TCP/IP stack of the event
+         osSetEvent(&netEvent);
       }
       //Link down event?
       else if(!linkState && interface->linkState)
       {
-         //A PHY event is pending...
+         //Set event flag
          interface->phyEvent = TRUE;
-         //Notify the user that the link state has changed
-         osSetEvent(&interface->nicRxEvent);
+         //Notify the TCP/IP stack of the event
+         osSetEvent(&netEvent);
       }
    }
 }
@@ -147,10 +152,9 @@ void ksz8041DisableIrq(NetInterface *interface)
 /**
  * @brief KSZ8041 event handler
  * @param[in] interface Underlying network interface
- * @return TRUE if a link state change notification is received
  **/
 
-bool_t ksz8041EventHandler(NetInterface *interface)
+void ksz8041EventHandler(NetInterface *interface)
 {
    uint16_t value;
 
@@ -160,7 +164,9 @@ bool_t ksz8041EventHandler(NetInterface *interface)
    //Link status change?
    if(value & (ICSR_LINK_DOWN_IF | ICSR_LINK_UP_IF))
    {
-      //Read basic status register
+      //Any link failure condition is latched in the BMSR register... Reading
+      //the register twice will always return the actual link status
+      value = ksz8041ReadPhyReg(interface, KSZ8041_PHY_REG_BMSR);
       value = ksz8041ReadPhyReg(interface, KSZ8041_PHY_REG_BMSR);
 
       //Link is up?
@@ -174,23 +180,23 @@ bool_t ksz8041EventHandler(NetInterface *interface)
          {
          //10BASE-T
          case PHYCON2_OP_MODE_10BT:
-            interface->speed100 = FALSE;
-            interface->fullDuplex = FALSE;
+            interface->linkSpeed = NIC_LINK_SPEED_10MBPS;
+            interface->duplexMode = NIC_HALF_DUPLEX_MODE;
             break;
          //10BASE-T full-duplex
          case PHYCON2_OP_MODE_10BT_FD:
-            interface->speed100 = FALSE;
-            interface->fullDuplex = TRUE;
+            interface->linkSpeed = NIC_LINK_SPEED_10MBPS;
+            interface->duplexMode = NIC_FULL_DUPLEX_MODE;
             break;
          //100BASE-TX
          case PHYCON2_OP_MODE_100BTX:
-            interface->speed100 = TRUE;
-            interface->fullDuplex = FALSE;
+            interface->linkSpeed = NIC_LINK_SPEED_100MBPS;
+            interface->duplexMode = NIC_HALF_DUPLEX_MODE;
             break;
          //100BASE-TX full-duplex
          case PHYCON2_OP_MODE_100BTX_FD:
-            interface->speed100 = TRUE;
-            interface->fullDuplex = TRUE;
+            interface->linkSpeed = NIC_LINK_SPEED_100MBPS;
+            interface->duplexMode = NIC_FULL_DUPLEX_MODE;
             break;
          //Unknown operation mode
          default:
@@ -201,29 +207,18 @@ bool_t ksz8041EventHandler(NetInterface *interface)
 
          //Update link state
          interface->linkState = TRUE;
-         //Display link state
-         TRACE_INFO("Link is up (%s)...\r\n", interface->name);
 
-         //Display actual speed and duplex mode
-         TRACE_INFO("%s %s\r\n",
-            interface->speed100 ? "100BASE-TX" : "10BASE-T",
-            interface->fullDuplex ? "Full-Duplex" : "Half-Duplex");
+         //Adjust MAC configuration parameters for proper operation
+         interface->nicDriver->updateMacConfig(interface);
       }
       else
       {
          //Update link state
          interface->linkState = FALSE;
-         //Display link state
-         TRACE_INFO("Link is down (%s)...\r\n", interface->name);
       }
 
-      //Notify the user that the link state has changed
-      return TRUE;
-   }
-   else
-   {
-      //No link state change...
-      return FALSE;
+      //Process link state change event
+      nicNotifyLinkChange(interface);
    }
 }
 

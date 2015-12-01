@@ -23,7 +23,7 @@
  * Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -50,14 +50,17 @@
 error_t nbnsResolve(NetInterface *interface, const char_t *name, IpAddr *ipAddr)
 {
    error_t error;
-   systime_t delay;
    DnsCacheEntry *entry;
+
+#if (NET_RTOS_SUPPORT == ENABLED)
+   systime_t delay;
 
    //Debug message
    TRACE_INFO("Resolving host name %s (NBNS resolver)...\r\n", name);
+#endif
 
-   //Acquire exclusive access to the DNS cache
-   osAcquireMutex(&dnsCacheMutex);
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
 
    //Search the DNS cache for the specified host name
    entry = dnsFindEntry(interface, name, HOST_TYPE_IPV4, HOST_NAME_RESOLVER_NBNS);
@@ -116,9 +119,10 @@ error_t nbnsResolve(NetInterface *interface, const char_t *name, IpAddr *ipAddr)
       }
    }
 
-   //Release exclusive access to the DNS cache
-   osReleaseMutex(&dnsCacheMutex);
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
+#if (NET_RTOS_SUPPORT == ENABLED)
    //Set default polling interval
    delay = DNS_CACHE_INIT_POLLING_INTERVAL;
 
@@ -128,8 +132,8 @@ error_t nbnsResolve(NetInterface *interface, const char_t *name, IpAddr *ipAddr)
       //Wait until the next polling period
       osDelayTask(delay);
 
-      //Acquire exclusive access to the DNS cache
-      osAcquireMutex(&dnsCacheMutex);
+      //Get exclusive access
+      osAcquireMutex(&netMutex);
 
       //Search the DNS cache for the specified host name
       entry = dnsFindEntry(interface, name, HOST_TYPE_IPV4, HOST_NAME_RESOLVER_NBNS);
@@ -152,8 +156,8 @@ error_t nbnsResolve(NetInterface *interface, const char_t *name, IpAddr *ipAddr)
          error = ERROR_FAILURE;
       }
 
-      //Release exclusive access to the DNS cache
-      osReleaseMutex(&dnsCacheMutex);
+      //Release exclusive access
+      osReleaseMutex(&netMutex);
 
       //Backoff support for less aggressive polling
       delay = MIN(delay * 2, DNS_CACHE_MAX_POLLING_INTERVAL);
@@ -170,6 +174,7 @@ error_t nbnsResolve(NetInterface *interface, const char_t *name, IpAddr *ipAddr)
       //Successful host name resolution
       TRACE_INFO("Host name resolved to %s...\r\n", ipAddrToString(ipAddr, NULL));
    }
+#endif
 
    //Return status code
    return error;
@@ -195,7 +200,8 @@ error_t nbnsSendQuery(DnsCacheEntry *entry)
    //Allocate a memory buffer to hold the NBNS query message
    buffer = udpAllocBuffer(DNS_MESSAGE_MAX_SIZE, &offset);
    //Failed to allocate buffer?
-   if(!buffer) return ERROR_OUT_OF_MEMORY;
+   if(!buffer)
+      return ERROR_OUT_OF_MEMORY;
 
    //Point to the NBNS header
    message = netBufferAt(buffer, offset);
@@ -271,7 +277,7 @@ void nbnsProcessResponse(NetInterface *interface, const Ipv4PseudoHeader *pseudo
    uint_t i;
    size_t pos;
    DnsCacheEntry *entry;
-   DnsResourceRecord *resourceRecord;
+   DnsResourceRecord *record;
    NbnsAddrEntry *addrEntry;
 
    //The NBNS response shall contain one answer
@@ -281,31 +287,29 @@ void nbnsProcessResponse(NetInterface *interface, const Ipv4PseudoHeader *pseudo
    //Parse NetBIOS name
    pos = nbnsParseName(message, length, sizeof(DnsHeader), NULL);
    //Invalid name?
-   if(!pos) return;
+   if(!pos)
+      return;
 
    //Point to the associated resource record
-   resourceRecord = DNS_GET_RESOURCE_RECORD(message, pos);
+   record = DNS_GET_RESOURCE_RECORD(message, pos);
    //Point to the resource data
    pos += sizeof(DnsResourceRecord);
 
    //Make sure the resource record is valid
    if(pos > length)
       return;
-   if((pos + ntohs(resourceRecord->rdlength)) > length)
+   if((pos + ntohs(record->rdlength)) > length)
       return;
 
    //Check the class and the type of the resource record
-   if(ntohs(resourceRecord->rclass) != DNS_RR_CLASS_IN)
+   if(ntohs(record->rclass) != DNS_RR_CLASS_IN)
       return;
-   if(ntohs(resourceRecord->rtype) != DNS_RR_TYPE_NB)
+   if(ntohs(record->rtype) != DNS_RR_TYPE_NB)
       return;
 
    //Verify the length of the data field
-   if(ntohs(resourceRecord->rdlength) < sizeof(NbnsAddrEntry))
+   if(ntohs(record->rdlength) < sizeof(NbnsAddrEntry))
       return;
-
-   //Acquire exclusive access to the DNS cache
-   osAcquireMutex(&dnsCacheMutex);
 
    //Loop through DNS cache entries
    for(i = 0; i < DNS_CACHE_SIZE; i++)
@@ -325,7 +329,7 @@ void nbnsProcessResponse(NetInterface *interface, const Ipv4PseudoHeader *pseudo
             if(nbnsCompareName(message, length, sizeof(DnsHeader), entry->name))
             {
                //Point to the address entry array
-               addrEntry = (NbnsAddrEntry *) resourceRecord->rdata;
+               addrEntry = (NbnsAddrEntry *) record->rdata;
                //Copy the IPv4 address
                entry->ipAddr.length = sizeof(Ipv4Addr);
                entry->ipAddr.ipv4Addr = addrEntry->addr;
@@ -333,7 +337,7 @@ void nbnsProcessResponse(NetInterface *interface, const Ipv4PseudoHeader *pseudo
                //Save current time
                entry->timestamp = osGetSystemTime();
                //Save TTL value
-               entry->timeout = ntohl(resourceRecord->ttl) * 1000;
+               entry->timeout = ntohl(record->ttl) * 1000;
                //Limit the lifetime of the NBNS cache entries
                entry->timeout = MIN(entry->timeout, NBNS_MAX_LIFETIME);
 
@@ -343,9 +347,6 @@ void nbnsProcessResponse(NetInterface *interface, const Ipv4PseudoHeader *pseudo
          }
       }
    }
-
-   //Release exclusive access to the DNS cache
-   osReleaseMutex(&dnsCacheMutex);
 }
 
 #endif

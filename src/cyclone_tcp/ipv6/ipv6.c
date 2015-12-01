@@ -28,7 +28,7 @@
  * as the successor to IP version 4 (IPv4). Refer to RFC 2460
  *
  * @author Oryx Embedded SARL (www.oryx-embedded.com)
- * @version 1.6.0
+ * @version 1.6.5
  **/
 
 //Switch to the appropriate trace level
@@ -40,10 +40,17 @@
 #include "core/net.h"
 #include "ipv6/ipv6.h"
 #include "ipv6/ipv6_frag.h"
+#include "ipv6/ipv6_misc.h"
+#include "ipv6/ipv6_pmtu.h"
 #include "ipv6/ipv6_routing.h"
 #include "ipv6/icmpv6.h"
 #include "ipv6/mld.h"
 #include "ipv6/ndp.h"
+#include "ipv6/ndp_cache.h"
+#include "ipv6/ndp_misc.h"
+#include "ipv6/ndp_router_adv.h"
+#include "ipv6/slaac.h"
+#include "dhcpv6/dhcpv6_client.h"
 #include "core/udp.h"
 #include "core/tcp_fsm.h"
 #include "core/raw_socket.h"
@@ -60,17 +67,17 @@ const Ipv6Addr IPV6_UNSPECIFIED_ADDR =
 const Ipv6Addr IPV6_LOOPBACK_ADDR =
    IPV6_ADDR(0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0001);
 
-//Link-local all-nodes IPv6 address
+//Link-local All-Nodes IPv6 address
 const Ipv6Addr IPV6_LINK_LOCAL_ALL_NODES_ADDR =
    IPV6_ADDR(0xFF02, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0001);
 
-//Link-local all-routers IPv6 address
+//Link-local All-Routers IPv6 address
 const Ipv6Addr IPV6_LINK_LOCAL_ALL_ROUTERS_ADDR =
    IPV6_ADDR(0xFF02, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0002);
 
 //Link-local IPv6 address prefix
 const Ipv6Addr IPV6_LINK_LOCAL_ADDR_PREFIX =
-   IPV6_ADDR(0xFF80, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000);
+   IPV6_ADDR(0xFE80, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000);
 
 //Solicited-node IPv6 address prefix
 const Ipv6Addr IPV6_SOLICITED_NODE_ADDR_PREFIX =
@@ -85,36 +92,38 @@ const Ipv6Addr IPV6_SOLICITED_NODE_ADDR_PREFIX =
 
 error_t ipv6Init(NetInterface *interface)
 {
-   //Use default MTU
-   interface->ipv6Config.mtu = interface->nicDriver->mtu;
+   Ipv6Context *context;
 
-   //Create a mutex to prevent simultaneous access to the IPv6 filter table
-   if(!osCreateMutex(&interface->ipv6FilterMutex))
-   {
-      //Failed to create mutex
-      return ERROR_OUT_OF_RESOURCES;
-   }
+   //Point to the IPv6 context
+   context = &interface->ipv6Context;
 
-   //Clear IPv6 filter table contents
-   memset(interface->ipv6Filter, 0, sizeof(interface->ipv6Filter));
-   //No entry in the filter table
-   interface->ipv6FilterSize = 0;
+   //Clear the IPv6 context
+   memset(context, 0, sizeof(Ipv6Context));
+
+   //Initialize interface specific variables
+   context->linkMtu = interface->nicDriver->mtu;
+   context->isRouter = FALSE;
+   context->curHopLimit = IPV6_DEFAULT_HOP_LIMIT;
+
+   //Multicast ICMPv6 Echo Request messages are allowed by default
+   context->enableMulticastEchoReq = TRUE;
+
+   //Initialize the list of IPv6 addresses assigned to the interface
+   memset(context->addrList, 0, sizeof(context->addrList));
+   //Initialize the Prefix List
+   memset(context->prefixList, 0, sizeof(context->prefixList));
+   //Initialize the Default Router List
+   memset(context->routerList, 0, sizeof(context->routerList));
+   //Initialize the list of DNS servers
+   memset(context->dnsServerList, 0, sizeof(context->dnsServerList));
+   //Initialize the multicast filter table
+   memset(context->multicastFilter, 0, sizeof(context->multicastFilter));
 
 #if (IPV6_FRAG_SUPPORT == ENABLED)
    //Identification field is used to identify fragments of an original IP datagram
-   interface->ipv6Identification = 0;
-
-   //Create a mutex to prevent simultaneous access to the reassembly queue
-   if(!osCreateMutex(&interface->ipv6FragQueueMutex))
-   {
-      //Clean up side effects
-      osDeleteMutex(&interface->ipv6FilterMutex);
-      //Report an error
-      return ERROR_OUT_OF_RESOURCES;
-   }
-
-   //Clear the reassembly queue
-   memset(interface->ipv6FragQueue, 0, sizeof(interface->ipv6FragQueue));
+   context->identification = 0;
+   //Initialize the reassembly queue
+   memset(context->fragQueue, 0, sizeof(context->fragQueue));
 #endif
 
    //Successful initialization
@@ -123,7 +132,7 @@ error_t ipv6Init(NetInterface *interface)
 
 
 /**
- * @brief Specify the MTU to use on the interface
+ * @brief Change the MTU of a network interface
  * @param[in] interface Pointer to the desired network interface
  * @param[in] mtu Maximum transmit unit
  * @return Error code
@@ -131,21 +140,35 @@ error_t ipv6Init(NetInterface *interface)
 
 error_t ipv6SetMtu(NetInterface *interface, size_t mtu)
 {
+   error_t error;
+
    //Check parameters
    if(interface == NULL)
       return ERROR_INVALID_PARAMETER;
 
-   //Make sure the MTU is acceptable
-   if(mtu <= (sizeof(Ipv6Header) + sizeof(Ipv6FragmentHeader)))
-      return ERROR_INVALID_VALUE;
-   if(mtu > interface->nicDriver->mtu)
-      return ERROR_INVALID_VALUE;
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
 
-   //Set the MTU to use on the interface
-   interface->ipv6Config.mtu = mtu;
+   //Make sure the specified MTU is greater than or equal to the minimum
+   //IPv6 MTU and does not exceed the maximum MTU of the interface
+   if(mtu >= IPV6_DEFAULT_MTU && mtu <= interface->nicDriver->mtu)
+   {
+      //Set the MTU to be used
+      interface->ipv6Context.linkMtu = mtu;
+      //Successful processing
+      error = NO_ERROR;
+   }
+   else
+   {
+      //The specified MTU is not valid
+      error = ERROR_OUT_OF_RANGE;
+   }
 
-   //Successful processing
-   return NO_ERROR;
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
+
+   //Return status code
+   return error;
 }
 
 
@@ -162,72 +185,12 @@ error_t ipv6GetMtu(NetInterface *interface, size_t *mtu)
    if(interface == NULL || mtu == NULL)
       return ERROR_INVALID_PARAMETER;
 
-   //Return the MTU to use on the interface
-   *mtu = interface->ipv6Config.mtu;
-
-   //Successful processing
-   return NO_ERROR;
-}
-
-
-/**
- * @brief Set link-local address and address state
- * @param[in] interface Pointer to the desired network interface
- * @param[in] addr Link-local address
- * @param[in] state State of the link-local address
- * @return Error code
- **/
-
-error_t ipv6SetLinkLocalAddrEx(NetInterface *interface,
-   const Ipv6Addr *addr, Ipv6AddrState state)
-{
-   error_t error;
-   Ipv6Addr solicitedNodeAddr;
-
-   //Check parameters
-   if(interface == NULL || addr == NULL)
-      return ERROR_INVALID_PARAMETER;
-   if(ipv6IsMulticastAddr(addr))
-      return ERROR_INVALID_ADDRESS;
-
-   //The link-local address is no more valid
-   interface->ipv6Config.linkLocalAddrState = IPV6_ADDR_STATE_INVALID;
-   //Clear duplicate flag
-   interface->ipv6Config.linkLocalAddrDup = FALSE;
-
-   //Check whether the link-local address was already configured
-   if(!ipv6CompAddr(&interface->ipv6Config.linkLocalAddr, &IPV6_UNSPECIFIED_ADDR))
-   {
-      //Form the Solicited-Node address
-      error = ipv6ComputeSolicitedNodeAddr(&interface->ipv6Config.linkLocalAddr, &solicitedNodeAddr);
-      //Any error to report?
-      if(error) return error;
-
-      //Leave the Solicited-Node multicast group
-      error = ipv6LeaveMulticastGroup(interface, &solicitedNodeAddr);
-      //Any error to report?
-      if(error) return error;
-   }
-
-   //Set up link-local address
-   interface->ipv6Config.linkLocalAddr = *addr;
-
-   //The unspecified address is not valid...
-   if(!ipv6CompAddr(&interface->ipv6Config.linkLocalAddr, &IPV6_UNSPECIFIED_ADDR))
-   {
-      //Form the Solicited-Node address for the link-local address
-      error = ipv6ComputeSolicitedNodeAddr(&interface->ipv6Config.linkLocalAddr, &solicitedNodeAddr);
-      //Any error to report?
-      if(error) return error;
-
-      //Join the Solicited-Node multicast group for each assigned address
-      error = ipv6JoinMulticastGroup(interface, &solicitedNodeAddr);
-      //Any error to report?
-      if(error) return error;
-
-      //Set the state of the link-local address
-      interface->ipv6Config.linkLocalAddrState = state;
-   }
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
+   //Return the current MTU value
+   *mtu = interface->ipv6Context.linkMtu;
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //Successful processing
    return NO_ERROR;
@@ -243,8 +206,32 @@ error_t ipv6SetLinkLocalAddrEx(NetInterface *interface,
 
 error_t ipv6SetLinkLocalAddr(NetInterface *interface, const Ipv6Addr *addr)
 {
-   //Assign the given link-local address to the interface
-   return ipv6SetLinkLocalAddrEx(interface, addr, IPV6_ADDR_STATE_VALID);
+   error_t error;
+
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
+
+#if (NDP_SUPPORT == ENABLED)
+   //Check whether Duplicate Address Detection should be performed
+   if(interface->ndpContext.dupAddrDetectTransmits > 0)
+   {
+      //Use the link-local address as a tentative address
+      error = ipv6SetAddr(interface, 0, addr, IPV6_ADDR_STATE_TENTATIVE,
+         NDP_INFINITE_LIFETIME, NDP_INFINITE_LIFETIME, TRUE);
+   }
+   else
+#endif
+   {
+      //The use of the link-local address is now unrestricted
+      error = ipv6SetAddr(interface, 0, addr, IPV6_ADDR_STATE_PREFERRED,
+         NDP_INFINITE_LIFETIME, NDP_INFINITE_LIFETIME, TRUE);
+   }
+
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
+
+   //Return status code
+   return error;
 }
 
 
@@ -257,127 +244,33 @@ error_t ipv6SetLinkLocalAddr(NetInterface *interface, const Ipv6Addr *addr)
 
 error_t ipv6GetLinkLocalAddr(NetInterface *interface, Ipv6Addr *addr)
 {
-   //Check parameters
-   if(interface == NULL || addr == NULL)
-      return ERROR_INVALID_PARAMETER;
-
-   //Get link-local address
-   *addr = interface->ipv6Config.linkLocalAddr;
-
-   //Successful processing
-   return NO_ERROR;
-}
-
-
-/**
- * @brief Configure IPv6 prefix
- * @param[in] interface Pointer to the desired network interface
- * @param[in] prefix IPv6 prefix
- * @param[in] length Prefix length
- **/
-
-error_t ipv6SetPrefix(NetInterface *interface, const Ipv6Addr *prefix, uint_t length)
-{
-   //Check parameters
-   if(interface == NULL || prefix == NULL)
-      return ERROR_INVALID_PARAMETER;
-
-   //Make sure the prefix length is valid
-   if(length >= 128)
-      return ERROR_INVALID_PARAMETER;
-
-   //Set up IPv6 prefix
-   interface->ipv6Config.prefix = *prefix;
-   //Save prefix length
-   interface->ipv6Config.prefixLength = length;
-
-   //Successful processing
-   return NO_ERROR;
-}
-
-
-/**
- * @brief Retrieve IPv6 prefix
- * @param[in] interface Pointer to the desired network interface
- * @param[out] prefix IPv6 prefix
- * @param[out] length Prefix length
- * @return Error code
- **/
-
-error_t ipv6GetPrefix(NetInterface *interface, Ipv6Addr *prefix, uint_t *length)
-{
-   //Check parameters
-   if(interface == NULL || prefix == NULL)
-      return ERROR_INVALID_PARAMETER;
-
-   //Get IPv6 prefix
-   *prefix = interface->ipv6Config.prefix;
-   //Get prefix length
-   *length = interface->ipv6Config.prefixLength;
-
-   //Successful processing
-   return NO_ERROR;
-}
-
-
-/**
- * @brief Set global address and address state
- * @param[in] interface Pointer to the desired network interface
- * @param[in] addr Global address
- * @param[in] state State of the global address
- * @return Error code
- **/
-
-error_t ipv6SetGlobalAddrEx(NetInterface *interface,
-   const Ipv6Addr *addr, Ipv6AddrState state)
-{
-   error_t error;
-   Ipv6Addr solicitedNodeAddr;
+   Ipv6AddrEntry *entry;
 
    //Check parameters
    if(interface == NULL || addr == NULL)
       return ERROR_INVALID_PARAMETER;
-   if(ipv6IsMulticastAddr(addr))
-      return ERROR_INVALID_ADDRESS;
 
-   //The global address is no more valid
-   interface->ipv6Config.globalAddrState = IPV6_ADDR_STATE_INVALID;
-   //Clear duplicate flag
-   interface->ipv6Config.globalAddrDup = FALSE;
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
 
-   //Check whether the global address was already configured
-   if(!ipv6CompAddr(&interface->ipv6Config.globalAddr, &IPV6_UNSPECIFIED_ADDR))
+   //Point to the corresponding address entry
+   entry = &interface->ipv6Context.addrList[0];
+
+   //Check whether the IPv6 address is valid
+   if(entry->state == IPV6_ADDR_STATE_PREFERRED ||
+      entry->state == IPV6_ADDR_STATE_DEPRECATED)
    {
-      //Form the Solicited-Node address
-      error = ipv6ComputeSolicitedNodeAddr(&interface->ipv6Config.globalAddr, &solicitedNodeAddr);
-      //Any error to report?
-      if(error) return error;
-
-      //Leave the Solicited-Node multicast group
-      error = ipv6LeaveMulticastGroup(interface, &solicitedNodeAddr);
-      //Any error to report?
-      if(error) return error;
+      //Get IPv6 address
+      *addr = entry->addr;
+   }
+   else
+   {
+      //Return the unspecified address when no address has been assigned
+      *addr = IPV6_UNSPECIFIED_ADDR;
    }
 
-   //Set up global address
-   interface->ipv6Config.globalAddr = *addr;
-
-   //The unspecified address is not valid...
-   if(!ipv6CompAddr(&interface->ipv6Config.globalAddr, &IPV6_UNSPECIFIED_ADDR))
-   {
-      //Form the Solicited-Node address for the global address
-      error = ipv6ComputeSolicitedNodeAddr(&interface->ipv6Config.globalAddr, &solicitedNodeAddr);
-      //Any error to report?
-      if(error) return error;
-
-      //Join the Solicited-Node multicast group for each assigned address
-      error = ipv6JoinMulticastGroup(interface, &solicitedNodeAddr);
-      //Any error to report?
-      if(error) return error;
-
-      //Set the state of the global address
-      interface->ipv6Config.globalAddrState = state;
-   }
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //Successful processing
    return NO_ERROR;
@@ -387,32 +280,88 @@ error_t ipv6SetGlobalAddrEx(NetInterface *interface,
 /**
  * @brief Assign global address
  * @param[in] interface Pointer to the desired network interface
+ * @param[in] index Zero-based index
  * @param[in] addr Global address
  * @return Error code
  **/
 
-error_t ipv6SetGlobalAddr(NetInterface *interface, const Ipv6Addr *addr)
+error_t ipv6SetGlobalAddr(NetInterface *interface, uint_t index, const Ipv6Addr *addr)
 {
-   //Assign the given global address to the interface
-   return ipv6SetGlobalAddrEx(interface, addr, IPV6_ADDR_STATE_VALID);
+   error_t error;
+
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
+
+#if (NDP_SUPPORT == ENABLED)
+   //Check whether Duplicate Address Detection should be performed
+   if(interface->ndpContext.dupAddrDetectTransmits > 0)
+   {
+      //Use the global address as a tentative address
+      error = ipv6SetAddr(interface, index + 1, addr, IPV6_ADDR_STATE_TENTATIVE,
+         NDP_INFINITE_LIFETIME, NDP_INFINITE_LIFETIME, TRUE);
+   }
+   else
+#endif
+   {
+      //The use of the global address is now unrestricted
+      error = ipv6SetAddr(interface, index + 1, addr, IPV6_ADDR_STATE_PREFERRED,
+         NDP_INFINITE_LIFETIME, NDP_INFINITE_LIFETIME, TRUE);
+   }
+
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
+
+   //Return status code
+   return error;
 }
 
 
 /**
  * @brief Retrieve global address
  * @param[in] interface Pointer to the desired network interface
+ * @param[in] index Zero-based index
  * @param[out] addr Global address
  * @return Error code
  **/
 
-error_t ipv6GetGlobalAddr(NetInterface *interface, Ipv6Addr *addr)
+error_t ipv6GetGlobalAddr(NetInterface *interface, uint_t index, Ipv6Addr *addr)
 {
+   Ipv6AddrEntry *entry;
+
    //Check parameters
    if(interface == NULL || addr == NULL)
       return ERROR_INVALID_PARAMETER;
 
-   //Get global address
-   *addr = interface->ipv6Config.globalAddr;
+   //Make sure that the index is valid
+   if((index + 1) >= IPV6_ADDR_LIST_SIZE)
+   {
+      //Return the unspecified address when the index is out of range
+      *addr = IPV6_UNSPECIFIED_ADDR;
+      //Report an error
+      return ERROR_OUT_OF_RANGE;
+   }
+
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
+
+   //Point to the corresponding address entry
+   entry = &interface->ipv6Context.addrList[index + 1];
+
+   //Check whether the IPv6 address is valid
+   if(entry->state == IPV6_ADDR_STATE_PREFERRED ||
+      entry->state == IPV6_ADDR_STATE_DEPRECATED)
+   {
+      //Get IPv6 address
+      *addr = entry->addr;
+   }
+   else
+   {
+      //Return the unspecified address when no address has been assigned
+      *addr = IPV6_UNSPECIFIED_ADDR;
+   }
+
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //Successful processing
    return NO_ERROR;
@@ -420,22 +369,106 @@ error_t ipv6GetGlobalAddr(NetInterface *interface, Ipv6Addr *addr)
 
 
 /**
- * @brief Configure router address
+ * @brief Assign anycast address
  * @param[in] interface Pointer to the desired network interface
- * @param[in] addr Router address
+ * @param[in] index Zero-based index
+ * @param[in] addr Anycast address
  * @return Error code
  **/
 
-error_t ipv6SetRouter(NetInterface *interface, const Ipv6Addr *addr)
+error_t ipv6SetAnycastAddr(NetInterface *interface, uint_t index, const Ipv6Addr *addr)
 {
+   error_t error;
+   Ipv6Addr *anycastAddrList;
+   Ipv6Addr solicitedNodeAddr;
+
    //Check parameters
    if(interface == NULL || addr == NULL)
       return ERROR_INVALID_PARAMETER;
+
+   //Make sure that the index is valid
+   if(index >= IPV6_ANYCAST_ADDR_LIST_SIZE)
+      return ERROR_OUT_OF_RANGE;
+
+   //The IPv6 address must be a valid unicast address
    if(ipv6IsMulticastAddr(addr))
       return ERROR_INVALID_ADDRESS;
 
-   //Set up router address
-   interface->ipv6Config.router = *addr;
+   //Initialize status code
+   error = NO_ERROR;
+
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
+
+   //Point to the list of anycast addresses assigned to the interface
+   anycastAddrList = interface->ipv6Context.anycastAddrList;
+
+   //Check whether an anycast address is already assigned
+   if(!ipv6CompAddr(&anycastAddrList[index], &IPV6_UNSPECIFIED_ADDR))
+   {
+      //Ethernet interface?
+      if(interface->nicDriver->type == NIC_TYPE_ETHERNET)
+      {
+         //Form the Solicited-Node address
+         ipv6ComputeSolicitedNodeAddr(&anycastAddrList[index], &solicitedNodeAddr);
+         //Leave the Solicited-Node multicast group
+         ipv6LeaveMulticastGroup(interface, &solicitedNodeAddr);
+      }
+   }
+
+   //Assign the specified anycast address to the interface
+   anycastAddrList[index] = *addr;
+
+   //Check whether the anycast address is valid
+   if(!ipv6CompAddr(addr, &IPV6_UNSPECIFIED_ADDR))
+   {
+      //Ethernet interface?
+      if(interface->nicDriver->type == NIC_TYPE_ETHERNET)
+      {
+         //Form the Solicited-Node address for the link-local address
+         ipv6ComputeSolicitedNodeAddr(addr, &solicitedNodeAddr);
+         //Join the Solicited-Node multicast group for each assigned address
+         error = ipv6JoinMulticastGroup(interface, &solicitedNodeAddr);
+      }
+   }
+
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
+
+   //Return status code
+   return error;
+}
+
+
+/**
+ * @brief Retrieve anycast address
+ * @param[in] interface Pointer to the desired network interface
+ * @param[in] index Zero-based index
+ * @param[out] addr Anycast address
+ * @return Error code
+ **/
+
+error_t ipv6GetAnycastAddr(NetInterface *interface, uint_t index, Ipv6Addr *addr)
+{
+   //Check parameters
+   if(interface == NULL || addr == NULL)
+      return ERROR_INVALID_PARAMETER;
+
+   //Make sure that the index is valid
+   if(index >= IPV6_ANYCAST_ADDR_LIST_SIZE)
+   {
+      //Return the unspecified address when the index is out of range
+      *addr = IPV6_UNSPECIFIED_ADDR;
+      //Report an error
+      return ERROR_OUT_OF_RANGE;
+   }
+
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
+   //Return the corresponding address entry
+   *addr = interface->ipv6Context.anycastAddrList[index];
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //Successful processing
    return NO_ERROR;
@@ -443,20 +476,220 @@ error_t ipv6SetRouter(NetInterface *interface, const Ipv6Addr *addr)
 
 
 /**
- * @brief Retrieve router address
+ * @brief Configure IPv6 prefix
  * @param[in] interface Pointer to the desired network interface
- * @param[out] addr Router address
+ * @param[in] index Zero-based index
+ * @param[in] prefix IPv6 prefix
+ * @param[in] length The number of leading bits in the prefix that are valid
+ **/
+
+error_t ipv6SetPrefix(NetInterface *interface,
+   uint_t index, const Ipv6Addr *prefix, uint_t length)
+{
+   Ipv6PrefixEntry *entry;
+
+   //Check parameters
+   if(interface == NULL || prefix == NULL)
+      return ERROR_INVALID_PARAMETER;
+
+   //Make sure that the index is valid
+   if(index >= IPV6_PREFIX_LIST_SIZE)
+      return ERROR_OUT_OF_RANGE;
+
+   //Make sure the prefix length is valid
+   if(length >= 128)
+      return ERROR_INVALID_PARAMETER;
+
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
+
+   //Point to the corresponding entry
+   entry = &interface->ipv6Context.prefixList[index];
+
+   //Set up IPv6 prefix
+   entry->prefix = *prefix;
+   entry->prefixLength = length;
+
+   //Check prefix length
+   if(length > 0)
+   {
+      //Manually assigned prefixes have infinite lifetime
+      entry->validLifetime = INFINITE_DELAY;
+      entry->preferredLifetime = INFINITE_DELAY;
+      entry->permanent = TRUE;
+   }
+   else
+   {
+      //Immediately time-out the entry
+      entry->validLifetime = 0;
+      entry->preferredLifetime = 0;
+      entry->permanent = FALSE;
+   }
+
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
+
+   //Successful processing
+   return NO_ERROR;
+}
+
+
+/**
+ * @brief Retrieve IPv6 prefix
+ * @param[in] interface Pointer to the desired network interface
+ * @param[in] index Zero-based index
+ * @param[out] prefix IPv6 prefix
+ * @param[out] length The number of leading bits in the prefix that are valid
  * @return Error code
  **/
 
-error_t ipv6GetRouter(NetInterface *interface, Ipv6Addr *addr)
+error_t ipv6GetPrefix(NetInterface *interface,
+   uint_t index, Ipv6Addr *prefix, uint_t *length)
 {
+   Ipv6PrefixEntry *entry;
+
+   //Check parameters
+   if(interface == NULL || prefix == NULL)
+      return ERROR_INVALID_PARAMETER;
+
+   //Make sure that the index is valid
+   if(index >= IPV6_PREFIX_LIST_SIZE)
+   {
+      //Return the ::/0 prefix when the index is out of range
+      *prefix = IPV6_UNSPECIFIED_ADDR;
+      *length = 0;
+      //Report an error
+      return ERROR_OUT_OF_RANGE;
+   }
+
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
+
+   //Point to the corresponding entry
+   entry = &interface->ipv6Context.prefixList[index];
+
+   //Check whether the prefix is valid
+   if(entry->validLifetime > 0)
+   {
+      //Get IPv6 prefix
+      *prefix = entry->prefix;
+      *length = entry->prefixLength;
+   }
+   else
+   {
+      //Return the ::/0 prefix when the valid lifetime has expired
+      *prefix = IPV6_UNSPECIFIED_ADDR;
+      *length = 0;
+   }
+
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
+
+   //Successful processing
+   return NO_ERROR;
+}
+
+
+/**
+ * @brief Configure default router
+ * @param[in] interface Pointer to the desired network interface
+ * @param[in] index Zero-based index
+ * @param[in] addr Default router address
+ * @return Error code
+ **/
+
+error_t ipv6SetDefaultRouter(NetInterface *interface, uint_t index, const Ipv6Addr *addr)
+{
+   Ipv6RouterEntry *entry;
+
    //Check parameters
    if(interface == NULL || addr == NULL)
       return ERROR_INVALID_PARAMETER;
 
-   //Get router address
-   *addr = interface->ipv6Config.router;
+   //Make sure that the index is valid
+   if(index >= IPV6_ROUTER_LIST_SIZE)
+      return ERROR_OUT_OF_RANGE;
+
+   //The IPv6 address must be a valid unicast address
+   if(ipv6IsMulticastAddr(addr))
+      return ERROR_INVALID_ADDRESS;
+
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
+
+   //Point to the corresponding entry
+   entry = &interface->ipv6Context.routerList[index];
+
+   //Set up router address
+   entry->addr = *addr;
+
+   //Valid IPv6 address?
+   if(!ipv6CompAddr(addr, &IPV6_UNSPECIFIED_ADDR))
+   {
+      //Manually assigned routers have infinite lifetime
+      entry->lifetime = INFINITE_DELAY;
+      entry->permanent = TRUE;
+   }
+   else
+   {
+      //Immediately time-out the entry
+      entry->lifetime = 0;
+      entry->permanent = FALSE;
+   }
+
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
+
+   //Successful processing
+   return NO_ERROR;
+}
+
+
+/**
+ * @brief Retrieve default router
+ * @param[in] interface Pointer to the desired network interface
+ * @param[in] index Zero-based index
+ * @param[out] addr Default router address
+ * @return Error code
+ **/
+
+error_t ipv6GetDefaultRouter(NetInterface *interface, uint_t index, Ipv6Addr *addr)
+{
+   Ipv6RouterEntry *entry;
+
+   //Check parameters
+   if(interface == NULL || addr == NULL)
+      return ERROR_INVALID_PARAMETER;
+
+   //Make sure that the index is valid
+   if(index >= IPV6_ROUTER_LIST_SIZE)
+   {
+      //Return the unspecified address when the index is out of range
+      *addr = IPV6_UNSPECIFIED_ADDR;
+      //Report an error
+      return ERROR_OUT_OF_RANGE;
+   }
+
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
+
+   //Point to the corresponding entry
+   entry = &interface->ipv6Context.routerList[index];
+
+   //Check the lifetime of the entry
+   if(entry->lifetime > 0)
+   {
+      //Get router address
+      *addr = entry->addr;
+   }
+   else
+   {
+      //Return the unspecified address when the lifetime has expired
+      *addr = IPV6_UNSPECIFIED_ADDR;
+   }
+
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //Successful processing
    return NO_ERROR;
@@ -466,22 +699,31 @@ error_t ipv6GetRouter(NetInterface *interface, Ipv6Addr *addr)
 /**
  * @brief Configure DNS server
  * @param[in] interface Pointer to the desired network interface
- * @param[in] num This parameter selects between the primary and secondary DNS server
+ * @param[in] index This parameter selects between the primary and secondary DNS server
  * @param[in] addr DNS server address
  * @return Error code
  **/
 
-error_t ipv6SetDnsServer(NetInterface *interface, uint_t num, const Ipv6Addr *addr)
+error_t ipv6SetDnsServer(NetInterface *interface, uint_t index, const Ipv6Addr *addr)
 {
    //Check parameters
    if(interface == NULL || addr == NULL)
       return ERROR_INVALID_PARAMETER;
+
+   //Make sure that the index is valid
+   if(index >= IPV6_DNS_SERVER_LIST_SIZE)
+      return ERROR_OUT_OF_RANGE;
+
+   //The IPv6 address must be a valid unicast address
    if(ipv6IsMulticastAddr(addr))
       return ERROR_INVALID_ADDRESS;
 
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
    //Set up DNS server address
-   if(num < IPV6_MAX_DNS_SERVERS)
-      interface->ipv6Config.dnsServer[num] = *addr;
+   interface->ipv6Context.dnsServerList[index] = *addr;
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //Successful processing
    return NO_ERROR;
@@ -491,22 +733,32 @@ error_t ipv6SetDnsServer(NetInterface *interface, uint_t num, const Ipv6Addr *ad
 /**
  * @brief Retrieve DNS server
  * @param[in] interface Pointer to the desired network interface
- * @param[in] num This parameter selects between the primary and secondary DNS server
+ * @param[in] index This parameter selects between the primary and secondary DNS server
  * @param[out] addr DNS server address
  * @return Error code
  **/
 
-error_t ipv6GetDnsServer(NetInterface *interface, uint_t num, Ipv6Addr *addr)
+error_t ipv6GetDnsServer(NetInterface *interface, uint_t index, Ipv6Addr *addr)
 {
    //Check parameters
    if(interface == NULL || addr == NULL)
       return ERROR_INVALID_PARAMETER;
 
-   //Get DNS server address
-   if(num < IPV6_MAX_DNS_SERVERS)
-      *addr = interface->ipv6Config.dnsServer[num];
-   else
+   //Make sure that the index is valid
+   if(index >= IPV6_DNS_SERVER_LIST_SIZE)
+   {
+      //Return the unspecified address when the index is out of range
       *addr = IPV6_UNSPECIFIED_ADDR;
+      //Report an error
+      return ERROR_OUT_OF_RANGE;
+   }
+
+   //Get exclusive access
+   osAcquireMutex(&netMutex);
+   //Get DNS server address
+   *addr = interface->ipv6Context.dnsServerList[index];
+   //Release exclusive access
+   osReleaseMutex(&netMutex);
 
    //Successful processing
    return NO_ERROR;
@@ -514,82 +766,181 @@ error_t ipv6GetDnsServer(NetInterface *interface, uint_t num, Ipv6Addr *addr)
 
 
 /**
- * @brief Incoming IPv6 packet processing
+ * @brief Callback function for link change event
  * @param[in] interface Underlying network interface
- * @param[in] buffer Multi-part buffer that holds the incoming IPv6 packet
  **/
 
-void ipv6ProcessPacket(NetInterface *interface, NetBuffer *buffer)
+void ipv6LinkChangeEvent(NetInterface *interface)
+{
+   uint_t i;
+   Ipv6Context *context;
+   Ipv6AddrEntry *entry;
+
+   //Point to the IPv6 context
+   context = &interface->ipv6Context;
+
+   //Restore default parameters
+   context->linkMtu = interface->nicDriver->mtu;
+   context->curHopLimit = IPV6_DEFAULT_HOP_LIMIT;
+
+   //Clear the list of IPv6 addresses
+   ipv6FlushAddrList(interface);
+   //Clear the Prefix List
+   ipv6FlushPrefixList(interface);
+   //Clear the Default Router List
+   ipv6FlushDefaultRouterList(interface);
+
+#if (IPV6_FRAG_SUPPORT == ENABLED)
+   //Flush the reassembly queue
+   ipv6FlushFragQueue(interface);
+#endif
+
+#if (MLD_SUPPORT == ENABLED)
+   //Notify MLD of link state changes
+   mldLinkChangeEvent(interface);
+#endif
+
+#if (NDP_SUPPORT == ENABLED)
+   //Notify NDP of link state changes
+   ndpLinkChangeEvent(interface);
+#endif
+
+#if (NDP_ROUTER_ADV_SUPPORT == ENABLED)
+   //Notify the RA service of link state changes
+   ndpRouterAdvLinkChangeEvent(interface->ndpRouterAdvContext);
+#endif
+
+#if (SLAAC_SUPPORT == ENABLED)
+   //Notify the SLAAC service of link state changes
+   slaacLinkChangeEvent(interface->slaacContext);
+#endif
+
+#if (DHCPV6_CLIENT_SUPPORT == ENABLED)
+   //Notify the DHCPv6 client of link state changes
+   dhcpv6ClientLinkChangeEvent(interface->dhcpv6ClientContext);
+#endif
+
+   //Go through the list of IPv6 addresses
+   for(i = 0; i < IPV6_ADDR_LIST_SIZE; i++)
+   {
+      //Point to the current entry
+      entry = &context->addrList[i];
+
+      //Check whether the IPv6 address has been manually assigned
+      if(entry->permanent)
+      {
+#if (NDP_SUPPORT == ENABLED)
+         //Check whether Duplicate Address Detection should be performed
+         if(interface->ndpContext.dupAddrDetectTransmits > 0)
+         {
+            //Use the IPv6 address as a tentative address
+            ipv6SetAddr(interface, i, &entry->addr, IPV6_ADDR_STATE_TENTATIVE,
+               NDP_INFINITE_LIFETIME, NDP_INFINITE_LIFETIME, TRUE);
+         }
+         else
+#endif
+         {
+            //The use of the IPv6 address is now unrestricted
+            ipv6SetAddr(interface, i, &entry->addr, IPV6_ADDR_STATE_PREFERRED,
+               NDP_INFINITE_LIFETIME, NDP_INFINITE_LIFETIME, TRUE);
+         }
+      }
+   }
+}
+
+
+/**
+ * @brief Incoming IPv6 packet processing
+ * @param[in] interface Underlying network interface
+ * @param[in] ipPacket Multi-part buffer that holds the incoming IPv6 packet
+ * @param[in] ipPacketOffset Offset to the first byte of the IPv6 packet
+ **/
+
+void ipv6ProcessPacket(NetInterface *interface,
+   NetBuffer *ipPacket, size_t ipPacketOffset)
 {
    error_t error;
-   size_t offset;
+   size_t i;
    size_t length;
    size_t nextHeaderOffset;
-   Ipv6Header *packet;
+   uint8_t *type;
+   Ipv6Header *ipHeader;
    IpPseudoHeader pseudoHeader;
 
    //Retrieve the length of the IPv6 packet
-   length = netBufferGetLength(buffer);
+   length = netBufferGetLength(ipPacket);
 
    //Ensure the packet length is greater than 40 bytes
    if(length < sizeof(Ipv6Header))
       return;
 
    //Point to the IPv6 header
-   packet = netBufferAt(buffer, 0);
+   ipHeader = netBufferAt(ipPacket, ipPacketOffset);
    //Sanity check
-   if(!packet) return;
+   if(ipHeader == NULL)
+      return;
 
    //Debug message
    TRACE_INFO("IPv6 packet received (%" PRIuSIZE " bytes)...\r\n", length);
    //Dump IPv6 header contents for debugging purpose
-   ipv6DumpHeader(packet);
+   ipv6DumpHeader(ipHeader);
 
    //Check IP version number
-   if(packet->version != IPV6_VERSION)
+   if(ipHeader->version != IPV6_VERSION)
       return;
    //Ensure the payload length is correct before processing the packet
-   if(ntohs(packet->payloadLength) > (length - sizeof(Ipv6Header)))
+   if(ntohs(ipHeader->payloadLength) > (length - sizeof(Ipv6Header)))
       return;
    //Source address filtering
-   if(ipv6CheckSourceAddr(interface, &packet->srcAddr))
+   if(ipv6CheckSourceAddr(interface, &ipHeader->srcAddr))
       return;
 
+#if defined(IPV6_PACKET_FORWARD_HOOK)
+   IPV6_PACKET_FORWARD_HOOK(interface, ipPacket, ipPacketOffset);
+#else
    //Destination address filtering
-   if(ipv6CheckDestAddr(interface, &packet->destAddr))
+   if(ipv6CheckDestAddr(interface, &ipHeader->destAddr))
    {
 #if(IPV6_ROUTING_SUPPORT == ENABLED)
       //Forward the packet according to the routing table
-      ipv6ForwardPacket(interface, buffer, 0);
+      ipv6ForwardPacket(interface, ipPacket, ipPacketOffset);
 #endif
       //We are done
       return;
    }
+#endif
 
-   //Calculate the effective length of the IPv6 packet
-   length = sizeof(Ipv6Header) + ntohs(packet->payloadLength);
+   //Calculate the effective length of the multi-part buffer
+   length = ipPacketOffset + sizeof(Ipv6Header) +
+      ntohs(ipHeader->payloadLength);
+
    //Adjust the length of the multi-part buffer if necessary
-   netBufferSetLength(buffer, length);
+   netBufferSetLength(ipPacket, length);
 
    //Form the IPv6 pseudo header
    pseudoHeader.length = sizeof(Ipv6PseudoHeader);
-   pseudoHeader.ipv6Data.srcAddr = packet->srcAddr;
-   pseudoHeader.ipv6Data.destAddr = packet->destAddr;
+   pseudoHeader.ipv6Data.srcAddr = ipHeader->srcAddr;
+   pseudoHeader.ipv6Data.destAddr = ipHeader->destAddr;
    pseudoHeader.ipv6Data.reserved = 0;
 
    //Keep track of Next Header field
-   nextHeaderOffset = &packet->nextHeader - (uint8_t *) packet;
+   nextHeaderOffset = ipPacketOffset + &ipHeader->nextHeader -
+      (uint8_t *) ipHeader;
+
    //Point to the first extension header
-   offset = sizeof(Ipv6Header);
+   i = ipPacketOffset + sizeof(Ipv6Header);
 
    //Parse extension headers
-   while(offset < length)
+   while(i < length)
    {
       //Retrieve the Next Header field of preceding header
-      uint8_t *type = netBufferAt(buffer, nextHeaderOffset);
+      type = netBufferAt(ipPacket, nextHeaderOffset);
+      //Sanity check
+      if(type == NULL)
+         return;
 
       //Update IPv6 pseudo header
-      pseudoHeader.ipv6Data.length = htonl(length - offset);
+      pseudoHeader.ipv6Data.length = htonl(length - i);
       pseudoHeader.ipv6Data.nextHeader = *type;
 
       //Each extension header is identified by the
@@ -599,33 +950,33 @@ void ipv6ProcessPacket(NetInterface *interface, NetBuffer *buffer)
       //Hop-by-Hop Options header?
       case IPV6_HOP_BY_HOP_OPT_HEADER:
          //Parse current extension header
-         error = ipv6ParseHopByHopOptHeader(interface, buffer, &offset, &nextHeaderOffset);
+         error = ipv6ParseHopByHopOptHeader(interface,
+            ipPacket, ipPacketOffset, &i, &nextHeaderOffset);
          //Continue processing
          break;
 
       //Destination Options header?
       case IPV6_DEST_OPT_HEADER:
          //Parse current extension header
-         error = ipv6ParseDestOptHeader(interface, buffer, &offset, &nextHeaderOffset);
+         error = ipv6ParseDestOptHeader(interface,
+            ipPacket, ipPacketOffset, &i, &nextHeaderOffset);
          //Continue processing
          break;
 
       //Routing header?
       case IPV6_ROUTING_HEADER:
          //Parse current extension header
-         error = ipv6ParseRoutingHeader(interface, buffer, &offset, &nextHeaderOffset);
+         error = ipv6ParseRoutingHeader(interface,
+            ipPacket, ipPacketOffset, &i, &nextHeaderOffset);
          //Continue processing
          break;
 
       //Fragment header?
       case IPV6_FRAGMENT_HEADER:
 #if (IPV6_FRAG_SUPPORT == ENABLED)
-         //Acquire exclusive access to the reassembly queue
-         osAcquireMutex(&interface->ipv6FragQueueMutex);
          //Parse current extension header
-         ipv6ParseFragmentHeader(interface, buffer, offset, nextHeaderOffset);
-         //Release exclusive access to the reassembly queue
-         osReleaseMutex(&interface->ipv6FragQueueMutex);
+         ipv6ParseFragmentHeader(interface,
+            ipPacket, ipPacketOffset, i, nextHeaderOffset);
 #endif
          //Exit immediately
          return;
@@ -633,28 +984,31 @@ void ipv6ProcessPacket(NetInterface *interface, NetBuffer *buffer)
       //Authentication header?
       case IPV6_AUTH_HEADER:
          //Parse current extension header
-         error = ipv6ParseAuthHeader(interface, buffer, &offset, &nextHeaderOffset);
+         error = ipv6ParseAuthHeader(interface,
+            ipPacket, ipPacketOffset, &i, &nextHeaderOffset);
          //Continue processing
          break;
 
       //Encapsulating Security Payload header?
       case IPV6_ESP_HEADER:
          //Parse current extension header
-         error = ipv6ParseEspHeader(interface, buffer, &offset, &nextHeaderOffset);
+         error = ipv6ParseEspHeader(interface,
+            ipPacket, ipPacketOffset, &i, &nextHeaderOffset);
          //Continue processing
          break;
 
       //ICMPv6 header?
       case IPV6_ICMPV6_HEADER:
          //Process incoming ICMPv6 message
-         icmpv6ProcessMessage(interface, &pseudoHeader.ipv6Data, buffer, offset, packet->hopLimit);
+         icmpv6ProcessMessage(interface, &pseudoHeader.ipv6Data,
+            ipPacket, i, ipHeader->hopLimit);
 
 #if (RAW_SOCKET_SUPPORT == ENABLED)
          //Packets addressed to the tentative address should be silently discarded
-         if(!ipv6IsTentativeAddr(interface, &packet->destAddr))
+         if(!ipv6IsTentativeAddr(interface, &ipHeader->destAddr))
          {
             //Allow raw sockets to process ICMPv6 messages
-            rawSocketProcessIpPacket(interface, &pseudoHeader, buffer, offset);
+            rawSocketProcessIpPacket(interface, &pseudoHeader, ipPacket, i);
          }
 #endif
          //Exit immediately
@@ -664,10 +1018,10 @@ void ipv6ProcessPacket(NetInterface *interface, NetBuffer *buffer)
       //TCP header?
       case IPV6_TCP_HEADER:
          //Packets addressed to the tentative address should be silently discarded
-         if(!ipv6IsTentativeAddr(interface, &packet->destAddr))
+         if(!ipv6IsTentativeAddr(interface, &ipHeader->destAddr))
          {
             //Process incoming TCP segment
-            tcpProcessSegment(interface, &pseudoHeader, buffer, offset);
+            tcpProcessSegment(interface, &pseudoHeader, ipPacket, i);
          }
          //Exit immediately
          return;
@@ -677,10 +1031,20 @@ void ipv6ProcessPacket(NetInterface *interface, NetBuffer *buffer)
       //UDP header?
       case IPV6_UDP_HEADER:
          //Packets addressed to the tentative address should be silently discarded
-         if(!ipv6IsTentativeAddr(interface, &packet->destAddr))
+         if(!ipv6IsTentativeAddr(interface, &ipHeader->destAddr))
          {
             //Process incoming UDP datagram
-            udpProcessDatagram(interface, &pseudoHeader, buffer, offset);
+            error = udpProcessDatagram(interface, &pseudoHeader, ipPacket, i);
+
+            //Unreachable port?
+            if(error == ERROR_PORT_UNREACHABLE)
+            {
+               //A destination node should originate a Destination Unreachable
+               //message with Code 4 in response to a packet for which the
+               //transport protocol has no listener
+               icmpv6SendErrorMessage(interface, ICMPV6_TYPE_DEST_UNREACHABLE,
+                  ICMPV6_CODE_PORT_UNREACHABLE, 0, ipPacket, ipPacketOffset);
+            }
          }
          //Exit immediately
          return;
@@ -698,20 +1062,23 @@ void ipv6ProcessPacket(NetInterface *interface, NetBuffer *buffer)
          TRACE_WARNING("Unrecognized Next Header type\r\n");
 
          //Packets addressed to the tentative address should be silently discarded
-         if(!ipv6IsTentativeAddr(interface, &packet->destAddr))
+         if(!ipv6IsTentativeAddr(interface, &ipHeader->destAddr))
          {
+            //Compute the offset of the unrecognized Next Header field within the packet
+            size_t n = nextHeaderOffset - ipPacketOffset;
+
             //Send an ICMP Parameter Problem message
             icmpv6SendErrorMessage(interface, ICMPV6_TYPE_PARAM_PROBLEM,
-               ICMPV6_CODE_UNKNOWN_NEXT_HEADER, nextHeaderOffset, buffer);
+               ICMPV6_CODE_UNKNOWN_NEXT_HEADER, n, ipPacket, ipPacketOffset);
          }
 
          //Discard incoming packet
          return;
       }
 
-      //En error was encountered while processing
-      //the current extension header?
-      if(error) return;
+      //Any error while processing the current extension header?
+      if(error)
+         return;
    }
 }
 
@@ -719,28 +1086,35 @@ void ipv6ProcessPacket(NetInterface *interface, NetBuffer *buffer)
 /**
  * @brief Parse Hop-by-Hop Options header
  * @param[in] interface Underlying network interface
- * @param[in] buffer Multi-part buffer containing the IPv6 packet
- * @param[in,out] offset Offset to the Hop-by-Hop Options header
+ * @param[in] ipPacket Multi-part buffer containing the IPv6 packet
+ * @param[in] ipPacketOffset Offset to the first byte of the IPv6 packet
+ * @param[in,out] headerOffset Offset to the Hop-by-Hop Options header
  * @param[in,out] nextHeaderOffset Offset to the Next Header field
  * @brief Error code
  **/
 
-error_t ipv6ParseHopByHopOptHeader(NetInterface *interface,
-   const NetBuffer *buffer, size_t *offset, size_t *nextHeaderOffset)
+error_t ipv6ParseHopByHopOptHeader(NetInterface *interface, const NetBuffer *ipPacket,
+   size_t ipPacketOffset, size_t *headerOffset, size_t *nextHeaderOffset)
 {
+   error_t error;
+   size_t n;
    size_t length;
    size_t headerLength;
    Ipv6HopByHopOptHeader *header;
 
    //Remaining bytes to process in the IPv6 packet
-   length = netBufferGetLength(buffer) - *offset;
+   length = netBufferGetLength(ipPacket) - *headerOffset;
 
-   //Ensure the extension header is valid
+   //Make sure the extension header is valid
    if(length < sizeof(Ipv6HopByHopOptHeader))
       return ERROR_INVALID_HEADER;
 
    //Point to the Hop-by-Hop Options header
-   header = netBufferAt(buffer, *offset);
+   header = netBufferAt(ipPacket, *headerOffset);
+   //Sanity check
+   if(header == NULL)
+      return ERROR_FAILURE;
+
    //Calculate the length of the entire header
    headerLength = (header->hdrExtLen * 8) + 8;
 
@@ -748,28 +1122,39 @@ error_t ipv6ParseHopByHopOptHeader(NetInterface *interface,
    if(headerLength > length)
       return ERROR_INVALID_HEADER;
 
-   //The Hop-by-Hop Options header, when present, must immediately follow the IPv6 header
-   if(*offset != sizeof(Ipv6Header))
-   {
-      //Debug message
-      TRACE_WARNING("Next Header value of zero!\r\n");
+   //Debug message
+   TRACE_DEBUG("  Hop-by-Hop Options header\r\n");
 
-      //Send an ICMP Parameter Problem message to the source of
-      //the packet if we encounter a Next Header value of zero
+   //The Hop-by-Hop Options header, when present, must immediately follow
+   //the IPv6 header
+   if(*headerOffset != (ipPacketOffset + sizeof(Ipv6Header)))
+   {
+      //Compute the offset of the unrecognized Next Header field within the packet
+      n = *nextHeaderOffset - ipPacketOffset;
+
+      //Send an ICMP Parameter Problem message to the source of the packet
       icmpv6SendErrorMessage(interface, ICMPV6_TYPE_PARAM_PROBLEM,
-         ICMPV6_CODE_UNKNOWN_NEXT_HEADER, *nextHeaderOffset, buffer);
+         ICMPV6_CODE_UNKNOWN_NEXT_HEADER, n, ipPacket, ipPacketOffset);
 
       //Discard incoming packet
       return ERROR_INVALID_HEADER;
    }
 
-   //Debug message
-   TRACE_DEBUG("  Hop-by-Hop Options header\r\n");
+   //Compute the length of the Options field
+   n = headerLength - sizeof(Ipv6HopByHopOptHeader);
+
+   //Parse options
+   error = ipv6ParseOptions(interface, ipPacket, ipPacketOffset,
+      *headerOffset + sizeof(Ipv6HopByHopOptHeader), n);
+
+   //Any error to report?
+   if(error)
+      return error;
 
    //Keep track of Next Header field
-   *nextHeaderOffset = *offset + &header->nextHeader - (uint8_t *) header;
-   //Remaining bytes to process in the payload
-   *offset += headerLength;
+   *nextHeaderOffset = *headerOffset + &header->nextHeader - (uint8_t *) header;
+   //Point to the next extension header
+   *headerOffset += headerLength;
 
    //Successful processing
    return NO_ERROR;
@@ -779,28 +1164,35 @@ error_t ipv6ParseHopByHopOptHeader(NetInterface *interface,
 /**
  * @brief Parse Destination Options header
  * @param[in] interface Underlying network interface
- * @param[in] buffer Multi-part buffer containing the IPv6 packet
- * @param[in,out] offset Offset to the Destination Options header
+ * @param[in] ipPacket Multi-part buffer containing the IPv6 packet
+ * @param[in] ipPacketOffset Offset to the first byte of the IPv6 packet
+ * @param[in,out] headerOffset Offset to the Destination Options header
  * @param[in,out] nextHeaderOffset Offset to the Next Header field
  * @brief Error code
  **/
 
-error_t ipv6ParseDestOptHeader(NetInterface *interface,
-   const NetBuffer *buffer, size_t *offset, size_t *nextHeaderOffset)
+error_t ipv6ParseDestOptHeader(NetInterface *interface, const NetBuffer *ipPacket,
+   size_t ipPacketOffset, size_t *headerOffset, size_t *nextHeaderOffset)
 {
+   error_t error;
+   size_t n;
    size_t length;
    size_t headerLength;
    Ipv6DestOptHeader *header;
 
    //Remaining bytes to process in the IPv6 packet
-   length = netBufferGetLength(buffer) - *offset;
+   length = netBufferGetLength(ipPacket) - *headerOffset;
 
-   //Ensure the extension header is valid
+   //Make sure the extension header is valid
    if(length < sizeof(Ipv6DestOptHeader))
       return ERROR_INVALID_HEADER;
 
    //Point to the Destination Options header
-   header = netBufferAt(buffer, *offset);
+   header = netBufferAt(ipPacket, *headerOffset);
+   //Sanity check
+   if(header == NULL)
+      return ERROR_FAILURE;
+
    //Calculate the length of the entire header
    headerLength = (header->hdrExtLen * 8) + 8;
 
@@ -811,10 +1203,21 @@ error_t ipv6ParseDestOptHeader(NetInterface *interface,
    //Debug message
    TRACE_DEBUG("  Destination Options header\r\n");
 
+   //Compute the length of the Options field
+   n = headerLength - sizeof(Ipv6DestOptHeader);
+
+   //Parse options
+   error = ipv6ParseOptions(interface, ipPacket, ipPacketOffset,
+      *headerOffset + sizeof(Ipv6DestOptHeader), n);
+
+   //Any error to report?
+   if(error)
+      return error;
+
    //Keep track of Next Header field
-   *nextHeaderOffset = *offset + &header->nextHeader - (uint8_t *) header;
-   //Remaining bytes to process in the payload
-   *offset += headerLength;
+   *nextHeaderOffset = *headerOffset + &header->nextHeader - (uint8_t *) header;
+   //Point to the next extension header
+   *headerOffset += headerLength;
 
    //Successful processing
    return NO_ERROR;
@@ -824,28 +1227,34 @@ error_t ipv6ParseDestOptHeader(NetInterface *interface,
 /**
  * @brief Parse Routing header
  * @param[in] interface Underlying network interface
- * @param[in] buffer Multi-part buffer containing the IPv6 packet
- * @param[in,out] offset Offset to the Routing header
+ * @param[in] ipPacket Multi-part buffer containing the IPv6 packet
+ * @param[in] ipPacketOffset Offset to the first byte of the IPv6 packet
+ * @param[in,out] headerOffset Offset to the Routing header
  * @param[in,out] nextHeaderOffset Offset to the Next Header field
  * @brief Error code
  **/
 
-error_t ipv6ParseRoutingHeader(NetInterface *interface,
-   const NetBuffer *buffer, size_t *offset, size_t *nextHeaderOffset)
+error_t ipv6ParseRoutingHeader(NetInterface *interface, const NetBuffer *ipPacket,
+   size_t ipPacketOffset, size_t *headerOffset, size_t *nextHeaderOffset)
 {
+   size_t n;
    size_t length;
    size_t headerLength;
    Ipv6RoutingHeader *header;
 
    //Remaining bytes to process in the IPv6 packet
-   length = netBufferGetLength(buffer) - *offset;
+   length = netBufferGetLength(ipPacket) - *headerOffset;
 
-   //Ensure the extension header is valid
+   //Make sure the extension header is valid
    if(length < sizeof(Ipv6RoutingHeader))
       return ERROR_INVALID_HEADER;
 
    //Point to the Routing header
-   header = netBufferAt(buffer, *offset);
+   header = netBufferAt(ipPacket, *headerOffset);
+   //Sanity check
+   if(header == NULL)
+      return ERROR_FAILURE;
+
    //Calculate the length of the entire header
    headerLength = (header->hdrExtLen * 8) + 8;
 
@@ -856,10 +1265,30 @@ error_t ipv6ParseRoutingHeader(NetInterface *interface,
    //Debug message
    TRACE_DEBUG("  Routing header\r\n");
 
+   //If, while processing a received packet, a node encounters a Routing
+   //header with an unrecognized Routing Type value, the required behavior
+   //of the node depends on the value of the Segments Left field
+   if(header->segmentsLeft != 0)
+   {
+      //Retrieve the offset of the Routing header within the packet
+      n = *headerOffset - ipPacketOffset;
+      //Compute the exact offset of the Routing Type field
+      n += (uint8_t *) &header->routingType - (uint8_t *) header;
+
+      //If Segments Left is non-zero, send an ICMP Parameter Problem,
+      //Code 0, message to the packet's Source Address, pointing to
+      //the unrecognized Routing Type
+      icmpv6SendErrorMessage(interface, ICMPV6_TYPE_PARAM_PROBLEM,
+         ICMPV6_CODE_INVALID_HEADER_FIELD, n, ipPacket, ipPacketOffset);
+
+      //The node must discard the packet
+      return ERROR_INVALID_TYPE;
+   }
+
    //Keep track of Next Header field
-   *nextHeaderOffset = *offset + &header->nextHeader - (uint8_t *) header;
-   //Remaining bytes to process in the payload
-   *offset += headerLength;
+   *nextHeaderOffset = *headerOffset + &header->nextHeader - (uint8_t *) header;
+   //Point to the next extension header
+   *headerOffset += headerLength;
 
    //Successful processing
    return NO_ERROR;
@@ -869,14 +1298,15 @@ error_t ipv6ParseRoutingHeader(NetInterface *interface,
 /**
  * @brief Parse Authentication header
  * @param[in] interface Underlying network interface
- * @param[in] buffer Multi-part buffer containing the IPv6 packet
- * @param[in,out] offset Offset to the Authentication header
+ * @param[in] ipPacket Multi-part buffer containing the IPv6 packet
+ * @param[in] ipPacketOffset Offset to the first byte of the IPv6 packet
+ * @param[in,out] headerOffset Offset to the Authentication header
  * @param[in,out] nextHeaderOffset Offset to the Next Header field
  * @brief Error code
  **/
 
-error_t ipv6ParseAuthHeader(NetInterface *interface,
-   const NetBuffer *buffer, size_t *offset, size_t *nextHeaderOffset)
+error_t ipv6ParseAuthHeader(NetInterface *interface, const NetBuffer *ipPacket,
+   size_t ipPacketOffset, size_t *headerOffset, size_t *nextHeaderOffset)
 {
    //Debug message
    TRACE_DEBUG("  Authentication header\r\n");
@@ -888,19 +1318,145 @@ error_t ipv6ParseAuthHeader(NetInterface *interface,
 /**
  * @brief Parse Encapsulating Security Payload header
  * @param[in] interface Underlying network interface
- * @param[in] buffer Multi-part buffer containing the IPv6 packet
- * @param[in,out] offset Offset to the Encapsulating Security Payload header
+ * @param[in] ipPacket Multi-part buffer containing the IPv6 packet
+ * @param[in] ipPacketOffset Offset to the first byte of the IPv6 packet
+ * @param[in,out] headerOffset Offset to the Encapsulating Security Payload header
  * @param[in,out] nextHeaderOffset Offset to the Next Header field
  * @brief Error code
  **/
 
-error_t ipv6ParseEspHeader(NetInterface *interface,
-   const NetBuffer *buffer, size_t *offset, size_t *nextHeaderOffset)
+error_t ipv6ParseEspHeader(NetInterface *interface, const NetBuffer *ipPacket,
+   size_t ipPacketOffset, size_t *headerOffset, size_t *nextHeaderOffset)
 {
    //Debug message
    TRACE_DEBUG("  Encapsulating Security Payload header\r\n");
    //Authentication not supported
    return ERROR_FAILURE;
+}
+
+
+/**
+ * @brief Parse IPv6 options
+ * @param[in] interface Underlying network interface
+ * @param[in] ipPacket Multi-part buffer containing the IPv6 packet
+ * @param[in] ipPacketOffset Offset to the first byte of the IPv6 packet
+ * @param[in] optOffset Offset to the first byte of the Options field
+ * @param[in] optLength Length of the Options field
+ * @brief Error code
+ **/
+
+error_t ipv6ParseOptions(NetInterface *interface, const NetBuffer *ipPacket,
+   size_t ipPacketOffset, size_t optOffset, size_t optLength)
+{
+   size_t i;
+   size_t n;
+   uint8_t type;
+   uint8_t action;
+   uint8_t *options;
+   Ipv6Option *option;
+   Ipv6Header *ipHeader;
+
+   //Point to the first byte of the Options field
+   options = netBufferAt(ipPacket, optOffset);
+
+   //Sanity check
+   if(options == NULL)
+      return ERROR_FAILURE;
+
+   //Parse options
+   for(i = 0; i < optLength; )
+   {
+      //Point to the current option
+      option = (Ipv6Option *) (options + i);
+      //Get option type
+      type = option->type & IPV6_OPTION_TYPE_MASK;
+
+      //Pad1 option?
+      if(type == IPV6_OPTION_TYPE_PAD1)
+      {
+         //Advance data pointer
+         i++;
+      }
+      //PadN option?
+      else if(type == IPV6_OPTION_TYPE_PADN)
+      {
+         //Malformed IPv6 packet?
+         if((i + sizeof(Ipv6Option)) > optLength)
+            return ERROR_INVALID_LENGTH;
+
+         //Advance data pointer
+         i += sizeof(Ipv6Option) + option->length;
+      }
+      //Unrecognized option?
+      else
+      {
+         //Point to the IPv6 header
+         ipHeader = netBufferAt(ipPacket, ipPacketOffset);
+
+         //Sanity check
+         if(ipHeader == NULL)
+            return ERROR_FAILURE;
+
+         //Get the value of the highest-order two bits
+         action = option->type & IPV6_ACTION_MASK;
+
+         //The highest-order two bits specify the action that must be taken
+         //if the processing IPv6 node does not recognize the option type
+         if(action == IPV6_ACTION_SKIP_OPTION)
+         {
+            //Skip over this option and continue processing the header
+         }
+         else if(action == IPV6_ACTION_DISCARD_PACKET)
+         {
+            //Discard the packet
+            return ERROR_INVALID_OPTION;
+         }
+         else if(action == IPV6_ACTION_SEND_ICMP_ERROR_ALL)
+         {
+            //Calculate the octet offset within the invoking packet
+            //where the error was detected
+            n = optOffset + i - ipPacketOffset;
+
+            //Send an ICMP Parameter Problem message to the source of the
+            //packet, regardless of whether or not the destination address
+            //was a multicast address
+            icmpv6SendErrorMessage(interface, ICMPV6_TYPE_PARAM_PROBLEM,
+               ICMPV6_CODE_UNKNOWN_IPV6_OPTION, n, ipPacket, ipPacketOffset);
+
+            //Discard the packet
+            return ERROR_INVALID_OPTION;
+         }
+         else if(action == IPV6_ACTION_SEND_ICMP_ERROR_UNI)
+         {
+            //Send an ICMP Parameter Problem message to the source of the
+            //packet, only if the destination address was not a multicast
+            //address
+            if(!ipv6IsMulticastAddr(&ipHeader->destAddr))
+            {
+               //Calculate the octet offset within the invoking packet
+               //where the error was detected
+               n = optOffset + i - ipPacketOffset;
+
+               //Send the ICMP Parameter Problem message
+               icmpv6SendErrorMessage(interface, ICMPV6_TYPE_PARAM_PROBLEM,
+                  ICMPV6_CODE_UNKNOWN_IPV6_OPTION, n, ipPacket, ipPacketOffset);
+            }
+
+            //Discard the packet
+            return ERROR_INVALID_OPTION;
+         }
+
+         //Malformed IPv6 packet?
+         if((i + sizeof(Ipv6Option)) > optLength)
+            return ERROR_INVALID_LENGTH;
+
+         //Advance data pointer
+         i += sizeof(Ipv6Option) + option->length;
+      }
+   }
+
+   //Successful processing
+   return NO_ERROR;
 }
 
 
@@ -919,29 +1475,44 @@ error_t ipv6SendDatagram(NetInterface *interface, Ipv6PseudoHeader *pseudoHeader
 {
    error_t error;
    size_t length;
+   size_t pathMtu;
 
    //Retrieve the length of payload
    length = netBufferGetLength(buffer) - offset;
 
-   //Use default Hop Limit value?
-   if(!hopLimit) hopLimit = IPV6_DEFAULT_HOP_LIMIT;
+   //Check whether the Hop Limit value is zero
+   if(hopLimit == 0)
+   {
+      //Use default Hop Limit value
+      hopLimit = interface->ipv6Context.curHopLimit;
+   }
 
-   //If the payload length is smaller than the network
-   //interface MTU then no fragmentation is needed
-   if((length + sizeof(Ipv6Header)) <= interface->ipv6Config.mtu)
+#if (IPV6_PMTU_SUPPORT == ENABLED)
+   //Retrieve the PMTU for the specified destination address
+   pathMtu = ipv6GetPathMtu(interface, &pseudoHeader->destAddr);
+
+   //The PMTU should not exceed the MTU of the first-hop link
+   if(pathMtu > interface->ipv6Context.linkMtu)
+      pathMtu = interface->ipv6Context.linkMtu;
+#else
+   //The PMTU value for the path is assumed to be the MTU of the first-hop link
+   pathMtu = interface->ipv6Context.linkMtu;
+#endif
+
+   //If the payload is smaller than the PMTU then no fragmentation is needed
+   if((length + sizeof(Ipv6Header)) <= pathMtu)
    {
       //Send data as is
-      error = ipv6SendPacket(interface,
-         pseudoHeader, 0, 0, buffer, offset, hopLimit);
+      error = ipv6SendPacket(interface, pseudoHeader,
+         0, 0, buffer, offset, hopLimit);
    }
-   //If the payload length exceeds the network interface MTU
-   //then the device must fragment the data
+   //If the payload length exceeds the PMTU then the device must fragment the data
    else
    {
 #if (IPV6_FRAG_SUPPORT == ENABLED)
       //Fragment IP datagram into smaller packets
-      error = ipv6FragmentDatagram(interface,
-         pseudoHeader, buffer, offset, hopLimit);
+      error = ipv6FragmentDatagram(interface, pseudoHeader,
+         buffer, offset, pathMtu, hopLimit);
 #else
       //Fragmentation is not supported
       error = ERROR_MESSAGE_TOO_LONG;
@@ -1056,77 +1627,95 @@ error_t ipv6SendPacket(NetInterface *interface, Ipv6PseudoHeader *pseudoHeader,
    {
       Ipv6Addr destIpAddr;
       MacAddr destMacAddr;
+      NdpDestCacheEntry *entry;
 
-      //Destination IPv6 address is a multicast address?
-      if(ipv6IsMulticastAddr(&pseudoHeader->destAddr))
+      //When the sending node has a packet to send, it first examines
+      //the Destination Cache
+      entry = ndpFindDestCacheEntry(interface, &pseudoHeader->destAddr);
+
+      //Check whether a matching entry exists
+      if(entry != NULL)
       {
-         //Destination IPv6 address
-         destIpAddr = pseudoHeader->destAddr;
-         //Map IPv6 multicast address to MAC-layer multicast address
-         error = ipv6MapMulticastAddrToMac(&pseudoHeader->destAddr, &destMacAddr);
+         //Retrieve the address of the next-hop
+         destIpAddr = entry->nextHop;
+         //Update timestamp
+         entry->timestamp = osGetSystemTime();
+         //No error to report
+         error = NO_ERROR;
       }
-      //Destination IPv6 address is a link-local unicast address?
-      else if(ipv6IsLinkLocalUnicastAddr(&pseudoHeader->destAddr))
-      {
-         //Destination IPv6 address
-         destIpAddr = pseudoHeader->destAddr;
-         //Resolve host address using Neighbor Discovery protocol
-         error = ndpResolve(interface, &pseudoHeader->destAddr, &destMacAddr);
-      }
-      //Destination host is on the same link?
-      else if(ipv6CompPrefix(&pseudoHeader->destAddr,
-         &interface->ipv6Config.prefix, interface->ipv6Config.prefixLength))
-      {
-         //Destination IPv6 address
-         destIpAddr = pseudoHeader->destAddr;
-         //Resolve host address using Neighbor Discovery protocol
-         error = ndpResolve(interface, &pseudoHeader->destAddr, &destMacAddr);
-      }
-      //Destination host is outside the local network?
       else
       {
-         //Make sure the default router is properly set
-         if(!ipv6CompAddr(&interface->ipv6Config.router, &IPV6_UNSPECIFIED_ADDR))
+         //Perform next-hop determination
+         error = ndpSelectNextHop(interface,
+            &pseudoHeader->destAddr, NULL, &destIpAddr);
+
+         //Check status code
+         if(error == NO_ERROR)
          {
-            //Use the default router to forward the packet
-            destIpAddr = interface->ipv6Config.router;
-            //Perform address resolution
-            error = ndpResolve(interface, &interface->ipv6Config.router, &destMacAddr);
+            //Create a new Destination Cache entry
+            entry = ndpCreateDestCacheEntry(interface);
+
+            //Destination cache entry successfully created?
+            if(entry != NULL)
+            {
+               //Destination address
+               entry->destAddr = pseudoHeader->destAddr;
+               //Address of the next hop
+               entry->nextHop = destIpAddr;
+
+               //Initially, the PMTU value for a path is assumed to be
+               //the MTU of the first-hop link
+               entry->pathMtu = interface->ipv6Context.linkMtu;
+
+               //Set timestamp
+               entry->timestamp = osGetSystemTime();
+            }
+         }
+      }
+
+      //Successful next-hop determination?
+      if(error == NO_ERROR)
+      {
+         //Destination IPv6 address is a multicast address?
+         if(ipv6IsMulticastAddr(&destIpAddr))
+         {
+            //Map IPv6 multicast address to MAC-layer multicast address
+            error = ipv6MapMulticastAddrToMac(&destIpAddr, &destMacAddr);
          }
          else
          {
-            //There is no route to the outside world...
-            error = ERROR_NO_ROUTE;
+            //Resolve host address using Neighbor Discovery protocol
+            error = ndpResolve(interface, &destIpAddr, &destMacAddr);
          }
-      }
 
-      //Successful address resolution?
-      if(!error)
-      {
-         //Debug message
-         TRACE_INFO("Sending IPv6 packet (%" PRIuSIZE " bytes)...\r\n", length);
-         //Dump IP header contents for debugging purpose
-         ipv6DumpHeader(packet);
+         //Successful address resolution?
+         if(error == NO_ERROR)
+         {
+            //Debug message
+            TRACE_INFO("Sending IPv6 packet (%" PRIuSIZE " bytes)...\r\n", length);
+            //Dump IP header contents for debugging purpose
+            ipv6DumpHeader(packet);
 
-         //Send Ethernet frame
-         error = ethSendFrame(interface, &destMacAddr, buffer, offset, ETH_TYPE_IPV6);
-      }
-      //Address resolution is in progress?
-      else if(error == ERROR_IN_PROGRESS)
-      {
-         //Debug message
-         TRACE_INFO("Enqueuing IPv6 packet (%" PRIuSIZE " bytes)...\r\n", length);
-         //Dump IP header contents for debugging purpose
-         ipv6DumpHeader(packet);
+            //Send Ethernet frame
+            error = ethSendFrame(interface, &destMacAddr, buffer, offset, ETH_TYPE_IPV6);
+         }
+         //Address resolution is in progress?
+         else if(error == ERROR_IN_PROGRESS)
+         {
+            //Debug message
+            TRACE_INFO("Enqueuing IPv6 packet (%" PRIuSIZE " bytes)...\r\n", length);
+            //Dump IP header contents for debugging purpose
+            ipv6DumpHeader(packet);
 
-         //Enqueue packets waiting for address resolution
-         error = ndpEnqueuePacket(interface, &destIpAddr, buffer, offset);
-      }
-      //Address resolution failed?
-      else
-      {
-         //Debug message
-         TRACE_WARNING("Cannot map IPv6 address to Ethernet address!\r\n");
+            //Enqueue packets waiting for address resolution
+            error = ndpEnqueuePacket(NULL, interface, &destIpAddr, buffer, offset);
+         }
+         //Address resolution failed?
+         else
+         {
+            //Debug message
+            TRACE_WARNING("Cannot map IPv6 address to Ethernet address!\r\n");
+         }
       }
    }
    else
@@ -1169,163 +1758,6 @@ error_t ipv6SendPacket(NetInterface *interface, Ipv6PseudoHeader *pseudoHeader,
 
 
 /**
- * @brief Source IPv6 address filtering
- * @param[in] interface Underlying network interface
- * @param[in] ipAddr Source IPv6 address to be checked
- * @return Error code
- **/
-
-error_t ipv6CheckSourceAddr(NetInterface *interface, const Ipv6Addr *ipAddr)
-{
-   //Multicast addresses cannot be used as source address
-   if(ipv6IsMulticastAddr(ipAddr))
-   {
-      //Debug message
-      TRACE_WARNING("Wrong source IPv6 address!\r\n");
-      //The source address not is acceptable
-      return ERROR_INVALID_ADDRESS;
-   }
-
-   //The source address is acceptable
-   return NO_ERROR;
-}
-
-
-/**
- * @brief Destination IPv6 address filtering
- * @param[in] interface Underlying network interface
- * @param[in] ipAddr Destination IPv6 address to be checked
- * @return Error code
- **/
-
-error_t ipv6CheckDestAddr(NetInterface *interface, const Ipv6Addr *ipAddr)
-{
-   uint_t i;
-
-   //Filter out any invalid addresses
-   error_t error = ERROR_INVALID_ADDRESS;
-
-   //Multicast address?
-   if(ipv6IsMulticastAddr(ipAddr))
-   {
-      //Acquire exclusive access to the IPv6 filter table
-      osAcquireMutex(&interface->ipv6FilterMutex);
-
-      //Loop through the IPv6 filter table
-      for(i = 0; i < interface->ipv6FilterSize; i++)
-      {
-         //Check whether the destination IPv6 address matches
-         //a relevant multicast address
-         if(ipv6CompAddr(&interface->ipv6Filter[i].addr, ipAddr))
-         {
-            //The multicast address is acceptable
-            error = NO_ERROR;
-            //Stop immediately
-            break;
-         }
-      }
-
-      //Release exclusive access to the IPv6 filter table
-      osReleaseMutex(&interface->ipv6FilterMutex);
-   }
-   //Unicast address?
-   else
-   {
-      //The destination address matches the link-local address?
-      if(interface->ipv6Config.linkLocalAddrState != IPV6_ADDR_STATE_INVALID &&
-         ipv6CompAddr(&interface->ipv6Config.linkLocalAddr, ipAddr))
-      {
-         //The destination address is acceptable
-         error = NO_ERROR;
-      }
-      //The destination address matches the global address?
-      else if(interface->ipv6Config.globalAddrState != IPV6_ADDR_STATE_INVALID &&
-         ipv6CompAddr(&interface->ipv6Config.globalAddr, ipAddr))
-      {
-         //The destination address is acceptable
-         error = NO_ERROR;
-      }
-   }
-
-   //Return status code
-   return error;
-}
-
-
-/**
- * @brief IPv6 source address selection
- *
- * This function selects the source address and the relevant network interface
- * to be used in order to join the specified destination address
- *
- * @param[in,out] interface A pointer to a valid network interface may provided as
- *   a hint. The function returns a pointer identifying the interface to be used
- * @param[in] destAddr Destination IPv6 address
- * @param[out] srcAddr Local IPv6 address to be used
- * @return Error code
- **/
-
-error_t ipv6SelectSourceAddr(NetInterface **interface,
-   const Ipv6Addr *destAddr, Ipv6Addr *srcAddr)
-{
-   //Use default network interface?
-   if(*interface == NULL)
-      *interface = netGetDefaultInterface();
-
-   //Get the most appropriate source address to use
-   if(ipv6IsLinkLocalUnicastAddr(destAddr))
-   {
-      //Use link local address
-      *srcAddr = (*interface)->ipv6Config.linkLocalAddr;
-   }
-   else if(ipv6IsMulticastAddr(destAddr) && ipv6MulticastAddrScope(destAddr) < IPV6_SCOPE_GLOBAL)
-   {
-      //Use link local address
-      *srcAddr = (*interface)->ipv6Config.linkLocalAddr;
-   }
-   else
-   {
-      //Use global address
-      *srcAddr = (*interface)->ipv6Config.globalAddr;
-   }
-
-   //Successful processing
-   return NO_ERROR;
-}
-
-
-/**
- * @brief Check whether an IPv6 address is a tentative address
- * @param[in] interface Underlying network interface
- * @param[in] ipAddr IPv6 address to be checked
- * @return Error code
- **/
-
-bool_t ipv6IsTentativeAddr(NetInterface *interface, const Ipv6Addr *ipAddr)
-{
-   //Link-local address?
-   if(interface->ipv6Config.linkLocalAddrState == IPV6_ADDR_STATE_TENTATIVE &&
-      ipv6CompAddr(ipAddr, &interface->ipv6Config.linkLocalAddr))
-   {
-      //The specified IPv6 address is a tentative address
-      return TRUE;
-   }
-   //Global address?
-   else if(interface->ipv6Config.globalAddrState == IPV6_ADDR_STATE_TENTATIVE &&
-      ipv6CompAddr(ipAddr, &interface->ipv6Config.globalAddr))
-   {
-      //The specified IPv6 address is a tentative address
-      return TRUE;
-   }
-   else
-   {
-      //The specified IPv6 address is not a tentative address
-      return FALSE;
-   }
-}
-
-
-/**
  * @brief Join an IPv6 multicast group
  * @param[in] interface Underlying network interface
  * @param[in] groupAddr IPv6 Multicast address to join
@@ -1336,67 +1768,75 @@ error_t ipv6JoinMulticastGroup(NetInterface *interface, const Ipv6Addr *groupAdd
 {
    error_t error;
    uint_t i;
+   Ipv6FilterEntry *entry;
+   Ipv6FilterEntry *firstFreeEntry;
+#if (ETH_SUPPORT == ENABLED)
    MacAddr macAddr;
+#endif
 
-   //Ensure the specified IPv6 address is a multicast address
+   //The IPv6 address must be a valid multicast address
    if(!ipv6IsMulticastAddr(groupAddr))
       return ERROR_INVALID_ADDRESS;
 
-   //Acquire exclusive access to the IPv6 filter table
-   osAcquireMutex(&interface->ipv6FilterMutex);
+   //Initialize error code
+   error = NO_ERROR;
+   //Keep track of the first free entry
+   firstFreeEntry = NULL;
 
-   //Loop through filter table entries
-   for(i = 0; i < interface->ipv6FilterSize; i++)
+   //Go through the multicast filter table
+   for(i = 0; i < IPV6_MULTICAST_FILTER_SIZE; i++)
    {
-      //Check whether the table already contains the specified IPv6 address
-      if(ipv6CompAddr(&interface->ipv6Filter[i].addr, groupAddr))
+      //Point to the current entry
+      entry = &interface->ipv6Context.multicastFilter[i];
+
+      //Valid entry?
+      if(entry->refCount > 0)
       {
-         //Increment the reference count
-         interface->ipv6Filter[i].refCount++;
-         //Release exclusive access to the IPv6 filter table
-         osReleaseMutex(&interface->ipv6FilterMutex);
-         //No error to report
-         return NO_ERROR;
+         //Check whether the table already contains the specified IPv6 address
+         if(ipv6CompAddr(&entry->addr, groupAddr))
+         {
+            //Increment the reference count
+            entry->refCount++;
+            //Successful processing
+            return NO_ERROR;
+         }
+      }
+      else
+      {
+         //Keep track of the first free entry
+         if(firstFreeEntry == NULL)
+            firstFreeEntry = entry;
       }
    }
 
-   //The IPv6 filter table is full ?
-   if(i >= IPV6_FILTER_MAX_SIZE)
+   //Check whether the multicast filter table is full
+   if(firstFreeEntry == NULL)
    {
-      //Release exclusive access to the IPv6 filter table
-      osReleaseMutex(&interface->ipv6FilterMutex);
       //A new entry cannot be added
       return ERROR_FAILURE;
    }
 
-   //Map the multicast IPv6 address to a MAC-layer address
-   ipv6MapMulticastAddrToMac(groupAddr, &macAddr);
-
 #if (ETH_SUPPORT == ENABLED)
+   //Map the IPv6 multicast address to a MAC-layer address
+   ipv6MapMulticastAddrToMac(groupAddr, &macAddr);
    //Add the corresponding address to the MAC filter table
    error = ethAcceptMulticastAddr(interface, &macAddr);
-#else
-   error = NO_ERROR;
 #endif
 
-   //Ensure the MAC filter table was successfully updated
+   //MAC filter table successfully updated?
    if(!error)
    {
       //Now we can safely add a new entry to the table
-      interface->ipv6Filter[i].addr = *groupAddr;
+      firstFreeEntry->addr = *groupAddr;
       //Initialize the reference count
-      interface->ipv6Filter[i].refCount = 1;
-      //Adjust the size of the IPv6 filter table
-      interface->ipv6FilterSize++;
+      firstFreeEntry->refCount = 1;
 
 #if (MLD_SUPPORT == ENABLED)
       //Start listening to the multicast address
-      mldStartListening(interface, &interface->ipv6Filter[i]);
+      mldStartListening(interface, firstFreeEntry);
 #endif
    }
 
-   //Release exclusive access to the IPv6 filter table
-   osReleaseMutex(&interface->ipv6FilterMutex);
    //Return status code
    return error;
 }
@@ -1405,161 +1845,62 @@ error_t ipv6JoinMulticastGroup(NetInterface *interface, const Ipv6Addr *groupAdd
 /**
  * @brief Leave an IPv6 multicast group
  * @param[in] interface Underlying network interface
- * @param[in] groupAddr Multicast IPv6 address to drop
+ * @param[in] groupAddr IPv6 multicast address to drop
  * @return Error code
  **/
 
 error_t ipv6LeaveMulticastGroup(NetInterface *interface, const Ipv6Addr *groupAddr)
 {
    uint_t i;
-   uint_t j;
+   Ipv6FilterEntry *entry;
+#if (ETH_SUPPORT == ENABLED)
    MacAddr macAddr;
+#endif
 
-   //Ensure the specified IPv6 address is a multicast address
+   //The IPv6 address must be a valid multicast address
    if(!ipv6IsMulticastAddr(groupAddr))
       return ERROR_INVALID_ADDRESS;
 
-   //Acquire exclusive access to the IPv6 filter table
-   osAcquireMutex(&interface->ipv6FilterMutex);
-
-   //Loop through filter table entries
-   for(i = 0; i < interface->ipv6FilterSize; i++)
+   //Go through the multicast filter table
+   for(i = 0; i < IPV6_MULTICAST_FILTER_SIZE; i++)
    {
-      //Specified IPv6 address found?
-      if(ipv6CompAddr(&interface->ipv6Filter[i].addr, groupAddr))
+      //Point to the current entry
+      entry = &interface->ipv6Context.multicastFilter[i];
+
+      //Valid entry?
+      if(entry->refCount > 0)
       {
-         //Decrement the reference count
-         interface->ipv6Filter[i].refCount--;
-
-         //Remove the entry if the reference count drops to zero
-         if(interface->ipv6Filter[i].refCount < 1)
+         //Specified IPv6 address found?
+         if(ipv6CompAddr(&entry->addr, groupAddr))
          {
+            //Decrement the reference count
+            entry->refCount--;
+
+            //Remove the entry if the reference count drops to zero
+            if(entry->refCount == 0)
+            {
 #if (MLD_SUPPORT == ENABLED)
-            //Stop listening to the multicast address
-            mldStopListening(interface, &interface->ipv6Filter[i]);
+               //Stop listening to the multicast address
+               mldStopListening(interface, entry);
 #endif
-            //Map the multicast IPv6 address to a MAC-layer address
-            ipv6MapMulticastAddrToMac(groupAddr, &macAddr);
-
 #if (ETH_SUPPORT == ENABLED)
-            //Drop the corresponding address from the MAC filter table
-            ethDropMulticastAddr(interface, &macAddr);
+               //Map the IPv6 multicast address to a MAC-layer address
+               ipv6MapMulticastAddrToMac(groupAddr, &macAddr);
+               //Drop the corresponding address from the MAC filter table
+               ethDropMulticastAddr(interface, &macAddr);
 #endif
-            //Adjust the size of the IPv6 filter table
-            interface->ipv6FilterSize--;
+               //Remove the multicast address from the list
+               entry->addr = IPV6_UNSPECIFIED_ADDR;
+            }
 
-            //Remove the corresponding entry
-            for(j = i; j < interface->ipv6FilterSize; j++)
-               interface->ipv6Filter[j] = interface->ipv6Filter[j + 1];
+            //Successful processing
+            return NO_ERROR;
          }
-
-         //Release exclusive access to the IPv6 filter table
-         osReleaseMutex(&interface->ipv6FilterMutex);
-         //No error to report
-         return NO_ERROR;
       }
    }
 
-   //Release exclusive access to the IPv6 filter table
-   osReleaseMutex(&interface->ipv6FilterMutex);
    //The specified IPv6 address does not exist
-   return ERROR_FAILURE;
-}
-
-
-/**
- * @brief Compare IPv6 address prefixes
- * @param[in] ipAddr1 Pointer to the first IPv6 address
- * @param[in] ipAddr2 Pointer to the second IPv6 address
- * @param[in] length Prefix length
- * @return TRUE if the prefixes match each other, else FALSE
- **/
-
-bool_t ipv6CompPrefix(const Ipv6Addr *ipAddr1, const Ipv6Addr *ipAddr2, size_t length)
-{
-   size_t n = length / 8;
-   size_t m = length % 8;
-
-   //Ensure the prefix length is valid
-   if(length < 1 || length > 128)
-      return FALSE;
-
-   //Compare the first part
-   if(n > 0)
-   {
-      if(memcmp(ipAddr1, ipAddr2, n))
-         return FALSE;
-   }
-
-   //Compare the remaining bits, if any
-   if(m > 0)
-   {
-      //Calculate the mask to apply
-      uint8_t mask = ((1 << m) - 1) << (8 - m);
-
-      //Check remaining bits
-      if((ipAddr1->b[n] & mask) != (ipAddr2->b[n] & mask))
-         return FALSE;
-   }
-
-   //The prefixes match each other
-   return TRUE;
-}
-
-
-/**
- * @brief Form a solicited-node address from an IPv6 address
- * @param[in] ipAddr Unicast or anycast address
- * @param[out] solicitedNodeAddr Corresponding solicited-node address
- * @return Error code
- **/
-
-error_t ipv6ComputeSolicitedNodeAddr(const Ipv6Addr *ipAddr, Ipv6Addr *solicitedNodeAddr)
-{
-   //Ensure the specified address is a valid unicast or anycast address
-   if(ipv6IsMulticastAddr(ipAddr))
-      return ERROR_INVALID_ADDRESS;
-
-   //Copy the 104-bit prefix
-   ipv6CopyAddr(solicitedNodeAddr, &IPV6_SOLICITED_NODE_ADDR_PREFIX);
-   //Take the low-order 24 bits of the address (unicast or
-   //anycast) and append those bits to the prefix
-   solicitedNodeAddr->b[13] = ipAddr->b[13];
-   solicitedNodeAddr->b[14] = ipAddr->b[14];
-   solicitedNodeAddr->b[15] = ipAddr->b[15];
-
-   //No error to report
-   return NO_ERROR;
-}
-
-
-/**
- * @brief Map an IPv6 multicast address to a MAC-layer multicast address
- * @param[in] ipAddr IPv6 multicast address
- * @param[out] macAddr Corresponding MAC-layer multicast address
- * @return Error code
- **/
-
-error_t ipv6MapMulticastAddrToMac(const Ipv6Addr *ipAddr, MacAddr *macAddr)
-{
-   //Ensure the specified IPv6 address is a multicast address
-   if(!ipv6IsMulticastAddr(ipAddr))
-      return ERROR_INVALID_ADDRESS;
-
-   //To support IPv6 multicasting, MAC address range of 33-33-00-00-00-00
-   //to 33-33-FF-FF-FF-FF is reserved (refer to RFC 2464)
-   macAddr->b[0] = 0x33;
-   macAddr->b[1] = 0x33;
-   //The low-order 32 bits of the IPv6 multicast address are mapped directly
-   //to the low-order 32 bits in the MAC-layer multicast address
-   macAddr->b[2] = ipAddr->b[12];
-   macAddr->b[3] = ipAddr->b[13];
-   macAddr->b[4] = ipAddr->b[14];
-   macAddr->b[5] = ipAddr->b[15];
-
-   //The specified IPv6 multicast address was successfully
-   //mapped to a MAC-layer address
-   return NO_ERROR;
+   return ERROR_ADDRESS_NOT_FOUND;
 }
 
 
