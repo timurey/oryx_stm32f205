@@ -42,9 +42,10 @@ typedef struct
    uint8_t *id;
 } OwSensor_t;
 
+
 OwSensor_t oneWireSensors[MAX_ONEWIRE_COUNT];
 OwSerial_t foundedSerial[MAX_ONEWIRE_COUNT];
-
+int oneWireFoundedDevices;
 #if (OW_DS1820_SUPPORT == ENABLE)
 
 #include "ds1820/ds1820.h"

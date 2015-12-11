@@ -17,7 +17,7 @@ jsmntok_t tokens[32]; // a number >= total number of tokens
 static error_t scanDS1820(void);
 static error_t grpoupDS1820(void);
 static error_t individualDS1820(void);
-static float ow_decode_temp(ds1820Scratchpad_t * ow_buf, uint8_t type, float *Temperature);
+static error_t ow_decode_temp(ds1820Scratchpad_t * ow_buf, uint8_t type, float *Temperature);
 
 
 register_onewire_function (ds1820, &scanDS1820, &grpoupDS1820, &individualDS1820);
@@ -52,6 +52,7 @@ static error_t individualDS1820(void)
 {
    int i;
    ds1820Scratchpad_t buf;
+   error_t error;
 
    for (i=0;i<MAX_DS1820_COUNT;i++)
    {
@@ -62,7 +63,7 @@ static error_t individualDS1820(void)
          OW_Send(OW_NO_RESET, (uint8_t *)"\xBE", 1, NULL,0, OW_NO_READ); //0xBE - Выдать температуру
          OW_Send(OW_NO_RESET, (uint8_t *)"\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF", 9, &buf.lsb, 9 ,0); //read bytes
          *sensorsDS1820[i].onewire->status &= ~READEBLE;
-         ow_decode_temp(&buf, sensorsDS1820[i].onewire->serial->type, sensorsDS1820[i].onewire->value );
+         error = ow_decode_temp(&buf, sensorsDS1820[i].onewire->serial->type, sensorsDS1820[i].onewire->value );
          *sensorsDS1820[i].onewire->status |= READEBLE;
       }
    }
@@ -70,9 +71,10 @@ static error_t individualDS1820(void)
 }
 
 
-float ow_decode_temp(ds1820Scratchpad_t * ow_buf, uint8_t type, float *Temperature)
+error_t ow_decode_temp(ds1820Scratchpad_t * ow_buf, uint8_t type, float *Temperature)
 {
 
+   error_t error = NO_ERROR;
    short temp;
    // float Temperature=0;
    uint8_t  CRCR;
@@ -115,7 +117,11 @@ float ow_decode_temp(ds1820Scratchpad_t * ow_buf, uint8_t type, float *Temperatu
       }
       *Temperature=temp / 10.0;
    }
-   return 0x7fff;
+   else
+   {
+	   error = ERROR_BAD_CRC;
+   }
+   return error;
 }
 
 void setup_ds1820(void)

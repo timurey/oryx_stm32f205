@@ -12,16 +12,10 @@
 
 
 UART_HandleTypeDef UartHandle;
-#include "rest/rest.h"
-/*
- * todo: add fungtions to manage onewite sensors
- */
-//register_rest_function(output, "/output", &restInitOneWire, &restDenitOneWire, &restGetOneWire, &restPostOneWire, &restPutOneWire, &restDeleteOneWire);
 
 // Буфер для приема/передачи по 1-wire
 uint8_t ow_buf[8];
 OsMutex oneWireMutex;
-int oneWireFoundedDevices;
 extern sensor_t sensors[MAX_ONEWIRE_COUNT];
 #if (OW_DS1820_SUPPORT == ENABLE)
 ds1820Scratchpad_t ds1820Buf;
