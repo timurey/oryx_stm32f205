@@ -245,6 +245,7 @@ static void inputTask(void * pvParameters)
    int i;
    int inputNum=0;
    clicType tempvalue;
+   uint16_t currentVal;
    (void) pvParameters;
    memset (&inputContex, 0x00, sizeof(inputStatus) * MAX_INPUTS_COUNT);
    while (1)
@@ -265,7 +266,7 @@ static void inputTask(void * pvParameters)
                   }
                   if (inputContex[inputNum].bt_time>debounce)
                   {
-                     sensors[i].value.uVal = 0x01;
+                     sensorsSetValueUint16(&sensors[i], 0x01);
                      sensors[i].status  |= ONLINE;
                      inputContex[inputNum].bt_release_time=0;
                   }
@@ -278,7 +279,7 @@ static void inputTask(void * pvParameters)
                   }
                   if (inputContex[inputNum].bt_release_time>debounce)
                   {
-                     sensors[i].value.uVal = 0x00;
+                     sensorsSetValueUint16(&sensors[i], 0x00);
                      sensors[i].status  |= ONLINE;
                      inputContex[inputNum].bt_time=0;
                   }
@@ -302,20 +303,21 @@ static void inputTask(void * pvParameters)
 
                   if (inputContex[inputNum].bt_time>long_press)
                   {
-                     tempvalue = check_dimmervalue(sensors[i].value.uVal, inputContex[inputNum].direction, inputContex[inputNum].bt_cnt);
+                     currentVal = sensorsGetValueUint16(&sensors[i]);
+                     tempvalue = check_dimmervalue(currentVal, inputContex[inputNum].direction, inputContex[inputNum].bt_cnt);
                      inputContex[inputNum].bt_time=long_press-dimmer_long_press;
 
                      if (tempvalue == IncreaseValue)
 
                      {
                         inputContex[inputNum].bt_cnt=1;
-                        sensors[i].value.uVal++;
+                        currentVal++;
                         inputContex[inputNum].direction = tempvalue;
                      }
                      else if (tempvalue == DecreaseValue)
                      {
                         inputContex[inputNum].bt_cnt=1;
-                        sensors[i].value.uVal--;
+                        currentVal--;
                         inputContex[inputNum].direction = tempvalue;
                      }
                      else if (tempvalue == PlatoValue)
@@ -323,7 +325,9 @@ static void inputTask(void * pvParameters)
                         inputContex[inputNum].bt_cnt++;
                         inputContex[inputNum].direction = tempvalue;
                      }
-                     if (inputContex[inputNum].direction != PlatoValue && sensors[i].value.uVal == 0 )
+                     sensorsSetValueUint16(&sensors[i], currentVal);
+
+                     if (inputContex[inputNum].direction != PlatoValue && currentVal == 0 )
                      {
                         inputContex[inputNum].direction =PlatoValue;
                      }
@@ -344,21 +348,21 @@ static void inputTask(void * pvParameters)
                   else if (inputContex[inputNum].bt_time>=short_press)
                   {
                      // Отпустили после короткого нажатия
-                     if (sensors[i].value.uVal>0)
+                     if (sensorsGetValueUint16(&sensors[i])>0)
                      {
                         //Сохраняем значение и выключаем
-                        inputContex[inputNum].bt_result = sensors[i].value.uVal;
-                        sensors[i].value.uVal = 0;
+                        inputContex[inputNum].bt_result = sensorsGetValueUint16(&sensors[i]);
+                        sensorsSetValueUint16(&sensors[i], 0);
                      }
-                     else if(sensors[i].value.uVal == 0 && (inputContex[inputNum].bt_result > 0))
+                     else if(sensorsGetValueUint16(&sensors[i]) == 0 && (inputContex[inputNum].bt_result > 0))
                      {
                         //Если есть сохраненное значение, то восстанавливаем
-                        sensors[i].value.uVal = inputContex[inputNum].bt_result;
+                        sensorsSetValueUint16(&sensors[i], inputContex[inputNum].bt_result);
                      }
                      else
                      {
                         // Иначе включаем на всю
-                        sensors[i].value.uVal = dimmer_max_value;
+                        sensorsSetValueUint16(&sensors[i], dimmer_max_value);
                      }
                      inputContex[inputNum].bt_cnt = 0;
                      inputContex[inputNum].bt_time = 0;
@@ -415,7 +419,7 @@ static void inputTask(void * pvParameters)
                   tempvalue = check_bit_map(inputContex[inputNum].bt_result, inputContex[inputNum].bt_cnt);
                   if (tempvalue)
                   {
-                     sensors[i].value.uVal = tempvalue;
+                     sensorsSetValueUint16(&sensors[i],tempvalue);
                   }
                   inputContex[inputNum].bt_time=0;
                   inputContex[inputNum].bt_cnt=0;
@@ -437,7 +441,7 @@ static void inputTask(void * pvParameters)
             if (IsLocal(sensors[i].serial))
             {
 
-                     sensors[i].value.uVal = GetADCValue(adcChannel[HexToDec(sensors[i].serial[7])], 5);
+                     sensorsSetValueUint16(&sensors[i], GetADCValue(adcChannel[HexToDec(sensors[i].serial[7])], 5));
 
             }
             inputNum++;
@@ -458,19 +462,19 @@ static int input_snprintf(char * bufer, size_t max_len, int i)
    {
    case S_BINARY:
       p+=snprintf(bufer+p, max_len-p, "\"type\":\"digital\",");
-      p+=snprintf(bufer+p, max_len-p, "\"value\":%s,",(sensors[i].value.uVal & 1?"true":"false"));
+      p+=snprintf(bufer+p, max_len-p, "\"value\":%s,",(sensorsGetValueUint16(&sensors[i]) & 1?"true":"false"));
       break;
    case S_CUSTOM:
       p+=snprintf(bufer+p, max_len-p, "\"type\":\"sequential\",");
-      p+=snprintf(bufer+p, max_len-p, "\"value\":\"0x%02x\",",(sensors[i].value.uVal));
+      p+=snprintf(bufer+p, max_len-p, "\"value\":\"0x%02x\",",sensorsGetValueUint16(&sensors[i]));
       break;
    case S_DIMMER:
       p+=snprintf(bufer+p, max_len-p, "\"type\":\"dimmer\",");
-      p+=snprintf(bufer+p, max_len-p, "\"value\":%u,",sensors[i].value.uVal);
+      p+=snprintf(bufer+p, max_len-p, "\"value\":%u,",sensorsGetValueUint16(&sensors[i]));
       break;
    case S_MULTIMETER:
       p+=snprintf(bufer+p, max_len-p, "\"type\":\"analog\",");
-      p+=snprintf(bufer+p, max_len-p, "\"value\":%u,",sensors[i].value.uVal);
+      p+=snprintf(bufer+p, max_len-p, "\"value\":%u,",sensorsGetValueUint16(&sensors[i]));
       break;
    default:
       break;

@@ -18,6 +18,7 @@
 #include "stm32f2xx_hal_gpio.h"
 #include "stm32f2xx_hal_uart.h"
 #include "error.h"
+#include "rest/sensors.h"
 #include <stddef.h>
 
 
@@ -40,6 +41,7 @@ typedef struct
    float *value;
    uint8_t *status;
    uint8_t *id;
+   sensor_t *sensor;
 } OwSensor_t;
 
 

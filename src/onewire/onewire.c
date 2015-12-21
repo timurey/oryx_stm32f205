@@ -5,7 +5,6 @@
  */
 
 #include "onewire.h"
-#include "rest/sensors.h"
 #include <ctype.h>
 #include "stdio.h"
 #include "string.h"
@@ -393,41 +392,54 @@ void USARTx_DMA_TX_IRQHandler(void)
 static void onewireCompare(void)
 {
    int i,j;
+   uint8_t online;
    OwSensor_t *currentOneWireSensor = &oneWireSensors[0];
 
-   for (i=0; i< oneWireFoundedDevices; i++)
+
+   for (j=0; j<MAX_NUM_SENSORS; j++)
    {
-      for (j=0; j<MAX_NUM_SENSORS; j++)
+      if (sensors[j].driver == D_ONEWIRE)
       {
-         if (foundedSerial[i].serial[0] == sensors[j].serial[0] &&
-            foundedSerial[i].serial[1] == sensors[j].serial[1] &&
-            foundedSerial[i].serial[2] == sensors[j].serial[2] &&
-            foundedSerial[i].serial[3] == sensors[j].serial[3] &&
-            foundedSerial[i].serial[4] == sensors[j].serial[4] &&
-            foundedSerial[i].serial[5] == sensors[j].serial[5] &&
-            foundedSerial[i].serial[6] == sensors[j].serial[6] &&
-            foundedSerial[i].serial[7] == sensors[j].serial[7]
-         )
+         online=FALSE;
+         for (i=0; i< oneWireFoundedDevices; i++)
          {
-            if (!(foundedSerial[i].serial[0] == 0 &&
-               foundedSerial[i].serial[1] == 0 &&
-               foundedSerial[i].serial[2] == 0 &&
-               foundedSerial[i].serial[3] == 0 &&
-               foundedSerial[i].serial[4] == 0 &&
-               foundedSerial[i].serial[5] == 0 &&
-               foundedSerial[i].serial[6] == 0 &&
-               foundedSerial[i].serial[7] == 0)
+            if (foundedSerial[i].serial[0] == sensors[j].serial[0] &&
+               foundedSerial[i].serial[1] == sensors[j].serial[1] &&
+               foundedSerial[i].serial[2] == sensors[j].serial[2] &&
+               foundedSerial[i].serial[3] == sensors[j].serial[3] &&
+               foundedSerial[i].serial[4] == sensors[j].serial[4] &&
+               foundedSerial[i].serial[5] == sensors[j].serial[5] &&
+               foundedSerial[i].serial[6] == sensors[j].serial[6] &&
+               foundedSerial[i].serial[7] == sensors[j].serial[7]
             )
             {
-               currentOneWireSensor->serial = (OwSerial_t *)sensors[j].serial;
-               currentOneWireSensor->status = &sensors[j].status;
-               *(currentOneWireSensor->status) |= (ONLINE);
-               currentOneWireSensor->value = &sensors[j].value.fVal;
-               currentOneWireSensor->id = &sensors[j].id;
-               currentOneWireSensor++;
-               //               sensors[j].id=i;
-               break;
+               if (!(foundedSerial[i].serial[0] == 0 &&
+                  foundedSerial[i].serial[1] == 0 &&
+                  foundedSerial[i].serial[2] == 0 &&
+                  foundedSerial[i].serial[3] == 0 &&
+                  foundedSerial[i].serial[4] == 0 &&
+                  foundedSerial[i].serial[5] == 0 &&
+                  foundedSerial[i].serial[6] == 0 &&
+                  foundedSerial[i].serial[7] == 0)
+               )
+               {
+                  currentOneWireSensor->serial = (OwSerial_t *)sensors[j].serial;
+                  currentOneWireSensor->status = &sensors[j].status;
+                  *(currentOneWireSensor->status) |= (ONLINE);
+                  currentOneWireSensor->value = &sensors[j].value.fVal;
+                  currentOneWireSensor->id = &sensors[j].id;
+                  currentOneWireSensor->sensor = &sensors[j];
+                  currentOneWireSensor++;
+                  online=TRUE;
+                  break;
+               }
             }
+
+
+         }
+         if (online!=TRUE)
+         { //sensor not found on line
+            sensorsHealthDecValue(&sensors[j]);
          }
       }
    }

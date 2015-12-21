@@ -1,5 +1,5 @@
 /*
- * onewire.h
+ * onewire_conf.h
  *
  *  Version 1.0.3
  */

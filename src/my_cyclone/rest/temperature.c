@@ -89,6 +89,7 @@ error_t initTemperature (const char * data, jsmntok_t *jSMNtokens, sensor_t ** p
       {
          currentSensor->id=i;
          currentSensor->type = S_TEMP;
+         currentSensor->driver = D_ONEWIRE;
          flag=0;
          currentSensor++;
          (*pos)++;
@@ -122,6 +123,7 @@ static int temperature_snprintf(char * bufer, size_t max_len, int i)
    p+=snprintf(bufer+p, max_len-p, "\"place\":\"%s\",", sensors[i].place);
    p+=snprintf(bufer+p, max_len-p, "\"value\":\"%d.%01d\",", d1, d2);//sensorsDS1820[i].value
    p+=snprintf(bufer+p, max_len-p, "\"serial\":\"%s\",",serialHexToString(sensors[i].serial, &buf[0], ONEWIRE_SERIAL_LENGTH));
+   p+=snprintf(bufer+p, max_len-p, "\"health\":%d,", sensorsHealthGetValue(&sensors[i]));
    p+=snprintf(bufer+p, max_len-p, "\"online\":%s},", ((sensors[i].status & ONLINE)?"true":"false"));
    return p;
 }
