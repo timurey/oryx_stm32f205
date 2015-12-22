@@ -202,4 +202,5 @@ typedef struct
 extern oneWireFunctions __start_onewire_functions; //предоставленный линкером символ начала секции onewire_functions
 extern oneWireFunctions __stop_onewire_functions; //предоставленный линкером символ конца секции onewire_functions
 
+extern uint16_t onewireHealth;
 #endif /* ONEWIRE_H_ */

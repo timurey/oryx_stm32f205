@@ -14,7 +14,8 @@ UART_HandleTypeDef UartHandle;
 
 // Буфер для приема/передачи по 1-wire
 uint8_t ow_buf[8];
-OsMutex oneWireMutex;
+//OsMutex oneWireMutex;
+uint16_t onewireHealth = 0;
 extern sensor_t sensors[MAX_ONEWIRE_COUNT];
 #if (OW_DS1820_SUPPORT == ENABLE)
 ds1820Scratchpad_t ds1820Buf;
@@ -447,7 +448,8 @@ static void onewireCompare(void)
 
 void oneWireTask(void *pvParameters)
 {
-   int i;
+   int i, num;
+   int health;
    (void) pvParameters;
    oneWireHardwareInit();
 
@@ -501,6 +503,17 @@ void oneWireTask(void *pvParameters)
          }
       }
       //      vTaskDelay(2000);
+      health = 0;
+      num=0;
+      for (i=0; i<MAX_NUM_SENSORS; i++)
+      {
+         if (sensors[i].driver == D_ONEWIRE)
+         {
+            num++;
+            health+=sensorsHealthGetValue(&sensors[i]);
+         }
+      }
+     onewireHealth = health/num;
    }
 
 }

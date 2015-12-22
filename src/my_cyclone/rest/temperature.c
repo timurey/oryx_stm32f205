@@ -104,7 +104,7 @@ static int temperature_snprintf(char * bufer, size_t max_len, int i)
 {
    int p=0;
    int d1, d2;
-   float f2;
+   float f2, temp_val;
    int counter=0;
 
    while ((!(sensors[i].status & READEBLE) ) & (sensors[i].status & MANAGED))
@@ -115,8 +115,9 @@ static int temperature_snprintf(char * bufer, size_t max_len, int i)
          break;
       }
    }
-   d1 = sensors[i].value.fVal;            // Get the integer part (678).
-   f2 = sensors[i].value.fVal - d1;     // Get fractional part (678.0123 - 678 = 0.0123).
+   temp_val = sensorsGetValueFloat(&sensors[i]);
+   d1 = temp_val;            // Get the integer part (678).
+   f2 = temp_val - d1;     // Get fractional part (678.0123 - 678 = 0.0123).
    d2 = abs(trunc(f2 * 10));   // Turn into integer (123).
    p+=snprintf(bufer+p, max_len-p, "{\"id\":%d,",sensors[i].id);
    p+=snprintf(bufer+p, max_len-p, "\"name\":\"%s\",", sensors[i].name);
