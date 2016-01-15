@@ -14,7 +14,7 @@
 
 #include "error.h"
 #include "rest.h"
-#include "onewire.h"
+#include "onewire_conf.h"
 #include "os_port_config.h"
 #include "compiler_port.h"
 
@@ -29,6 +29,10 @@
 #define  READEBLE 0x04  /* simple mutex for sensor */
 
 #define MAX_NUM_SENSORS (MAX_ONEWIRE_COUNT+MAX_INPUTS_COUNT)
+
+#define SENSORS_HEALTH_MAX_VALUE 100
+#define SENSORS_HEALTH_MIN_VALUE 0
+
 // Type of sensor (used when presenting sensors)
 typedef enum {
    S_DOOR, // Door sensor, V_TRIPPED, V_ARMED
@@ -130,6 +134,14 @@ typedef enum {
    V_ERROR,
 } mysensor_data_t;
 
+// Type of sensor data (for set/req/ack messages)
+typedef enum {
+   D_NONE,
+   D_ONEWIRE,
+   D_INPUT,
+   D_HTTP
+} mysensor_driver_t;
+
 typedef union
 {
    float fVal;
@@ -138,16 +150,26 @@ typedef union
    char  *pVal;
 } sensValue;
 
+typedef  struct
+{
+	uint8_t value;
+	uint8_t counter;
+} __attribute__((__packed__)) health_t;
+
 typedef struct
 {
    uint8_t id;
    uint8_t serial[MAX_LEN_SERIAL];
    mysensor_sensor_t type;
+   mysensor_driver_t driver;
    char* place;
    char* name;
    sensValue value;
    uint8_t status;
+   health_t health;
+   OsMutex mutex;
 }sensor_t;
+
 
 
 
@@ -164,11 +186,23 @@ error_t restPostSensors(HttpConnection *connection, RestApi_t* RestApi);
 error_t restPutSensors(HttpConnection *connection, RestApi_t* RestApi);
 error_t restDeleteSensors(HttpConnection *connection, RestApi_t* RestApi);
 
+error_t sensorsHealthInit (sensor_t * sensor);
+int sensorsHealthGetValue(sensor_t * sensor);
+void sensorsHealthIncValue(sensor_t * sensor);
+void sensorsHealthDecValue(sensor_t * sensor);
+void sensorsHealthSetValue(sensor_t * sensor, int value);
+void sensorsSetValueFloat(sensor_t * sensor, float value);
+void sensorsSetValueUint16(sensor_t * sensor, uint16_t value);
+uint16_t sensorsGetValueUint16(sensor_t * sensor);
+float sensorsGetValueFloat(sensor_t * sensor);
+
 char* sensorsFindName(const char * name, size_t length);
 char* sensorsAddName(const char * name, size_t length);
 char* sensorsFindPlace(const char * place, size_t length);
 char* sensorsAddPlace(const char * place, size_t length);
 void sensorsConfigure(void);
+
+
 
 error_t serialStringToHex(const char *str, size_t length, uint8_t *serial, size_t expectedLength);
 char *serialHexToString(const uint8_t *serial, char *str, int length);

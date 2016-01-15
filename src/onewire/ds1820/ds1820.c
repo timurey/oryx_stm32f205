@@ -31,7 +31,7 @@ static error_t scanDS1820()
 
    for (i=0; (i<MAX_ONEWIRE_COUNT); i++)
    {
-      if (oneWireSensors[i].serial->type == 0x28)
+      if (oneWireSensors[i].serial->type == 0x28 || oneWireSensors[i].serial->type == 0x10)
       {
          *oneWireSensors[i].status |= MANAGED;
          currentDS1820Sensor->onewire = &oneWireSensors[i];
@@ -53,7 +53,7 @@ static error_t individualDS1820(void)
    int i;
    ds1820Scratchpad_t buf;
    error_t error;
-
+   float temperature = 0.0;
    for (i=0;i<MAX_DS1820_COUNT;i++)
    {
       if ((sensorsDS1820[i].onewire != NULL )&&(*(sensorsDS1820[i].onewire->status) & ONLINE ))
@@ -62,9 +62,34 @@ static error_t individualDS1820(void)
          OW_Send(OW_NO_RESET, &sensorsDS1820[i].onewire->serial->serial[0], 8, NULL, 0, OW_NO_READ); //Serial
          OW_Send(OW_NO_RESET, (uint8_t *)"\xBE", 1, NULL,0, OW_NO_READ); //0xBE - Выдать температуру
          OW_Send(OW_NO_RESET, (uint8_t *)"\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF", 9, &buf.lsb, 9 ,0); //read bytes
-         *sensorsDS1820[i].onewire->status &= ~READEBLE;
-         error = ow_decode_temp(&buf, sensorsDS1820[i].onewire->serial->type, sensorsDS1820[i].onewire->value );
-         *sensorsDS1820[i].onewire->status |= READEBLE;
+         error = ow_decode_temp(&buf, sensorsDS1820[i].onewire->serial->type, &temperature);
+
+         if (!error) //Чтение успешно
+         {
+            if (sensorsDS1820[i].onewire->sensor) //если сенсор назначен
+            {
+               sensorsSetValueFloat(sensorsDS1820[i].onewire->sensor, temperature);
+            }
+            else
+            {
+               xprintf("DS1820: sensor not managed, temperature: %f\r\n", temperature);
+               *(sensorsDS1820[i].onewire->value) = temperature;
+
+            }
+            sensorsHealthIncValue(sensorsDS1820[i].onewire->sensor);
+         }
+         else
+         {
+            if (sensorsDS1820[i].onewire->sensor) //если сенсор назначен
+            {
+               sensorsHealthDecValue(sensorsDS1820[i].onewire->sensor);
+            }
+            else
+            {
+               xprintf("DS1820: sensor not managed, temperature: %f\r\n", temperature);
+
+            }
+         }
       }
    }
    return NO_ERROR;
@@ -119,7 +144,7 @@ error_t ow_decode_temp(ds1820Scratchpad_t * ow_buf, uint8_t type, float *Tempera
    }
    else
    {
-	   error = ERROR_BAD_CRC;
+      error = ERROR_BAD_CRC;
    }
    return error;
 }

@@ -21,7 +21,7 @@ static error_t restGetOneWire (HttpConnection *connection, RestApi_t* RestApi)
 	int p =0;
 	error_t error = NO_ERROR;
 
-	p+=snprintf(restBuffer+p, sizeof(restBuffer)-p, "{\"onewire\":{\"status\":\"ok\",\"health\":100,");
+	p+=snprintf(restBuffer+p, sizeof(restBuffer)-p, "{\"onewire\":{\"status\":\"ok\",\"health\":%d,", onewireHealth);
 	p+=snprintf(restBuffer+p, sizeof(restBuffer)-p, "\"founded devices\":{\"count\":%d,\"serials\":[", oneWireFoundedDevices);
 
 	for (i=0; i<oneWireFoundedDevices; i++ )

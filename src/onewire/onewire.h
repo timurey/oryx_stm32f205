@@ -18,6 +18,7 @@
 #include "stm32f2xx_hal_gpio.h"
 #include "stm32f2xx_hal_uart.h"
 #include "error.h"
+#include "rest/sensors.h"
 #include <stddef.h>
 
 
@@ -40,6 +41,7 @@ typedef struct
    float *value;
    uint8_t *status;
    uint8_t *id;
+   sensor_t *sensor;
 } OwSensor_t;
 
 
@@ -200,4 +202,5 @@ typedef struct
 extern oneWireFunctions __start_onewire_functions; //предоставленный линкером символ начала секции onewire_functions
 extern oneWireFunctions __stop_onewire_functions; //предоставленный линкером символ конца секции onewire_functions
 
+extern uint16_t onewireHealth;
 #endif /* ONEWIRE_H_ */

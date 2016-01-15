@@ -6,7 +6,6 @@
  */
 #include "rest/sensors.h"
 #include "rest/sensors_def.h"
-
 #include "rest/input.h"
 #include "rest/temperature.h"
 #include "configs.h"
@@ -222,6 +221,7 @@ error_t restDeleteSensors(HttpConnection *connection, RestApi_t* RestApi)
    }
    return error;
 }
+
 char* sensorsFindName(const char * name, size_t length)
 {
    char * p = &names[0];
@@ -304,12 +304,40 @@ static error_t parseSensors (char *data, size_t len, jsmn_parser* jSMNparser, js
    return NO_ERROR;
 }
 
+static error_t initSensor(sensor_t * cur_sensor)
+{
+   error_t error = NO_ERROR;
+   //Create a mutex to protect critical sections
+   if(!osCreateMutex(&cur_sensor->mutex))
+   {
+      //Failed to create mutex
+      xprintf("Sensors: Can't create sensor#%d mutex.\r\n", cur_sensor->id);
+      error= ERROR_OUT_OF_RESOURCES;
+   }
+   if (!error)
+   {
+      error = sensorsHealthInit (cur_sensor);
+   }
+   return error;
+}
 void sensorsConfigure(void)
 {
-   error_t error;
+   volatile error_t error = NO_ERROR;
+   int i;
+
    memset (&sensors[0],0,sizeof(sensor_t)*MAX_NUM_SENSORS);
-   error = read_config("/config/sensors.json",&parseSensors);
-   osCreateTask("oneWireTask",oneWireTask, NULL, configMINIMAL_STACK_SIZE*4, 1);
+   for (i=0;i<MAX_NUM_SENSORS; i++)
+   {
+      initSensor(&sensors[i]);
+   }
+   if (!error)
+   {
+      error = read_config("/config/sensors.json",&parseSensors);
+   }
+   if (!error)
+   {
+      osCreateTask("oneWireTask",oneWireTask, NULL, configMINIMAL_STACK_SIZE*4, 1);
+   }
    //   osCreateTask("input",inputTask, NULL, configMINIMAL_STACK_SIZE*4, 1);
 }
 
@@ -422,4 +450,175 @@ char *serialHexToString(const uint8_t *serial, char *str, int length)
 
    //Return a pointer to the formatted string
    return str;
+}
+
+error_t sensorsHealthInit (sensor_t * sensor)
+{
+   //Enter critical section
+   xprintf("sensorsHealthInit: Enter critical section sensor#%d.", sensor->id);
+   osAcquireMutex(&sensor->mutex);
+
+   sensor->health.value =SENSORS_HEALTH_MAX_VALUE;
+   sensor->health.counter =SENSORS_HEALTH_MIN_VALUE;
+
+   //Leave critical section
+   xprintf("sensorsHealthInit: Leave critical section sensor#%d.\r\n", sensor->id);
+   osReleaseMutex(&sensor->mutex);
+
+   return NO_ERROR;
+}
+
+int sensorsHealthGetValue(sensor_t * sensor)
+{
+   int result;
+
+   //Enter critical section
+   xprintf("sensorsHealthGetValue: Enter critical section sensor#%d.", sensor->id);
+   osAcquireMutex(&sensor->mutex);
+
+   result = sensor->health.value;
+
+   //Leave critical section
+   xprintf("sensorsHealthGetValue: Leave critical section sensor#%d.\r\n", sensor->id);
+   osReleaseMutex(&sensor->mutex);
+
+   return result;
+}
+
+
+void sensorsHealthIncValue(sensor_t * sensor)
+{
+   //Enter critical section
+   xprintf("sensorsHealthIncValue: Enter critical section sensor#%d.", sensor->id);
+   osAcquireMutex(&sensor->mutex);
+
+   if (sensor->health.value<SENSORS_HEALTH_MAX_VALUE)
+   {
+      sensor->health.value++;
+   }
+   if (sensor->health.counter<SENSORS_HEALTH_MAX_VALUE)
+   {
+      sensor->health.counter++;
+   }
+
+   //Leave critical section
+   xprintf("sensorsHealthIncValue: Leave critical section sensor#%d.\r\n", sensor->id);
+   osReleaseMutex(&sensor->mutex);
+
+}
+
+void sensorsHealthDecValue(sensor_t * sensor)
+{
+
+   //Enter critical section
+   xprintf("sensorsHealthDecValue: Enter critical section sensor#%d.", sensor->id);
+   osAcquireMutex(&sensor->mutex);
+
+
+   if (sensor->health.value>SENSORS_HEALTH_MIN_VALUE)
+   {
+      sensor->health.value--;
+   }
+   if (sensor->health.counter<SENSORS_HEALTH_MAX_VALUE)
+   {
+      sensor->health.counter++;
+   }
+
+   //Leave critical section
+   xprintf("sensorsHealthDecValue: Leave critical section sensor#%d.\r\n", sensor->id);
+   osReleaseMutex(&sensor->mutex);
+
+}
+
+void sensorsHealthSetValue(sensor_t * sensor, int value)
+{
+
+   //Enter critical section
+   xprintf("sensorsHealthSetValue: Enter critical section sensor#%d.", sensor->id);
+   osAcquireMutex(&sensor->mutex);
+
+
+   if (value>SENSORS_HEALTH_MAX_VALUE)
+   {
+      sensor->health.value=SENSORS_HEALTH_MAX_VALUE;
+   }
+   else if (value<SENSORS_HEALTH_MIN_VALUE)
+   {
+      sensor->health.value=SENSORS_HEALTH_MIN_VALUE;
+   }
+   else
+   {
+      sensor->health.value = value;
+   }
+
+   //Leave critical section
+   xprintf("sensorsHealthSetValue: Leave critical section sensor#%d.\r\n", sensor->id);
+   osReleaseMutex(&sensor->mutex);
+
+}
+
+void sensorsSetValueUint16(sensor_t * sensor, uint16_t value)
+{
+
+   //Enter critical section
+   xprintf("sensorsSetValueUint16: Enter critical section sensor#%d.", sensor->id);
+   osAcquireMutex(&sensor->mutex);
+
+   sensor->value.uVal = value;
+
+   //Leave critical section
+   xprintf("sensorsSetValueUint16: Leave critical section sensor#%d.\r\n", sensor->id);
+   osReleaseMutex(&sensor->mutex);
+
+}
+
+void sensorsSetValueFloat(sensor_t * sensor, float value)
+{
+
+   //Enter critical section
+   xprintf("sensorsSetValueFloat: Enter critical section sensor#%d.", sensor->id);
+   osAcquireMutex(&sensor->mutex);
+
+   sensor->value.fVal = value;
+
+   //Leave critical section
+   xprintf("sensorsSetValueFloat: Leave critical section sensor#%d.\r\n", sensor->id);
+   osReleaseMutex(&sensor->mutex);
+
+}
+
+uint16_t sensorsGetValueUint16(sensor_t * sensor)
+{
+   uint16_t value;
+
+   //Enter critical section
+   xprintf("sensorsGetValueUint16: Enter critical section sensor#%d.", sensor->id);
+   osAcquireMutex(&sensor->mutex);
+
+   value = sensor->value.uVal;
+
+   //Leave critical section
+   xprintf("sensorsGetValueUint16: Leave critical section sensor#%d.\r\n", sensor->id);
+   osReleaseMutex(&sensor->mutex);
+
+   return value;
+
+}
+
+float sensorsGetValueFloat(sensor_t * sensor)
+{
+   float value;
+
+   //Enter critical section
+   xprintf("sensorsGetValueFloat: Enter critical section sensor#%d.", sensor->id);
+   osAcquireMutex(&sensor->mutex);
+
+   value = sensor->value.fVal;
+
+   //Leave critical section
+   xprintf("sensorsGetValueFloat: Leave critical section sensor#%d.\r\n", sensor->id);
+   osReleaseMutex(&sensor->mutex);
+
+   return value;
+
 }
