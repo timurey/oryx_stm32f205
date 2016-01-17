@@ -19,86 +19,293 @@
 
 #include"expression_parser.h"
 
+#define parser_check( result, expr ) { \
+   double c_value, p_value; \
+   c_value = (double) expr; \
+   p_value = parse_expression( #expr ); \
+   xprintf("  '%s'\n", #expr ); \
+   if( fabs( c_value - p_value ) > PARSER_BOOLEAN_EQUALITY_THRESHOLD ){ \
+      *result = PARSER_FALSE; \
+      xprintf("         C: %%d.%01d\n", c_value ); \
+      xprintf("    Parsed: %f\n", p_value ); \
+   } \
+}
 /**
- @brief user-defined variable callback function. see expression_parser.h for more details.
- @param[in] user_data pointer to any user-defined state data that is required, none in this case
- @param[in] name name of the variable to look up the value of
- @param[out] value output point to double that holds the variable value on completion
- @return true if the variable exists and the output value was set, false otherwise
+ @brief macro for checking the correctness of the parser. parses the input expression in C using the preprocessor and with the parser using preprocessor stringification and compares the results. if the results are within PARSER_BOOLEAN_EQUALITY_THRESHOLD of each other, the result is assumed correct.  note that the expression argument must be parsable in C from the calling scope, i.e. if variables and functions are used, they must be defined where this macro is called from or a compile error will result.
  */
-int variable_callback( void *user_data, const char *name, double *value ){
-   // look up the variables by name
-   if( strcmp( name, "var0" ) == 0 ){
-      // set return value, return true
-      *value = 0.0;
+#define parser_check_with_callbacks( result, expr, user_vars, user_fncs, user_data ) { \
+   double c_value, p_value; \
+   c_value = (double) expr; \
+   p_value = parse_expression_with_callbacks( #expr, user_vars, user_fncs, user_data ); \
+   xprintf("  '%s'\n", #expr ); \
+   if( fabs( c_value - p_value ) > PARSER_BOOLEAN_EQUALITY_THRESHOLD ){ \
+      *result = PARSER_FALSE; \
+      int d1, d2;\
+      float f2;\
+      d1 = c_value;\
+      f2 = c_value - d1;\
+      d2 = abs(trunc(f2 * 1000));\
+      xprintf("         C: %d.%01d\n", d1, d2 ); \
+      d1 = p_value;\
+      f2 = p_value - d1;\
+      d2 = abs(trunc(f2 * 1000));\
+      xprintf("    Parsed: %d.%01d\n", d1, d2 ); \
+   } \
+}
+/**
+ @brief macro for checking the correctness of the parser. parses the input expression in C using the preprocessor and with the parser using preprocessor stringification and compares the results. if the results are within PARSER_BOOLEAN_EQUALITY_THRESHOLD of each other, the result is assumed correct.  note that the expression argument must be parsable in C from the calling scope, i.e. if variables and functions are used, they must be defined where this macro is called from or a compile error will result.
+ */
+#define parser_check_boolean( result, expr ) { \
+   double c_value, p_value; \
+   c_value = (double) expr; \
+   p_value = parse_expression( #expr ); \
+   xprintf("  '%s'\n", #expr ); \
+   if( fabs( c_value - p_value ) > PARSER_BOOLEAN_EQUALITY_THRESHOLD ){ \
+      *result = PARSER_FALSE; \
+      int d1, d2;\
+      float f2;\
+      d1 = c_value;\
+      f2 = c_value - d1;\
+      d2 = abs(trunc(f2 * 1000));\
+      xprintf("         C: %d.%01d\n", d1, d2 ); \
+      d1 = p_value;\
+      f2 = p_value - d1;\
+      d2 = abs(trunc(f2 * 1000));\
+      xprintf("    Parsed: %d.%01d\n", d1, d2 ); \
+   } \
+}
+/**
+ @brief test that the boolean unary not operation works correctly.
+ */
+void run_boolean_not_tests(){
+   int result = 1;
+   xprintf("Testing boolean not:\n");
+   parser_check_boolean( &result, 0.0 );
+   parser_check_boolean( &result, 2.0 );
+   parser_check_boolean( &result, !0.0 );
+   parser_check_boolean( &result, !3.0 );
+   xprintf( "%s\n\n", result ? "passed" : "failed" );
+}
+
+/**
+ @brief test that the boolean comparison operations, i.e. ==, <, >=, etc. work correctly
+ */
+void run_boolean_comparison_tests(){
+   int result = 1;
+   xprintf("Testing boolean comparisons:\n");
+   parser_check_boolean( &result, 2.0 == 3.0 );
+   parser_check_boolean( &result, 2.0 == 2.0 );
+   parser_check_boolean( &result, 2.0 != 2.0 );
+   parser_check_boolean( &result, 2.0 != 3.0 );
+   parser_check_boolean( &result, 2.0 <  3.0 );
+   parser_check_boolean( &result, 3.0 <  2.0 );
+   parser_check_boolean( &result, 2.0 >  3.0 );
+   parser_check_boolean( &result, 3.0 >  2.0 );
+   parser_check_boolean( &result, 2.0 <= 2.0 );
+   parser_check_boolean( &result, 2.0 <= 3.0 );
+   parser_check_boolean( &result, 3.0 <= 2.0 );
+   parser_check_boolean( &result, 2.0 >= 2.0 );
+   parser_check_boolean( &result, 2.0 >= 3.0 );
+   parser_check_boolean( &result, 3.0 >= 2.0 );
+   xprintf( "%s\n\n", result ? "passed" : "failed" );
+}
+
+/**
+ @brief test that the boolean logical tests, i.e. && and ||, work correctly
+ */
+void run_boolean_logical_tests(){
+   int result = 1;
+   xprintf("Testing boolean logical operations:\n" );
+   parser_check_boolean( &result, 2.0 && 3.0 );
+   parser_check_boolean( &result, 2.0 && 0.0 );
+   parser_check_boolean( &result, 0.0 && 3.0 );
+   parser_check_boolean( &result, 0.0 && 0.0 );
+   parser_check_boolean( &result, 2.0 || 3.0 );
+   parser_check_boolean( &result, 2.0 || 0.0 );
+   parser_check_boolean( &result, 0.0 || 3.0 );
+   parser_check_boolean( &result, 0.0 || 0.0 );
+   xprintf( "%s\n\n", result ? "passed" : "failed" );
+}
+
+/**
+ @brief test that expressions with compound boolean expression work correctly and match the same expression as computed in C.  note that many compilers (e.g. llvm and gcc) may give compiler warnings about these expressions due to cascaded || and && operations.
+ */
+void run_boolean_compound_tests(){
+   int result = 1;
+   xprintf("Testing boolean expressions:\n" );
+   parser_check_boolean( &result, 2.0 > 3.0 && 2.0 == 2.0 );
+   parser_check_boolean( &result, 3.0 > 2.0 && 2.0 == 2.0 );
+   parser_check_boolean( &result, 3.0 > 2.0 || 1.0 == 0.0 );
+   parser_check_boolean( &result, 3.0 < 2.0 || 1.0 != 0.0 );
+   parser_check_boolean( &result, 3.0 < 2.0 || 1.0 == 1.0 && 2.0 <= 3.0 );
+   parser_check_boolean( &result, 3.0 < 2.0 || 1.0 != 1.0 && 2.0 <= 3.0 || 0.0 );
+   parser_check_boolean( &result, 3.0 < 2.0 || 1.0 != 1.0 && 2.0 <= 3.0 || 1.0 );
+   parser_check( &result, (3.0<2.0)*5.0 + (3.0>=2.0)*6.0 );
+   parser_check( &result, (3.0>=2.0)*5.0 + (3.0<2.0)*6.0 );
+
+   parser_check_boolean( &result, !(2.0 > 3.0 && 2.0 == 2.0) );
+   parser_check_boolean( &result, 3.0 > 2.0 && !(2.0 == 2.0) );
+   parser_check_boolean( &result, 3.0 > !2.0 || 1.0 == 0.0 );
+   parser_check_boolean( &result, 3.0 < 2.0 || 1.0 != !0.0 );
+   parser_check_boolean( &result, !(3.0 < 2.0) || 1.0 == 1.0 && 2.0 <= 3.0 );
+   parser_check_boolean( &result, 3.0 < 2.0 || 1.0 != 1.0 && 2.0 <= 3.0 || ! 0.0 );
+   parser_check_boolean( &result, 3.0 < 2.0 || 1.0 != 1.0 && 2.0 <= 3.0 || !1.0 );
+   parser_check( &result, (3.0<2.0)*5.0 + (3.0>=2.0)*6.0 );
+   parser_check( &result, (3.0>=2.0)*5.0 + (3.0<2.0)*6.0 );
+   parser_check( &result, (1.0)*5.0 + (!1.0)*6.0 );
+   parser_check( &result, (!1.0)*5.0 + (1.0)*6.0 );
+   xprintf( "%s\n\n", result ? "passed" : "failed" );
+}
+
+/**
+    @brief test function for malformed inputs, to be sure that they throw errors appropriately. Note that there are lots of examples of counter-intuitive expressions that evaluate 'correctly', e.g. 1 + + -3 = -2.0 due to the binding of unary + and - operators.
+ */
+void run_bad_input_tests(){
+   parse_expression( "1 **/ 34 " ); // from Brian Palmer, 04-06-2013
+   parse_expression( "6.0 (6.0)" );
+}
+
+/**
+ @brief implementation of a user-defined function for testing
+ */
+double user_func_0(){
+   return 10.0;
+}
+
+/**
+ @brief implementation of a user-defined function for testing
+ */
+double user_func_1( double x ){
+   return fabs(x);
+}
+
+/**
+ @brief implementation of a user-defined funtion for testing
+ */
+double user_func_2( double x, double y ){
+   return sqrt( x*x + y*y );
+}
+
+/**
+ @brief implementation of a user-defined function for testing
+ */
+double _user_func_3( double x, double y, double z ){
+   return sqrt( x*x + y*y + z*z );
+}
+
+/**
+ @brief implementation of a user-defined function for testing
+ */
+double user_func_4( double x, double y, double z, double q ){
+   return sqrt( x*x + y*y + z*z + q*q );
+}
+
+/**
+ @brief user-function callback for the parser. reads name of function to be called and checks the number of arguments before calling the appropriate function. returns true if function was called successfully, false otherwise.
+ @param[in] user_data pointer to (arbitrary) user-defined data that may be needed by the callback functions. not used for this example.
+ @param[in] name name of the function to execute
+ @param[in] num_args the number of arguments that were supplied in the function call
+ @param[out] value the return argument, which should contain the functions evaluated value on return if the evaluation was successful.
+ @return true if the function was evaluated successfully, false otherwise
+ */
+int user_fnc_cb( void *user_data, const char *name, const int num_args, const double *args, double *value ){
+   if( strcmp( name, "user_func_0" ) == 0 && num_args == 0 ){
+      *value = user_func_0();
       return PARSER_TRUE;
-   } else if( strcmp( name, "var1" ) == 0 ){
-      // set return value, return true
-      *value = 1.0;
+   } else if( strcmp( name, "user_func_1" ) == 0 && num_args == 1 ){
+      *value = user_func_1( args[0] );
       return PARSER_TRUE;
-   } else if( strcmp( name, "var2" ) == 0 ){
-      // set return value, return true
-      *value = 2.0;
+   } else if( strcmp( name, "user_func_2" ) == 0 && num_args == 2 ){
+      *value = user_func_2( args[0], args[1] );
       return PARSER_TRUE;
-   } else if( strcmp( name, "var3" ) == 0 ){
-      // set return value, return true
-      *value = 3.0;
+   } else if( strcmp( name, "_user_func_3" ) == 0 && num_args == 3 ){
+      *value = _user_func_3( args[0], args[1], args[2] );
       return PARSER_TRUE;
    }
-   // failed to find variable, return false
    return PARSER_FALSE;
 }
 
 /**
- @brief user-defined function callback. see expression_parser.h for more details.
- @param[in] user_data input pointer to any user-defined state variables needed.  in this case, this pointer is the maximum number of arguments allowed to the functions (as a contrived example usage).
- @param[in] name name of the function to evaluate
- @param[in] num_args number of arguments that were parsed in the function call
- @param[in] args list of parsed arguments
- @param[out] value output evaluated result of the function call
- @return true if the function exists and was evaluated successfully with the result stored in value, false otherwise.
+ @brief user-variable callback for the parser. reads the name of the variable and sets the appropriate value in the return argument. returns true if the variable exists and the return value set, false otherwise.
+ @param[in] user_data pointer to (arbitrary) user-defined state data that may be needed by the callback functions
+ @param[in] name name of the variable to lookup the value for
+ @param[out] value output argument that should contain the variable value on return, if the evaluation is successful.
+ @return true if the variable exists and the return argument was successfully set, false otherwise
  */
-int function_callback( void *user_data, const char *name, const int num_args, const double *args, double *value ){
-   int i, max_args;
-   double tmp;
-
-   // example to show the user-data parameter, sets the maximum number of
-   // arguments allowed for the following functions from the user-data function
-   max_args = *((int*)user_data);
-
-   if( strcmp( name, "max_value") == 0 && num_args >= 2 && num_args <= max_args ){
-      // example 'maximum' function, returns the largest of the arguments, this and
-      // the min_value function implementation below allow arbitrary number of arguments
-      tmp = args[0];
-      for( i=1; i<num_args; i++ ){
-         tmp = args[i] >= tmp ? args[i] : tmp;
-      }
-      // set return value and return true
-      *value = tmp;
+int user_var_cb( void *user_data, const char *name, double *value ){
+   if( strcmp( name, "a" ) == 0 ){
+      *value = 1.0;
       return PARSER_TRUE;
-   } else if( strcmp( name, "min_value" ) == 0 && num_args >= 2 && num_args <= max_args ){
-      // example 'minimum' function, returns the smallest of the arguments
-      tmp = args[0];
-      for( i=1; i<num_args; i++ ){
-         tmp = args[i] <= tmp ? args[i] : tmp;
-      }
-      // set return value and return true
-      *value = tmp;
+   } else if( strcmp( name, "b0" ) == 0 ){
+      *value = 2.0;
+      return PARSER_TRUE;
+   } else if( strcmp( name, "_variable_6__" ) == 0 ){
+      *value = 5.0;
       return PARSER_TRUE;
    }
-
-   // failed to evaluate function, return false
    return PARSER_FALSE;
+}
+
+/**
+ @brief test function for the user-defined functions and variables
+ */
+void test_user_functions_and_variables(){
+   double a = 1.0;
+   double b0 = 2.0;
+   double b12 = 6.0;
+   double _variable_6__ = 5.0;
+   int result = 1;
+
+   // tests of user-defined variables in isolation
+   result = PARSER_TRUE;
+   xprintf("Testing user-defined variables:\n");
+   parser_check_with_callbacks( &result, a,             user_var_cb, NULL, NULL );
+   parser_check_with_callbacks( &result, b0,            user_var_cb, NULL, NULL );
+   parser_check_with_callbacks( &result, _variable_6__, user_var_cb, NULL, NULL );
+   xprintf( "%s\n\n", result ? "passed" : "failed" );
+
+   // tests of user-defined functions in isolation
+   result = PARSER_TRUE;
+   xprintf("Testing user-defined functions:\n");
+   parser_check_with_callbacks( &result, user_func_0(),                                  NULL, user_fnc_cb, NULL );
+   parser_check_with_callbacks( &result, user_func_1( user_func_0() ),                   NULL, user_fnc_cb, NULL );
+   parser_check_with_callbacks( &result, user_func_2( user_func_1(2.0), user_func_0() ), NULL, user_fnc_cb, NULL );
+   parser_check_with_callbacks( &result, _user_func_3( 1.0, 2.0, 3.0 ),                  NULL, user_fnc_cb, NULL );
+   xprintf( "%s\n\n", result ? "passed" : "failed" );
+
+   // now try mixing and matching
+   result = PARSER_TRUE;
+   xprintf("Testing user-defined functions AND variables:\n");
+   parser_check_with_callbacks( &result, _user_func_3( user_func_0(), user_func_2( a, b0 ), user_func_1( _variable_6__ ) ), user_var_cb, user_fnc_cb, NULL );
+   xprintf( "%s\n\n", result ? "passed" : "failed" );
+
+   // the following test failure behavior when functions/variables are referenced, but no callbacks
+   // are provided, or when those callbacks do not handle the called function/variable properly, e.g.
+   // when the functions are not defined, when the number of arguments is wrong, etc.
+   xprintf("\n\nTesting function error behaviour, this SHOULD fail because no function callback is set!\n" );
+   parser_check_with_callbacks( &result, user_func_0(), NULL, NULL, NULL );
+
+   xprintf("\n\nTesting function error behaviour, this SHOULD fail because the function callback does not define the function!\n" );
+   parser_check_with_callbacks( &result, user_func_4(1.0, 2.0, 3.0, 4.0), NULL, user_fnc_cb, NULL );
+
+   xprintf( "\n\nTesting variable error behaviour, this SHOULD fail because no variable callback is set!\n" );
+   parser_check_with_callbacks( &result, a, NULL, NULL, NULL );
+
+   xprintf( "\n\nTesting variable error behaviour, this SHOULD fail because the variable callback does not define the variable!\n" );
+   parser_check_with_callbacks( &result, b12, NULL, NULL, NULL );
+
+   // check that some bad inputs fail
+   xprintf("\n\nTesting malformed inputs, these SHOULD fail because they are invalid expression strings!\n");
+   run_bad_input_tests();
+
+   xprintf("\n\n");
 }
 
 void parser_task (void *pvParameters)
 {
    double value, f2;
    int num_arguments = 3;
-   const char *expr0 = "max_value( var0, var1, var2 )";
-   const char *expr1 = "max_value( var0, var1, var2, var3 )";
-   const char *expr2 = "2.5^3 + 2.0 - 8.0";
-   const char *expr3 = "5.0*( max_value( var0, max_value( var1, var2 ) )/2 + min_value( var1, var2, var3 )/2 )";
+
    parser_data pd;
 
    int d1, d2;
@@ -108,95 +315,13 @@ void parser_task (void *pvParameters)
    vTaskDelay(2000);
    xprintf("Parser is working...\r\n");
 
-   // should succeed, and print results. the success or failure of the expression parser
-   // can be tested by testing the return value for equality with itself, which always
-   // fails for nan (Not a Number), provided strict floating point behaviour is followed
-   // by the compiler.
-   xprintf( "test  1\r\n" );
-   value = parse_expression_with_callbacks( expr0, variable_callback, function_callback, &num_arguments );
-   if( value == value )
-   {
-      d1 = value;            // Get the integer part (678).
-      f2 = value - d1;     // Get fractional part (678.0123 - 678 = 0.0123).
-      d2 = abs(trunc(f2 * 1000));   // Turn into integer (123).
-      xprintf( "%s = %d.%01d\n\n", expr0, d1, d2 );
-   }
-   else
-      xprintf( "\n" );
+   run_bad_input_tests();
 
-   xprintf( "test  2\r\n" );
-   // should fail, since too many arguments are being passed
-   num_arguments = 2;
-   value = parse_expression_with_callbacks( expr0, variable_callback, function_callback, &num_arguments );
-   if( value == value )
-   {
-      d1 = value;            // Get the integer part (678).
-      f2 = value - d1;     // Get fractional part (678.0123 - 678 = 0.0123).
-      d2 = abs(trunc(f2 * 1000));   // Turn into integer (123).
-      xprintf( "%s = %d.%01d\n\n", expr0, d1, d2 );
-   }
-   else
-      xprintf( "\n" );
-
-   xprintf( "test  3\r\n" );
-   // increase the number of arguments, and now pass 4, should succeed
-   num_arguments = 4;
-   value = parse_expression_with_callbacks( expr1, variable_callback, function_callback, &num_arguments );
-   if( value == value )
-   {
-      d1 = value;            // Get the integer part (678).
-      f2 = value - d1;     // Get fractional part (678.0123 - 678 = 0.0123).
-      d2 = abs(trunc(f2 * 1000));   // Turn into integer (123).
-      xprintf( "%s = %d.%01d\n\n", expr1, d1, d2 );
-   }
-   else
-      xprintf( "\n" );
-
-   xprintf( "test  4\r\n" );
-   // parse and expression with no variables or functions
-   value = parse_expression( expr2 );
-   if( value == value )
-   {
-      d1 = value;            // Get the integer part (678).
-      f2 = value - d1;     // Get fractional part (678.0123 - 678 = 0.0123).
-      d2 = abs(trunc(f2 * 1000));   // Turn into integer (123).
-      xprintf( "%s = %d.%01d\n\n", expr2, d1, d2 );
-   }
-   else
-      xprintf("\n");
-
-   // parse expr3, initializing the data structures from scratch (no malloc/free)
-   // and handling the errors directly from the calling code, rather than allowing the
-   // parser to print errors directly.
-   xprintf( "test  5\r\n" );
-   num_arguments = 2;
-   parser_data_init( &pd, expr3, variable_callback, function_callback, &num_arguments );
-   value = parser_parse( &pd );
-   if( pd.error == NULL )
-   {
-      d1 = value;            // Get the integer part (678).
-      f2 = value - d1;     // Get fractional part (678.0123 - 678 = 0.0123).
-      d2 = abs(trunc(f2 * 1000));   // Turn into integer (123).
-      xprintf( "%s = %d.%01d\n\n", expr3, d1, d2 );
-   }
-   else
-      xprintf( "CUSTOM ERROR HANDLING: %s\n\n", pd.error );
-
-   // repeat the previous test, with the number of arguments increased to avoid
-   // the error
-   xprintf( "test  6\r\n" );
-   num_arguments = 3;
-   parser_data_init( &pd, expr3, variable_callback, function_callback, &num_arguments );
-   value = parser_parse( &pd );
-   if( pd.error == NULL )
-   {
-      d1 = value;            // Get the integer part (678).
-      f2 = value - d1;     // Get fractional part (678.0123 - 678 = 0.0123).
-      d2 = abs(trunc(f2 * 1000));   // Turn into integer (123).
-      xprintf( "%s = %d.%01d\n\n", expr3, d1, d2 );
-   }
-   else
-      xprintf( "CUSTOM ERROR HANDLING: %s\n", pd.error );
+   run_boolean_not_tests();
+   run_boolean_comparison_tests();
+   run_boolean_logical_tests();
+   run_boolean_compound_tests();
+   test_user_functions_and_variables();
 
 
 
