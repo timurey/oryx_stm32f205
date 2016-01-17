@@ -712,7 +712,7 @@ error_t httpWriteHeader(HttpConnection *connection)
       convertUnixTimeToDate(getCurrentUnixTime()+HTTP_SERVER_MAX_AGE-RTC_GetTimezone(), &htmlDate);
       p += sprintf(p, "Expires: %s, %02i %s %04i %02i:%02i:%02i GMT\r\n", wday_names[htmlDate.dayOfWeek], htmlDate.day, mon_names[htmlDate.month], htmlDate.year, htmlDate.hours, htmlDate.minutes, htmlDate.seconds);
 
-      p += sprintf(p, "Cache-Control: max-age=%i, public\r\n", HTTP_SERVER_MAX_AGE);
+      p += sprintf(p, "Cache-Control: max-age=%d, public\r\n", HTTP_SERVER_MAX_AGE);
    }
 #endif
 #if (HTTP_SERVER_GZIPED_FILES == ENABLED)

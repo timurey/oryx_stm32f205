@@ -37,7 +37,7 @@ error_t initTemperature (const char * data, jsmntok_t *jSMNtokens, sensor_t ** p
    for (i=0;i<MAX_ONEWIRE_COUNT;i++)
    {
 
-      sprintf(&path[0],"/sensors/temperature/onewire/\\[%i\\]/serial",i);
+      sprintf(&path[0],"/sensors/temperature/onewire/\\[%d\\]/serial",i);
       tokNum = jsmn_get_value(data, jSMNtokens, *resultCode, &path[0]);
       if(tokNum>0)
       {
@@ -48,7 +48,7 @@ error_t initTemperature (const char * data, jsmntok_t *jSMNtokens, sensor_t ** p
             flag++;
          }
       }
-      sprintf(&path[0],"/sensors/temperature/onewire/\\[%i\\]/name",i);
+      sprintf(&path[0],"/sensors/temperature/onewire/\\[%d\\]/name",i);
       tokNum = jsmn_get_value(data, jSMNtokens, *resultCode, &path[0]);
       if(tokNum>0)
       {
@@ -66,7 +66,7 @@ error_t initTemperature (const char * data, jsmntok_t *jSMNtokens, sensor_t ** p
             }
          }
       }
-      sprintf(&path[0],"/sensors/temperature/onewire/\\[%i\\]/place",i);
+      sprintf(&path[0],"/sensors/temperature/onewire/\\[%d\\]/place",i);
       tokNum = jsmn_get_value(data, jSMNtokens, *resultCode, &path[0]);
       if(tokNum>0)
       {

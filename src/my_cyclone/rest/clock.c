@@ -29,8 +29,8 @@ error_t restGetClock(HttpConnection *connection, RestApi_t* RestApi)
       htmlFormatDate(&time, &buf[0]),
       pRTC_GetTimezone()
    );
-   p+=sprintf(restBuffer+p,"\"time\":\"%02i:%02i:%02i\",\r\n", time.hours, time.minutes, time.seconds);
-   p+=sprintf(restBuffer+p,"\"date\":\"%04i.%02i.%02i\"\r\n}\r\n", time.year,time.month,time.day);
+   p+=sprintf(restBuffer+p,"\"time\":\"%02d:%02d:%02d\",\r\n", time.hours, time.minutes, time.seconds);
+   p+=sprintf(restBuffer+p,"\"date\":\"%04d.%02d.%02d\"\r\n}\r\n", time.year,time.month,time.day);
 
    connection->response.contentType = mimeGetType(".json");
    connection->response.noCache = TRUE;

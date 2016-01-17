@@ -49,7 +49,7 @@ error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCur
       /*
        * Code for digital outputs
        */
-      sprintf(&path[0],"/executors/outputs/digital/\\[%i\\]/serial",i);
+      sprintf(&path[0],"/executors/outputs/digital/\\[%d\\]/serial",i);
       tokNum = jsmn_get_value(data, jSMNtokens, *resultCode, &path[0]);
       if(tokNum>0)
       {
@@ -60,7 +60,7 @@ error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCur
             flag++;
          }
       }
-      sprintf(&path[0],"/executors/outputs/digital/\\[%i\\]/name",i);
+      sprintf(&path[0],"/executors/outputs/digital/\\[%d\\]/name",i);
       tokNum = jsmn_get_value(data, jSMNtokens, *resultCode, &path[0]);
       if(tokNum>0)
       {
@@ -78,7 +78,7 @@ error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCur
             }
          }
       }
-      sprintf(&path[0],"/sensors/inputs/digital/\\[%i\\]/place",i);
+      sprintf(&path[0],"/sensors/inputs/digital/\\[%d\\]/place",i);
       tokNum = jsmn_get_value(data, jSMNtokens, *resultCode, &path[0]);
       if(tokNum>0)
       {
@@ -116,7 +116,7 @@ error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCur
       /*
        * Code for analog outnputs
        */
-      sprintf(&path[0],"/executors/outputs/analog/\\[%i\\]/serial",i);
+      sprintf(&path[0],"/executors/outputs/analog/\\[%d\\]/serial",i);
       tokNum = jsmn_get_value(data, jSMNtokens, *resultCode, &path[0]);
       if(tokNum>0)
       {
@@ -127,7 +127,7 @@ error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCur
             flag++;
          }
       }
-      sprintf(&path[0],"/executors/outputs/analog/\\[%i\\]/name",i);
+      sprintf(&path[0],"/executors/outputs/analog/\\[%d\\]/name",i);
       tokNum = jsmn_get_value(data, jSMNtokens, *resultCode, &path[0]);
       if(tokNum>0)
       {
@@ -145,7 +145,7 @@ error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCur
             }
          }
       }
-      sprintf(&path[0],"/executors/outputs/analog/\\[%i\\]/place",i);
+      sprintf(&path[0],"/executors/outputs/analog/\\[%d\\]/place",i);
       tokNum = jsmn_get_value(data, jSMNtokens, *resultCode, &path[0]);
       if(tokNum>0)
       {
@@ -182,7 +182,7 @@ error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCur
       /*
        * Code for dimmers inputs
        */
-      sprintf(&path[0],"/sensors/inputs/dimmer/\\[%i\\]/serial",i);
+      sprintf(&path[0],"/sensors/inputs/dimmer/\\[%d\\]/serial",i);
       tokNum = jsmn_get_value(data, jSMNtokens, *resultCode, &path[0]);
       if(tokNum>0)
       {
@@ -193,7 +193,7 @@ error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCur
             flag++;
          }
       }
-      sprintf(&path[0],"/sensors/inputs/dimmer/\\[%i\\]/name",i);
+      sprintf(&path[0],"/sensors/inputs/dimmer/\\[%d\\]/name",i);
       tokNum = jsmn_get_value(data, jSMNtokens, *resultCode, &path[0]);
       if(tokNum>0)
       {
@@ -211,7 +211,7 @@ error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCur
             }
          }
       }
-      sprintf(&path[0],"/sensors/inputs/dimmer/\\[%i\\]/place",i);
+      sprintf(&path[0],"/sensors/inputs/dimmer/\\[%d\\]/place",i);
       tokNum = jsmn_get_value(data, jSMNtokens, *resultCode, &path[0]);
       if(tokNum>0)
       {
@@ -248,7 +248,7 @@ error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCur
       /*
        * Code for analog inputs
        */
-      sprintf(&path[0],"/sensors/inputs/analog/\\[%i\\]/serial",i);
+      sprintf(&path[0],"/sensors/inputs/analog/\\[%d\\]/serial",i);
       tokNum = jsmn_get_value(data, jSMNtokens, *resultCode, &path[0]);
       if(tokNum>0)
       {
@@ -259,7 +259,7 @@ error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCur
             flag++;
          }
       }
-      sprintf(&path[0],"/sensors/inputs/analog/\\[%i\\]/name",i);
+      sprintf(&path[0],"/sensors/inputs/analog/\\[%d\\]/name",i);
       tokNum = jsmn_get_value(data, jSMNtokens, *resultCode, &path[0]);
       if(tokNum>0)
       {
@@ -277,7 +277,7 @@ error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCur
             }
          }
       }
-      sprintf(&path[0],"/sensors/inputs/analog/\\[%i\\]/place",i);
+      sprintf(&path[0],"/sensors/inputs/analog/\\[%d\\]/place",i);
       tokNum = jsmn_get_value(data, jSMNtokens, *resultCode, &path[0]);
       if(tokNum>0)
       {
