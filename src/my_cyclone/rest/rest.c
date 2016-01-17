@@ -18,7 +18,7 @@ OsMutex restMutex;
 register_rest_function(test_rest, "/test", NULL, NULL, NULL, NULL, NULL, NULL);
 
 
-char restBuffer[4096];
+char restBuffer[SIZE_OF_REST_BUFFER];
 static int printfRestClassMethods (char * bufer, int maxLen, restFunctions * cur_rest)
 {
    int p=0;

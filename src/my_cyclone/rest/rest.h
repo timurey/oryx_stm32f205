@@ -10,7 +10,8 @@
 
 #include "httpd.h"
 #include "jsmn_extras.h"
-extern char restBuffer[4096];
+#define SIZE_OF_REST_BUFFER 4096
+extern char restBuffer[SIZE_OF_REST_BUFFER];
 extern OsMutex restMutex;
 
 extern char restPrefix[];

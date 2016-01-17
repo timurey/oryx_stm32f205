@@ -25,13 +25,9 @@ error_t restGetClock(HttpConnection *connection, RestApi_t* RestApi)
    getCurrentDate(&time);
 
    p=sprintf(restBuffer,"{\r\n\"unixtime\":%lu,\r\n", getCurrentUnixTime());
-   p+=sprintf(restBuffer+p,"\"localtime\":\"%s GMT%c%c%c%c%c\",\r\n",
+   p+=sprintf(restBuffer+p,"\"localtime\":\"%s %s\",\r\n",
       htmlFormatDate(&time, &buf[0]),
-      (timezone>0?'+':'-'),
-      ('0'+abs(timezone) / (HOURS(10))),
-      ('0'+abs(timezone%(HOURS(10))) / (HOURS(1))),
-      ('0'+abs( (timezone % (HOURS(1))) / (MINUTES(10)))),
-      ('0'+abs( (timezone % (MINUTES(10))) / (MINUTES(1))))
+      pRTC_GetTimezone()
    );
    p+=sprintf(restBuffer+p,"\"time\":\"%02i:%02i:%02i\",\r\n", time.hours, time.minutes, time.seconds);
    p+=sprintf(restBuffer+p,"\"date\":\"%04i.%02i.%02i\"\r\n}\r\n", time.year,time.month,time.day);

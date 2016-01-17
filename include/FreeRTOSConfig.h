@@ -105,7 +105,7 @@ extern uint32_t SystemCoreClock;
 #define configUSE_16_BIT_TICKS            0
 #define configIDLE_SHOULD_YIELD           1
 #define configUSE_MUTEXES                 1
-#define configQUEUE_REGISTRY_SIZE         24
+#define configQUEUE_REGISTRY_SIZE         64
 #define configCHECK_FOR_STACK_OVERFLOW    1
 #define configUSE_RECURSIVE_MUTEXES       1
 #define configUSE_MALLOC_FAILED_HOOK      0

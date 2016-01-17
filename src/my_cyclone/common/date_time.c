@@ -65,7 +65,7 @@ static const char months[13][10] =
 };
 
 //Days
-static const char htmlDays[8][10] =
+static const char htmlDays[8][4] =
 {
    "",
    "Mon",
@@ -78,7 +78,7 @@ static const char htmlDays[8][10] =
 };
 
 //Months
-static const char htmlMonths[13][10] =
+static const char htmlMonths[13][4] =
 {
    "",
    "Jan",

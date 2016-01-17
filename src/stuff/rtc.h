@@ -15,7 +15,7 @@
 
 #include "time.h"
 #include "date_time.h"
-
+#include "error.h"
 
 
 #ifndef __YEAR__
@@ -44,15 +44,17 @@
 #define __DAY_OF_WEEK__ 4
 #endif
 
-
+#define TIMEZONE_LENGTH 24
 
 /***************************************************************************//**
  * Declare function prototypes
  ******************************************************************************/
 
-extern time_t timezone;
 extern RTC_HandleTypeDef RtcHandle;
 
 void RTC_Init(void);
 void RTC_CalendarConfig(time_t unixtime);
+error_t RTC_SetTimezone(char* pTargetTZ);
+char * pRTC_GetTimezone(void);
+time_t RTC_GetTimezone(void);
 #endif /* MODULES_RTC_H_ */

@@ -45,7 +45,7 @@
 #include "rtc.h"
 #include <time.h>
 #include "date_time.h"
-
+#include <string.h>
 /***************************************************************************//**
  * Global variables, private define and typedef
  ******************************************************************************/
@@ -58,7 +58,19 @@
 #define RTC_ASYNCH_PREDIV  0x7F   /* LSE as RTC clock */
 #define RTC_SYNCH_PREDIV   0x00FF /* LSE as RTC clock */
 
-time_t timezone = 5*60*60;
+#define HOURS(a) (a*60*60)
+#define MINUTES(a) (a*60)
+#define ISDIGIT(a) (((a)>='0') && ((a)<='9'))
+
+
+typedef struct
+{
+   char string[TIMEZONE_LENGTH+1];
+   time_t numeric;
+}timezone_t;
+
+timezone_t timezone;
+
 RTC_HandleTypeDef RtcHandle;
 
 
@@ -75,59 +87,164 @@ RTC_HandleTypeDef RtcHandle;
  */
 static void Error_Handler(void)
 {
-  while (1)
-  {
-  }
+   while (1)
+   {
+   }
 }
 
+error_t RTC_SetTimezone(char* pTargetTZ)
+{
+   error_t error = NO_ERROR;
+   time_t tz;
+
+   if(strncmp (pTargetTZ, "GMT" ,3)==0)
+   {
+      //date.toString js method returns sonething like this:
+      //           Sun Jun 14 2015 02:28:19 GMT+0500 (YEKT)
+      //Try to parse this record            ^^^^^^^^
+
+      //Check, what symbol after "GMT" is '+','-' or ' '
+      //and next 4 symbols is a digit
+      if (\
+         (*(pTargetTZ+3)=='+') ||\
+         (*(pTargetTZ+3)=='-') ||\
+         (*(pTargetTZ+3)==' ')\
+      )
+      {
+         if (\
+            //GMT+0500
+            ISDIGIT(*(pTargetTZ+4)) &&\
+            ISDIGIT(*(pTargetTZ+5)) &&\
+            ISDIGIT(*(pTargetTZ+6)) &&\
+            ISDIGIT(*(pTargetTZ+7)) \
+         )
+         {
+            //decode GMT+0500
+            tz=(*(pTargetTZ+4)-'0')*10*60*60+\
+               (*(pTargetTZ+5)-'0')*60*60+\
+               (*(pTargetTZ+6)-'0')*10*60+\
+               (*(pTargetTZ+7)-'0')*60;
+         }
+
+         else if (\
+            //GMT+05:00
+            ISDIGIT(*(pTargetTZ+4)) &&\
+            ISDIGIT(*(pTargetTZ+5)) &&\
+            (*(pTargetTZ+6)==':') &&\
+            ISDIGIT(*(pTargetTZ+7)) &&\
+            ISDIGIT(*(pTargetTZ+8)) \
+         )
+         {
+            //decode GMT+05:00
+            tz=(*(pTargetTZ+4)-'0')*10*60*60+\
+               (*(pTargetTZ+5)-'0')*60*60+\
+               (*(pTargetTZ+7)-'0')*10*60+\
+               (*(pTargetTZ+8)-'0')*60;
+         }
+         else if (\
+            //GMT+05
+            ISDIGIT(*(pTargetTZ+4)) &&\
+            ISDIGIT(*(pTargetTZ+5)) \
+         )
+         {
+            //decode GMT+05
+            tz=(*(pTargetTZ+4)-'0')*10*60*60+\
+               (*(pTargetTZ+5)-'0')*60*60;
+         }
+         else
+         {
+            error = ERROR_WRONG_ENCODING;
+         }
+      }
+      else
+      {
+         error = ERROR_WRONG_ENCODING;
+      }
+
+      if (!error)
+      {
+         if (*(pTargetTZ+3)=='-')
+         {
+            tz=tz*-1;
+         }
+
+         if (tz >= HOURS(-12) && (tz<= HOURS(12)))
+         {
+            timezone.numeric = tz;
+            strncpy(&timezone.string[0], pTargetTZ, TIMEZONE_LENGTH);
+         }
+         else
+         {
+            error = ERROR_PARAMETER_OUT_OF_RANGE;
+         }
+      }
+
+   }
+
+   else
+   {
+      error = ERROR_WRONG_ENCODING;
+   }
+   return error;
+}
+
+char * pRTC_GetTimezone(void)
+{
+   return &timezone.string[0];
+}
+
+time_t RTC_GetTimezone(void)
+{
+   return timezone.numeric;
+}
 void RTC_Init(void)
 {
 
-	/*##-1- Configure the RTC peripheral #######################################*/
-	/* Configure RTC prescaler and RTC data registers */
-	/* RTC configured as follow:
+   /*##-1- Configure the RTC peripheral #######################################*/
+   /* Configure RTC prescaler and RTC data registers */
+   /* RTC configured as follow:
 	      - Hour Format    = Format 24
 	      - Asynch Prediv  = Value according to source clock
 	      - Synch Prediv   = Value according to source clock
 	      - OutPut         = Output Disable
 	      - OutPutPolarity = High Polarity
 	      - OutPutType     = Open Drain */
-	RtcHandle.Init.HourFormat = RTC_HOURFORMAT_24;
-	RtcHandle.Init.AsynchPrediv = RTC_ASYNCH_PREDIV;
-	RtcHandle.Init.SynchPrediv = RTC_SYNCH_PREDIV;
-	RtcHandle.Init.OutPut = RTC_OUTPUT_DISABLE;
-	RtcHandle.Init.OutPutPolarity = RTC_OUTPUT_POLARITY_HIGH;
-	RtcHandle.Init.OutPutType = RTC_OUTPUT_TYPE_OPENDRAIN;
-	RtcHandle.Instance = RTC;
+   RtcHandle.Init.HourFormat = RTC_HOURFORMAT_24;
+   RtcHandle.Init.AsynchPrediv = RTC_ASYNCH_PREDIV;
+   RtcHandle.Init.SynchPrediv = RTC_SYNCH_PREDIV;
+   RtcHandle.Init.OutPut = RTC_OUTPUT_DISABLE;
+   RtcHandle.Init.OutPutPolarity = RTC_OUTPUT_POLARITY_HIGH;
+   RtcHandle.Init.OutPutType = RTC_OUTPUT_TYPE_OPENDRAIN;
+   RtcHandle.Instance = RTC;
 
-	if (HAL_RTC_Init(&RtcHandle) != HAL_OK)
-	{
-		/* Initialization Error */
-			    Error_Handler();
-	}
+   if (HAL_RTC_Init(&RtcHandle) != HAL_OK)
+   {
+      /* Initialization Error */
+      Error_Handler();
+   }
 
-	/*##-2- Check if Data stored in BackUp register0: No Need to reconfigure RTC#*/
-	/* Read the Back Up Register 0 Data */
-	if (HAL_RTCEx_BKUPRead(&RtcHandle, RTC_BKP_DR0) != 0x32F2)
-	{
-		/* Configure RTC Calendar */
-		RTC_CalendarConfig(____TIMESTAMP____);
-	}
-	else
-	{
-		/* Check if the Power On Reset flag is set */
-		if (__HAL_RCC_GET_FLAG(RCC_FLAG_PORRST) != RESET)
-		{
-			/* Turn on LED2: Power on reset occured */
-		}
-		/* Check if Pin Reset flag is set */
-		if (__HAL_RCC_GET_FLAG(RCC_FLAG_PINRST) != RESET)
-		{
-			/* Turn on LED4: External reset occured */
-		}
-		/* Clear source Reset Flag */
-		__HAL_RCC_CLEAR_RESET_FLAGS();
-	}
+   /*##-2- Check if Data stored in BackUp register0: No Need to reconfigure RTC#*/
+   /* Read the Back Up Register 0 Data */
+   if (HAL_RTCEx_BKUPRead(&RtcHandle, RTC_BKP_DR0) != 0x32F2)
+   {
+      /* Configure RTC Calendar */
+      RTC_CalendarConfig(____TIMESTAMP____);
+   }
+   else
+   {
+      /* Check if the Power On Reset flag is set */
+      if (__HAL_RCC_GET_FLAG(RCC_FLAG_PORRST) != RESET)
+      {
+         /* Turn on LED2: Power on reset occured */
+      }
+      /* Check if Pin Reset flag is set */
+      if (__HAL_RCC_GET_FLAG(RCC_FLAG_PINRST) != RESET)
+      {
+         /* Turn on LED4: External reset occured */
+      }
+      /* Clear source Reset Flag */
+      __HAL_RCC_CLEAR_RESET_FLAGS();
+   }
 
 }
 
@@ -138,14 +255,14 @@ void RTC_Init(void)
  */
 //void RTC_IRQHandler(void)
 //{
-	//	if (RTC_GetITStatus(RTC_IT_SEC) != RESET) //Ежесекундное прерывание
-	//	{
-	//		/* Clear the RTC Second interrupt */
-	//		RTC_ClearITPendingBit(RTC_IT_SEC);
-	//
-	//		/* Wait until last write operation on RTC registers has finished */
-	//		RTC_WaitForLastTask();
-	//	}
+//	if (RTC_GetITStatus(RTC_IT_SEC) != RESET) //Ежесекундное прерывание
+//	{
+//		/* Clear the RTC Second interrupt */
+//		RTC_ClearITPendingBit(RTC_IT_SEC);
+//
+//		/* Wait until last write operation on RTC registers has finished */
+//		RTC_WaitForLastTask();
+//	}
 //}
 
 /**
@@ -156,97 +273,97 @@ void RTC_Init(void)
 
 void RTC_CalendarConfig(time_t unixtime)
 {
-	DateTime date;
-	RTC_DateTypeDef sdatestructure;
-	RTC_TimeTypeDef stimestructure;
+   DateTime date;
+   RTC_DateTypeDef sdatestructure;
+   RTC_TimeTypeDef stimestructure;
 
-	convertUnixTimeToDate(unixtime, &date);
+   convertUnixTimeToDate(unixtime, &date);
 
-	/*##-1- Configure the Date #################################################*/
-	/* Set Date: Tuesday February 18th 2014 */
-	sdatestructure.Year = (uint8_t)(date.year - 2000);
-	sdatestructure.Month = date.month;
-	sdatestructure.Date = date.day;
-	sdatestructure.WeekDay = date.dayOfWeek;
+   /*##-1- Configure the Date #################################################*/
+   /* Set Date: Tuesday February 18th 2014 */
+   sdatestructure.Year = (uint8_t)(date.year - 2000);
+   sdatestructure.Month = date.month;
+   sdatestructure.Date = date.day;
+   sdatestructure.WeekDay = date.dayOfWeek;
 
-	if(HAL_RTC_SetDate(&RtcHandle,&sdatestructure,FORMAT_BIN) != HAL_OK)
-	{
-		/* Initialization Error */
-		Error_Handler();
-	}
+   if(HAL_RTC_SetDate(&RtcHandle,&sdatestructure,FORMAT_BIN) != HAL_OK)
+   {
+      /* Initialization Error */
+      Error_Handler();
+   }
 
-	/*##-2- Configure the Time #################################################*/
-	/* Set Time: 02:00:00 */
-	stimestructure.Hours = date.hours;
-	stimestructure.Minutes = date.minutes;
-	stimestructure.Seconds = date.seconds;
-	stimestructure.TimeFormat = RTC_HOURFORMAT12_AM;
-	stimestructure.DayLightSaving = RTC_DAYLIGHTSAVING_NONE ;
-	stimestructure.StoreOperation = RTC_STOREOPERATION_RESET;
+   /*##-2- Configure the Time #################################################*/
+   /* Set Time: 02:00:00 */
+   stimestructure.Hours = date.hours;
+   stimestructure.Minutes = date.minutes;
+   stimestructure.Seconds = date.seconds;
+   stimestructure.TimeFormat = RTC_HOURFORMAT12_AM;
+   stimestructure.DayLightSaving = RTC_DAYLIGHTSAVING_NONE ;
+   stimestructure.StoreOperation = RTC_STOREOPERATION_RESET;
 
-	if (HAL_RTC_SetTime(&RtcHandle, &stimestructure, FORMAT_BIN) != HAL_OK)
-	{
-		/* Initialization Error */
-		Error_Handler();
-	}
+   if (HAL_RTC_SetTime(&RtcHandle, &stimestructure, FORMAT_BIN) != HAL_OK)
+   {
+      /* Initialization Error */
+      Error_Handler();
+   }
 
-	/*##-3- Writes a data in a RTC Backup data Register0 #######################*/
-	HAL_RTCEx_BKUPWrite(&RtcHandle, RTC_BKP_DR0, 0x32F2);
+   /*##-3- Writes a data in a RTC Backup data Register0 #######################*/
+   HAL_RTCEx_BKUPWrite(&RtcHandle, RTC_BKP_DR0, 0x32F2);
 }
 
 void HAL_RTC_MspInit(RTC_HandleTypeDef *hrtc)
 {
-  RCC_OscInitTypeDef        RCC_OscInitStruct;
-  RCC_PeriphCLKInitTypeDef  PeriphClkInitStruct;
-  (void ) hrtc;
-  /*##-1- Enables the PWR Clock and Enables access to the backup domain ###################################*/
-  /* To change the source clock of the RTC feature (LSE, LSI), You have to:
+   RCC_OscInitTypeDef        RCC_OscInitStruct;
+   RCC_PeriphCLKInitTypeDef  PeriphClkInitStruct;
+   (void ) hrtc;
+   /*##-1- Enables the PWR Clock and Enables access to the backup domain ###################################*/
+   /* To change the source clock of the RTC feature (LSE, LSI), You have to:
      - Enable the power clock using __PWR_CLK_ENABLE()
      - Enable write access using HAL_PWR_EnableBkUpAccess() function before to
        configure the RTC clock source (to be done once after reset).
      - Reset the Back up Domain using __HAL_RCC_BACKUPRESET_FORCE() and
        __HAL_RCC_BACKUPRESET_RELEASE().
      - Configure the needed RTc clock source */
-  __PWR_CLK_ENABLE();
-  HAL_PWR_EnableBkUpAccess();
+   __PWR_CLK_ENABLE();
+   HAL_PWR_EnableBkUpAccess();
 
-  /*##-2- Configue LSE as RTC clock soucre ###################################*/
-  RCC_OscInitStruct.OscillatorType =  RCC_OSCILLATORTYPE_LSI | RCC_OSCILLATORTYPE_LSE;
-  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
-  RCC_OscInitStruct.LSEState = RCC_LSE_ON;
-  RCC_OscInitStruct.LSIState = RCC_LSI_OFF;
-  if(HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-  {
-    Error_Handler();
-  }
+   /*##-2- Configue LSE as RTC clock soucre ###################################*/
+   RCC_OscInitStruct.OscillatorType =  RCC_OSCILLATORTYPE_LSI | RCC_OSCILLATORTYPE_LSE;
+   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
+   RCC_OscInitStruct.LSEState = RCC_LSE_ON;
+   RCC_OscInitStruct.LSIState = RCC_LSI_OFF;
+   if(HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+   {
+      Error_Handler();
+   }
 
-  PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_RTC;
-  PeriphClkInitStruct.RTCClockSelection = RCC_RTCCLKSOURCE_LSE;
-  if(HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
-  {
-    Error_Handler();
-  }
+   PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_RTC;
+   PeriphClkInitStruct.RTCClockSelection = RCC_RTCCLKSOURCE_LSE;
+   if(HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
+   {
+      Error_Handler();
+   }
 
-  /*##-3- Enable RTC peripheral Clocks #######################################*/
-  /* Enable RTC Clock */
-  __HAL_RCC_RTC_ENABLE();
+   /*##-3- Enable RTC peripheral Clocks #######################################*/
+   /* Enable RTC Clock */
+   __HAL_RCC_RTC_ENABLE();
 }
 
 /**
-  * @brief RTC MSP De-Initialization
-  *        This function frees the hardware resources used in this example:
-  *          - Disable the Peripheral's clock
-  * @param hrtc: RTC handle pointer
-  * @retval None
-  */
+ * @brief RTC MSP De-Initialization
+ *        This function frees the hardware resources used in this example:
+ *          - Disable the Peripheral's clock
+ * @param hrtc: RTC handle pointer
+ * @retval None
+ */
 void HAL_RTC_MspDeInit(RTC_HandleTypeDef *hrtc)
 {
-	(void ) hrtc;
-  /*##-1- Reset peripherals ##################################################*/
-  __HAL_RCC_RTC_DISABLE();
+   (void ) hrtc;
+   /*##-1- Reset peripherals ##################################################*/
+   __HAL_RCC_RTC_DISABLE();
 
-  /*##-2- Disables the PWR Clock and Disables access to the backup domain ###################################*/
-  HAL_PWR_DisableBkUpAccess();
-  __PWR_CLK_DISABLE();
+   /*##-2- Disables the PWR Clock and Disables access to the backup domain ###################################*/
+   HAL_PWR_DisableBkUpAccess();
+   __PWR_CLK_DISABLE();
 }
 
