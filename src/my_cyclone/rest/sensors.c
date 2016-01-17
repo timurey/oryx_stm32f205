@@ -4,13 +4,17 @@
  *  Created on: 25 июня 2015 г.
  *      Author: timurtaipov
  */
+
+//Switch to the appropriate trace level
+#define TRACE_LEVEL 2
+
 #include "rest/sensors.h"
 #include "rest/sensors_def.h"
 #include "rest/input.h"
 #include "rest/temperature.h"
 #include "configs.h"
 #include <ctype.h>
-
+#include "debug.h"
 
 
 char places[PLACES_CACHE_LENGTH];
@@ -455,14 +459,16 @@ char *serialHexToString(const uint8_t *serial, char *str, int length)
 error_t sensorsHealthInit (sensor_t * sensor)
 {
    //Enter critical section
-   xprintf("sensorsHealthInit: Enter critical section sensor#%d.", sensor->id);
+   //Debug message
+   TRACE_INFO("sensorsHealthInit: Enter critical section sensor#%d.", sensor->id);
    osAcquireMutex(&sensor->mutex);
 
    sensor->health.value =SENSORS_HEALTH_MAX_VALUE;
    sensor->health.counter =SENSORS_HEALTH_MIN_VALUE;
 
    //Leave critical section
-   xprintf("sensorsHealthInit: Leave critical section sensor#%d.\r\n", sensor->id);
+   //Debug message
+   TRACE_INFO("sensorsHealthInit: Leave critical section sensor#%d.\r\n", sensor->id);
    osReleaseMutex(&sensor->mutex);
 
    return NO_ERROR;
@@ -473,13 +479,15 @@ int sensorsHealthGetValue(sensor_t * sensor)
    int result;
 
    //Enter critical section
-   xprintf("sensorsHealthGetValue: Enter critical section sensor#%d.", sensor->id);
+   //Debug message
+   TRACE_INFO("sensorsHealthGetValue: Enter critical section sensor#%d.", sensor->id);
    osAcquireMutex(&sensor->mutex);
 
    result = sensor->health.value;
 
    //Leave critical section
-   xprintf("sensorsHealthGetValue: Leave critical section sensor#%d.\r\n", sensor->id);
+   //Debug message
+   TRACE_INFO("sensorsHealthGetValue: Leave critical section sensor#%d.\r\n", sensor->id);
    osReleaseMutex(&sensor->mutex);
 
    return result;
@@ -489,7 +497,8 @@ int sensorsHealthGetValue(sensor_t * sensor)
 void sensorsHealthIncValue(sensor_t * sensor)
 {
    //Enter critical section
-   xprintf("sensorsHealthIncValue: Enter critical section sensor#%d.", sensor->id);
+   //Debug message
+   TRACE_INFO("sensorsHealthIncValue: Enter critical section sensor#%d.", sensor->id);
    osAcquireMutex(&sensor->mutex);
 
    if (sensor->health.value<SENSORS_HEALTH_MAX_VALUE)
@@ -502,7 +511,8 @@ void sensorsHealthIncValue(sensor_t * sensor)
    }
 
    //Leave critical section
-   xprintf("sensorsHealthIncValue: Leave critical section sensor#%d.\r\n", sensor->id);
+   //Debug message
+   TRACE_INFO("sensorsHealthIncValue: Leave critical section sensor#%d.\r\n", sensor->id);
    osReleaseMutex(&sensor->mutex);
 
 }
@@ -511,7 +521,8 @@ void sensorsHealthDecValue(sensor_t * sensor)
 {
 
    //Enter critical section
-   xprintf("sensorsHealthDecValue: Enter critical section sensor#%d.", sensor->id);
+   //Debug message
+   TRACE_INFO("sensorsHealthDecValue: Enter critical section sensor#%d.", sensor->id);
    osAcquireMutex(&sensor->mutex);
 
 
@@ -525,7 +536,8 @@ void sensorsHealthDecValue(sensor_t * sensor)
    }
 
    //Leave critical section
-   xprintf("sensorsHealthDecValue: Leave critical section sensor#%d.\r\n", sensor->id);
+   //Debug message
+   TRACE_INFO("sensorsHealthDecValue: Leave critical section sensor#%d.\r\n", sensor->id);
    osReleaseMutex(&sensor->mutex);
 
 }
@@ -534,7 +546,8 @@ void sensorsHealthSetValue(sensor_t * sensor, int value)
 {
 
    //Enter critical section
-   xprintf("sensorsHealthSetValue: Enter critical section sensor#%d.", sensor->id);
+   //Debug message
+   TRACE_INFO("sensorsHealthSetValue: Enter critical section sensor#%d.", sensor->id);
    osAcquireMutex(&sensor->mutex);
 
 
@@ -552,7 +565,8 @@ void sensorsHealthSetValue(sensor_t * sensor, int value)
    }
 
    //Leave critical section
-   xprintf("sensorsHealthSetValue: Leave critical section sensor#%d.\r\n", sensor->id);
+   //Debug message
+   TRACE_INFO("sensorsHealthSetValue: Leave critical section sensor#%d.\r\n", sensor->id);
    osReleaseMutex(&sensor->mutex);
 
 }
@@ -561,13 +575,15 @@ void sensorsSetValueUint16(sensor_t * sensor, uint16_t value)
 {
 
    //Enter critical section
-   xprintf("sensorsSetValueUint16: Enter critical section sensor#%d.", sensor->id);
+   //Debug message
+   TRACE_INFO("sensorsSetValueUint16: Enter critical section sensor#%d.", sensor->id);
    osAcquireMutex(&sensor->mutex);
 
    sensor->value.uVal = value;
 
    //Leave critical section
-   xprintf("sensorsSetValueUint16: Leave critical section sensor#%d.\r\n", sensor->id);
+   //Debug message
+   TRACE_INFO("sensorsSetValueUint16: Leave critical section sensor#%d.\r\n", sensor->id);
    osReleaseMutex(&sensor->mutex);
 
 }
@@ -576,13 +592,15 @@ void sensorsSetValueFloat(sensor_t * sensor, float value)
 {
 
    //Enter critical section
-   xprintf("sensorsSetValueFloat: Enter critical section sensor#%d.", sensor->id);
+   //Debug message
+   TRACE_INFO("sensorsSetValueFloat: Enter critical section sensor#%d.", sensor->id);
    osAcquireMutex(&sensor->mutex);
 
    sensor->value.fVal = value;
 
    //Leave critical section
-   xprintf("sensorsSetValueFloat: Leave critical section sensor#%d.\r\n", sensor->id);
+   //Debug message
+   TRACE_INFO("sensorsSetValueFloat: Leave critical section sensor#%d.\r\n", sensor->id);
    osReleaseMutex(&sensor->mutex);
 
 }
@@ -592,13 +610,15 @@ uint16_t sensorsGetValueUint16(sensor_t * sensor)
    uint16_t value;
 
    //Enter critical section
-   xprintf("sensorsGetValueUint16: Enter critical section sensor#%d.", sensor->id);
+   //Debug message
+   TRACE_INFO("sensorsGetValueUint16: Enter critical section sensor#%d.", sensor->id);
    osAcquireMutex(&sensor->mutex);
 
    value = sensor->value.uVal;
 
    //Leave critical section
-   xprintf("sensorsGetValueUint16: Leave critical section sensor#%d.\r\n", sensor->id);
+   //Debug message
+   TRACE_INFO("sensorsGetValueUint16: Leave critical section sensor#%d.\r\n", sensor->id);
    osReleaseMutex(&sensor->mutex);
 
    return value;
@@ -610,13 +630,15 @@ float sensorsGetValueFloat(sensor_t * sensor)
    float value;
 
    //Enter critical section
-   xprintf("sensorsGetValueFloat: Enter critical section sensor#%d.", sensor->id);
+   //Debug message
+   TRACE_INFO("sensorsGetValueFloat: Enter critical section sensor#%d.", sensor->id);
    osAcquireMutex(&sensor->mutex);
 
    value = sensor->value.fVal;
 
    //Leave critical section
-   xprintf("sensorsGetValueFloat: Leave critical section sensor#%d.\r\n", sensor->id);
+   //Debug message
+   TRACE_INFO("sensorsGetValueFloat: Leave critical section sensor#%d.\r\n", sensor->id);
    osReleaseMutex(&sensor->mutex);
 
    return value;
