@@ -15,7 +15,7 @@
 #include "error.h"
 #include "rest.h"
 #include "onewire_conf.h"
-#include "os_port_config.h"
+#include "os_port.h"
 #include "compiler_port.h"
 
 #define ISDIGIT(a) (((a)>='0') && ((a)<='9'))

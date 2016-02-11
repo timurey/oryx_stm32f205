@@ -16,8 +16,70 @@
 #include<string.h>
 #include <math.h>
 #include "xprintf.h"
+#include "rest/variables.h"
 
 #include"expression_parser.h"
+#include "jsmn_extras.h"
+#include "configs.h"
+
+static error_t parseRules (char *data, size_t len, jsmn_parser* jSMNparser, jsmntok_t *jSMNtokens)
+{
+   int tokNum;
+   int i;
+   char path[64];
+   int lenght;
+   uint8_t flag = 0;
+   error_t error;
+   int resultCode;
+
+   char * currExpr = &expressions[0];
+   char * currRule = &rules[0];
+
+   jsmn_init(jSMNparser);
+
+   resultCode = jsmn_parse(jSMNparser, data, len, jSMNtokens, CONFIG_JSMN_NUM_TOKENS);
+   if(resultCode)
+   {
+      for (i=0;i<EXPRESSION_MAX_COUNT;i++)
+      {
+         sprintf(&path[0],"/rules/\\[%d\\]/expression",i);
+         tokNum = jsmn_get_value(data, jSMNtokens, resultCode, &path[0]);
+         if(tokNum>0)
+         {
+            lenght = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
+            memcpy(currExpr, &data[jSMNtokens[tokNum].start], lenght);
+            pExpression[i]=currExpr;
+            currExpr[lenght+1] = '\0';
+            currExpr+=(lenght+1);
+            /*
+             * todo добавить проверку входных данных.
+             * сейчас просто копируется выражение
+             */
+            flag++;
+
+         }
+         sprintf(&path[0],"/rules/\\[%d\\]/rules",i);
+         tokNum = jsmn_get_value(data, jSMNtokens, resultCode, &path[0]);
+         if(tokNum>0)
+         {
+            lenght = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
+            memcpy(currRule, &data[jSMNtokens[tokNum].start], lenght);
+            pRules[i]=currRule;
+            currRule[lenght+1] = '\0';
+            currRule+=(lenght+1);
+            /*
+             * todo добавить проверку входных данных.
+             * сейчас просто копируется выражение
+             */
+            flag++;
+
+         }
+
+
+      }
+   }
+   return NO_ERROR;
+}
 
 #define parser_check( result, expr ) { \
    double c_value, p_value; \
@@ -233,14 +295,20 @@ int user_fnc_cb( void *user_data, const char *name, const int num_args, const do
  @return true if the variable exists and the return argument was successfully set, false otherwise
  */
 int user_var_cb( void *user_data, const char *name, double *value ){
-   if( strcmp( name, "a" ) == 0 ){
-      *value = 1.0;
-      return PARSER_TRUE;
-   } else if( strcmp( name, "b0" ) == 0 ){
-      *value = 2.0;
-      return PARSER_TRUE;
-   } else if( strcmp( name, "_variable_6__" ) == 0 ){
-      *value = 5.0;
+   volatile error_t error;
+   //   if( strcmp( name, "a" ) == 0 ){
+   //      *value = 1.0;
+   //      return PARSER_TRUE;
+   //   } else if( strcmp( name, "b0" ) == 0 ){
+   //      *value = 2.0;
+   //      return PARSER_TRUE;
+   //   } else if( strcmp( name, "_variable_6__" ) == 0 ){
+   //      *value = 5.0;
+   //      return PARSER_TRUE;
+   //   }
+   error = getVariable(name, value);
+   if (error == NO_ERROR)
+   {
       return PARSER_TRUE;
    }
    return PARSER_FALSE;
@@ -301,31 +369,82 @@ void test_user_functions_and_variables(){
    xprintf("\n\n");
 }
 
+static void my_test(){
+   double result;
+   int d1, d2;
+   float f2;
+   result = parse_expression("15/(7-(1+1))*3-(2+(1+1)) "); //5
+
+   d1 = result;
+   f2 = result - d1;
+   d2 = abs(trunc(f2 * 1000));
+   xprintf("         C: %d.%01d\n", d1, d2 );
+
+
+   result = parse_expression("48/2(9+3) "); //2 or 288
+   d1 = result;
+   f2 = result - d1;
+   d2 = abs(trunc(f2 * 1000));
+   xprintf("         C: %d.%01d\n", d1, d2 );
+
+   result = parse_expression("15/(7-(1+1))*3-(2+(1+1))*15/(7-(1+1))*3-(2+(1+1))*(15/(7-(1+1))*3-(2+(1+1))+15/(7-(1+1))*3-(2+(1+1))) "); //-67
+   d1 = result;
+   f2 = result - d1;
+   d2 = abs(trunc(f2 * 1000));
+   xprintf("         C: %d.%01d\n", d1, d2 );
+}
+
+static void parse_rules(){
+   double result;
+   int d1, d2;
+   float f2;
+   int i=0;
+   while (pExpression[i])
+   {
+      result = parse_expression_with_callbacks( pExpression[i], &user_var_cb, NULL, NULL );
+
+      d1 = result;
+      f2 = result - d1;
+      d2 = abs(trunc(f2 * 1000));
+      xprintf("         C: %d.%01d\n", d1, d2 );
+      i++;
+   }
+
+}
+
 void parser_task (void *pvParameters)
 {
-   double value, f2;
-   int num_arguments = 3;
-
-   parser_data pd;
-
-   int d1, d2;
-
-
    (void) pvParameters;
-   vTaskDelay(2000);
-   xprintf("Parser is working...\r\n");
-
-   run_bad_input_tests();
-
-   run_boolean_not_tests();
-   run_boolean_comparison_tests();
-   run_boolean_logical_tests();
-   run_boolean_compound_tests();
-   test_user_functions_and_variables();
-
+   while (1)
+   {
+      vTaskDelay(1000);
+      xprintf("Parser is starting...\r\n");
+      //      my_test();
+      //      run_bad_input_tests();
+      //
+      //      run_boolean_not_tests();
+      //      run_boolean_comparison_tests();
+      //      run_boolean_logical_tests();
+      //      run_boolean_compound_tests();
+      //      test_user_functions_and_variables();
+      parse_rules();
+   }
 
 
    vTaskDelete(NULL);
 }
 
+error_t logicConfigure(void)
+{
+   error_t error;
+   error = read_config("/config/rules.json",&parseRules);
+   return error;
+}
+
+error_t logicStart(void)
+{
+   if (osCreateTask("parser_Services", parser_task,  NULL, configMINIMAL_STACK_SIZE*8, 1)!=NULL)
+      return NO_ERROR;
+   return ERROR_OUT_OF_MEMORY;
+}
 #endif /* EXPRESSION_PARSER_LOGIC_C_ */

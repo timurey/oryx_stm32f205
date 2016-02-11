@@ -151,9 +151,7 @@ static error_t parseExecutors (char *data, size_t len, jsmn_parser* jSMNparser, 
    {
       for (executorFunctions *cur_executor = &__start_executor_functions; cur_executor < &__stop_executor_functions; cur_executor++)
       {
-
          cur_executor->executorInitClassHadler(data, jSMNtokens, &currentExecutor, &resultCode, &pos);
-
       }
    }
    else

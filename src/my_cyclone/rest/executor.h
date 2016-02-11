@@ -22,7 +22,8 @@ typedef enum {
    O_NONE =0,
    O_DIGITAL,
    O_ANALOG,
-   O_PWM
+   O_PWM,
+   O_HTTP
 } my_executor_type;
 
 typedef union

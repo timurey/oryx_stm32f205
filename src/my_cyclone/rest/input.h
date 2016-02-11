@@ -14,6 +14,9 @@
 
 #define MAX_SAMPLES_COUNT 10
 
+//A0, A3, B0, B1, C0, C1, C2, C3, C4 - Digital and analog inputs
+//C6, C7, D0, D1, D2, D3, D4 - Digital inputs
+
 
 //analog or digital inputs
 #define IPNUT_PIN_0 GPIO_PIN_0
@@ -65,10 +68,10 @@
 #define IPNUT_PIN_12 GPIO_PIN_1
 #define IPNUT_PORT_12 GPIOD
 
-#define IPNUT_PIN_13 GPIO_PIN_2
+#define IPNUT_PIN_13 GPIO_PIN_3
 #define IPNUT_PORT_13 GPIOD
 
-#define IPNUT_PIN_14 GPIO_PIN_3
+#define IPNUT_PIN_14 GPIO_PIN_4
 #define IPNUT_PORT_14 GPIOD
 
 #define IPNUT_PIN_15 GPIO_PIN_4

@@ -18,6 +18,10 @@
 #include "uuid.h"
 
 #include "rest/sensors.h"
+#include "rest/executor.h"
+#include "rest/variables.h"
+
+#include "expression_parser/logic.h"
 
 static NetInterface *interface;
 
@@ -702,7 +706,9 @@ void networkServices(void *pvParametrs)
 
    networkConfigure();
    sensorsConfigure();
+   executorsConfigure();
    ntpdConfigure();
+   logicConfigure();
 #if (FTP_SERVER_SUPPORT == ENABLED)
    ftpdConfigure();
 #endif
@@ -712,6 +718,7 @@ void networkServices(void *pvParametrs)
 
    networkStart();
    ntpdStart();
+   logicStart();
 #if (FTP_SERVER_SUPPORT == ENABLED)
    ftpdStart();
 #endif

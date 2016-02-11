@@ -262,7 +262,13 @@ char* sensorsFindPlace(const char * place, size_t length)
       {
          return p;
       }
-      p = strchr(++p,'\0');
+      p = strchr(p,'\0');
+
+      if (*p=='\0' && *(p+1) == '\0')
+      {
+         return NULL;
+      }
+      p++;
    }
    return NULL;
 }
@@ -324,6 +330,7 @@ static error_t initSensor(sensor_t * cur_sensor)
    }
    return error;
 }
+
 void sensorsConfigure(void)
 {
    volatile error_t error = NO_ERROR;
@@ -338,6 +345,9 @@ void sensorsConfigure(void)
    {
       error = read_config("/config/sensors.json",&parseSensors);
    }
+   /*
+    * todo: move this code to init section.
+    */
    if (!error)
    {
       osCreateTask("oneWireTask",oneWireTask, NULL, configMINIMAL_STACK_SIZE*4, 1);
