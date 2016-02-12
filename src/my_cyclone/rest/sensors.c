@@ -106,6 +106,56 @@ static sensFunctions * restFindSensor(RestApi_t* RestApi)
    return NULL;
 }
 
+error_t sensGetHadler(HttpConnection *connection, RestApi_t* RestApi, sensFunctions * sensor)
+{
+   int p=0;
+   int i=0,j=0;
+   error_t error = ERROR_NOT_FOUND;
+   const size_t max_len = sizeof(restBuffer);
+   p=sprintf(restBuffer,"{\"%s\":[ ", sensor->sensClassPath+1);
+   if (RestApi->objectId != NULL)
+   {
+      if (ISDIGIT(*(RestApi->objectId+1)))
+      {
+         j=atoi(RestApi->objectId+1);
+         p+=sensor->sensGetMethodHadler(&restBuffer[p], max_len-p, j);
+         error = NO_ERROR;
+      }
+      else
+      {
+         error = ERROR_UNSUPPORTED_REQUEST;
+      }
+   }
+   else
+   {
+      for (i=0; i<= MAX_NUM_SENSORS; i++)
+      {
+         p+=sensor->sensGetMethodHadler(&restBuffer[p], max_len-p, i);
+         error = NO_ERROR;
+      }
+   }
+   p--;
+
+   p+=snprintf(restBuffer+p, max_len-p,"]}\r\n");
+   connection->response.contentType = mimeGetType(".json");
+
+   switch (error)
+   {
+   case NO_ERROR:
+      return rest_200_ok(connection, &restBuffer[0]);
+      break;
+   case ERROR_UNSUPPORTED_REQUEST:
+      return rest_400_bad_request(connection, "400 Bad Request.\r\n");
+      break;
+   case ERROR_NOT_FOUND:
+   default:
+      return rest_404_not_found(connection, "404 Not Found.\r\n");
+      break;
+
+   }
+   return error;
+}
+
 error_t restGetSensors(HttpConnection *connection, RestApi_t* RestApi)
 {
    int p=0;
@@ -117,7 +167,8 @@ error_t restGetSensors(HttpConnection *connection, RestApi_t* RestApi)
    {//Если сенсор найден
       if (wantedSensor->sensGetMethodHadler != NULL)
       {//Если есть обработчик метода GET
-         error = wantedSensor->sensGetMethodHadler(connection, RestApi);
+
+         error = sensGetHadler(connection, RestApi, wantedSensor);
       }
       else
       {  //Если нет обработчика метода GET печатаем все доступные методы

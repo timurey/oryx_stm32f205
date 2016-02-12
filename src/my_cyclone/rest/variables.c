@@ -105,38 +105,47 @@ error_t createVariable(char *name, double value)
    variables * pVariable;
    size_t len = strlen(name);
 
+   pVariable = findVariable(name);
 
-   pVariable = findFreeVariable();
-
-   if (pVariable != NULL)
+   if (pVariable == NULL)
    {
-      //Enter critical section
-      osAcquireMutex(&pVariable->mutex);
+      pVariable = findFreeVariable();
 
-      //allocate system memory for variable name
-      pVariable->name = osAllocMem(len+1);
-
-      if (pVariable->name ==NULL)
+      if (pVariable != NULL)
       {
+         //Enter critical section
+         osAcquireMutex(&pVariable->mutex);
+
+         //allocate system memory for variable name
+         pVariable->name = osAllocMem(len+1);
+
+         if (pVariable->name ==NULL)
+         {
+            error = ERROR_OUT_OF_RESOURCES;
+         }
+         //No error
+         if (!error)
+         {
+            //must be faster than strcpy
+            memcpy(pVariable->name, name,  len);
+            pVariable->name[len]='\0';
+
+            //If value is set
+            pVariable->value = value;
+         }
+         //Leave critical section
+         osReleaseMutex(&pVariable->mutex);
+      }
+      else
+      {
+         //Sorry, we have't free variables for you
          error = ERROR_OUT_OF_RESOURCES;
       }
-      //No error
-      if (!error)
-      {
-         //must be faster than strcpy
-         memcpy(pVariable->name, name,  len);
-         pVariable->name[len]='\0';
-
-         //If value is set
-         pVariable->value = value;
-      }
-      //Leave critical section
-      osReleaseMutex(&pVariable->mutex);
    }
    else
    {
-      //Sorry, we have't free variables for you
-      error = ERROR_OUT_OF_RESOURCES;
+      //Sorry, variable already exist
+      error = ERROR_FAILURE;
    }
    return error;
 }

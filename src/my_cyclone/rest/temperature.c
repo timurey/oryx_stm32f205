@@ -11,8 +11,8 @@
 #include "os_port.h"
 
 #include <math.h>
-
-register_sens_function(temperature, "/temperature", S_TEMP, &initTemperature, &deinitTemperature, &getRestTemperature, NULL, NULL, NULL);
+int temperature_snprintf(char * bufer, size_t max_len, int sens_num);
+register_sens_function(temperature, "/temperature", S_TEMP, &initTemperature, &deinitTemperature, &temperature_snprintf, NULL, NULL, NULL);
 
 #if (OW_DS1820_SUPPORT == ENABLE)
 
@@ -100,36 +100,45 @@ error_t initTemperature (const char * data, jsmntok_t *jSMNtokens, sensor_t ** p
    return NO_ERROR;
 }
 
-static int temperature_snprintf(char * bufer, size_t max_len, int i)
+int temperature_snprintf(char * bufer, size_t max_len, int sens_num)
 {
    int p=0;
    int d1, d2;
    float f2, temp_val;
-   int counter=0;
+   int counter=0, i;
 
-   while ((!(sensors[i].status & READEBLE) ) & (sensors[i].status & MANAGED))
+   for(i=0; i <= MAX_NUM_SENSORS; i++)
    {
-      osDelayTask(1);
-      if (++counter == 3000)
+      if (sensors[i].type == S_TEMP && sensors[i].id == sens_num)
       {
+         while ((!(sensors[i].status & READEBLE) ) & (sensors[i].status & MANAGED))
+         {
+            osDelayTask(1);
+            if (++counter == 3000)
+            {
+               break;
+            }
+         }
+         temp_val = sensorsGetValueFloat(&sensors[i]);
+         d1 = temp_val;            // Get the integer part (678).
+         f2 = temp_val - d1;     // Get fractional part (678.0123 - 678 = 0.0123).
+         d2 = abs(trunc(f2 * 10));   // Turn into integer (123).
+         p+=snprintf(bufer+p, max_len-p, "{\"id\":%d,",sensors[i].id);
+         p+=snprintf(bufer+p, max_len-p, "\"name\":\"%s\",", sensors[i].name);
+         p+=snprintf(bufer+p, max_len-p, "\"place\":\"%s\",", sensors[i].place);
+         p+=snprintf(bufer+p, max_len-p, "\"value\":\"%d.%01d\",", d1, d2);//sensorsDS1820[i].value
+         p+=snprintf(bufer+p, max_len-p, "\"serial\":\"%s\",",serialHexToString(sensors[i].serial, &buf[0], ONEWIRE_SERIAL_LENGTH));
+         p+=snprintf(bufer+p, max_len-p, "\"health\":%d,", sensorsHealthGetValue(&sensors[i]));
+         p+=snprintf(bufer+p, max_len-p, "\"online\":%s},", ((sensors[i].status & ONLINE)?"true":"false"));
          break;
       }
    }
-   temp_val = sensorsGetValueFloat(&sensors[i]);
-   d1 = temp_val;            // Get the integer part (678).
-   f2 = temp_val - d1;     // Get fractional part (678.0123 - 678 = 0.0123).
-   d2 = abs(trunc(f2 * 10));   // Turn into integer (123).
-   p+=snprintf(bufer+p, max_len-p, "{\"id\":%d,",sensors[i].id);
-   p+=snprintf(bufer+p, max_len-p, "\"name\":\"%s\",", sensors[i].name);
-   p+=snprintf(bufer+p, max_len-p, "\"place\":\"%s\",", sensors[i].place);
-   p+=snprintf(bufer+p, max_len-p, "\"value\":\"%d.%01d\",", d1, d2);//sensorsDS1820[i].value
-   p+=snprintf(bufer+p, max_len-p, "\"serial\":\"%s\",",serialHexToString(sensors[i].serial, &buf[0], ONEWIRE_SERIAL_LENGTH));
-   p+=snprintf(bufer+p, max_len-p, "\"health\":%d,", sensorsHealthGetValue(&sensors[i]));
-   p+=snprintf(bufer+p, max_len-p, "\"online\":%s},", ((sensors[i].status & ONLINE)?"true":"false"));
    return p;
 }
-#endif
 
+
+#endif
+#if 0
 error_t getRestTemperature(HttpConnection *connection, RestApi_t* RestApi)
 {
    int p=0;
@@ -144,7 +153,7 @@ error_t getRestTemperature(HttpConnection *connection, RestApi_t* RestApi)
          j=atoi(RestApi->objectId+1);
          for (i=0; i< MAX_NUM_SENSORS; i++)
          {
-            if (sensors[i].type == S_TEMP && sensors[i].id == j)
+            if (sensors[i].id == j)
             {
                p+=temperature_snprintf(&restBuffer[p], max_len-p, i);
                error = NO_ERROR;
@@ -163,11 +172,9 @@ error_t getRestTemperature(HttpConnection *connection, RestApi_t* RestApi)
    {
       for (i=0; i< MAX_NUM_SENSORS; i++)
       {
-         if (sensors[i].type == S_TEMP)
-         {
-            p+=temperature_snprintf(&restBuffer[p], max_len-p, i);
-            error = NO_ERROR;
-         }
+
+         p+=temperature_snprintf(&restBuffer[p], max_len-p, i);
+         error = NO_ERROR;
       }
    }
    p--;
@@ -192,7 +199,7 @@ error_t getRestTemperature(HttpConnection *connection, RestApi_t* RestApi)
 
 
 }
-
+#endif
 error_t postRestTemperature(HttpConnection *connection, RestApi_t* RestApi)
 {
    (void) RestApi;

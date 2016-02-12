@@ -25,12 +25,15 @@ static  uint32_t adcChannel[]={INPUT_ADC_CHANNEL_0, INPUT_ADC_CHANNEL_1, INPUT_A
    INPUT_ADC_CHANNEL_4, INPUT_ADC_CHANNEL_5, INPUT_ADC_CHANNEL_6, INPUT_ADC_CHANNEL_7, INPUT_ADC_CHANNEL_8};
 
 static ADC_HandleTypeDef hadc1;
+#if 0
 static error_t getRestInputs(HttpConnection *connection, RestApi_t* RestApi);
+#endif
 static void inputTask(void * pvParameters);
 static error_t initInputs (const char * data, jsmntok_t *jSMNtokens, sensor_t ** pCurrentSensor, jsmnerr_t * resultCode, uint8_t * pos);
 
+int input_snprintf(char * bufer, size_t max_len, int sensnum);
 
-register_sens_function(inputs, "/inputs", S_BINARY, &initInputs, NULL, &getRestInputs, NULL, NULL, NULL);
+register_sens_function(inputs, "/inputs", S_BINARY, &initInputs, NULL, &input_snprintf, NULL, NULL, NULL);
 
 extern sensor_t sensors[MAX_NUM_SENSORS];
 
@@ -132,7 +135,7 @@ static void MX_ADC1_Init(void)
    hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
    hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
    hadc1.Init.NbrOfConversion = 1;
-//   hadc1.Init.DMAContinuousRequests = ENABLE;
+   //   hadc1.Init.DMAContinuousRequests = ENABLE;
    hadc1.Init.DMAContinuousRequests = DISABLE;
    HAL_ADC_Init(&hadc1);
 
@@ -237,7 +240,7 @@ static uint16_t GetADCValue(uint32_t Channel, int Count)
       HAL_ADC_PollForConversion(&hadc1, 1);
       val += HAL_ADC_GetValue(&hadc1);
    }
-return val / Count;
+   return val / Count;
 }
 
 static void inputTask(void * pvParameters)
@@ -441,7 +444,7 @@ static void inputTask(void * pvParameters)
             if (IsLocal(sensors[i].serial))
             {
 
-                     sensorsSetValueUint16(&sensors[i], GetADCValue(adcChannel[HexToDec(sensors[i].serial[7])], 5));
+               sensorsSetValueUint16(&sensors[i], GetADCValue(adcChannel[HexToDec(sensors[i].serial[7])], 5));
 
             }
             inputNum++;
@@ -451,39 +454,47 @@ static void inputTask(void * pvParameters)
       osDelayTask(scan_interval);
    }
 }
-static int input_snprintf(char * bufer, size_t max_len, int i)
+int input_snprintf(char * bufer, size_t max_len, int sens_num)
 {
    int p=0;
-
-   p+=snprintf(bufer+p, max_len-p, "{\"id\":%d,",i);
-   p+=snprintf(bufer+p, max_len-p, "\"name\":\"%s\",", sensors[i].name);
-   p+=snprintf(bufer+p, max_len-p, "\"place\":\"%s\",", sensors[i].place);
-   switch (sensors[i].type)
+   int i;
+   for(i=0; i <= MAX_NUM_SENSORS; i++)
    {
-   case S_BINARY:
-      p+=snprintf(bufer+p, max_len-p, "\"type\":\"digital\",");
-      p+=snprintf(bufer+p, max_len-p, "\"value\":%s,",(sensorsGetValueUint16(&sensors[i]) & 1?"true":"false"));
-      break;
-   case S_CUSTOM:
-      p+=snprintf(bufer+p, max_len-p, "\"type\":\"sequential\",");
-      p+=snprintf(bufer+p, max_len-p, "\"value\":\"0x%02x\",",sensorsGetValueUint16(&sensors[i]));
-      break;
-   case S_DIMMER:
-      p+=snprintf(bufer+p, max_len-p, "\"type\":\"dimmer\",");
-      p+=snprintf(bufer+p, max_len-p, "\"value\":%u,",sensorsGetValueUint16(&sensors[i]));
-      break;
-   case S_MULTIMETER:
-      p+=snprintf(bufer+p, max_len-p, "\"type\":\"analog\",");
-      p+=snprintf(bufer+p, max_len-p, "\"value\":%u,",sensorsGetValueUint16(&sensors[i]));
-      break;
-   default:
-      break;
+      if ((sensors[sens_num].type == S_BINARY || sensors[sens_num].type == S_CUSTOM || sensors[sens_num].type == S_DIMMER || sensors[sens_num].type == S_MULTIMETER) && sensors[i].id == sens_num)
+      {
+         p+=snprintf(bufer+p, max_len-p, "{\"id\":%d,",sensors[i].id);
+         p+=snprintf(bufer+p, max_len-p, "\"name\":\"%s\",", sensors[i].name);
+         p+=snprintf(bufer+p, max_len-p, "\"place\":\"%s\",", sensors[i].place);
+         switch (sensors[sens_num].type)
+         {
+         case S_BINARY:
+            p+=snprintf(bufer+p, max_len-p, "\"type\":\"digital\",");
+            p+=snprintf(bufer+p, max_len-p, "\"value\":%s,",(sensorsGetValueUint16(&sensors[i]) & 1?"true":"false"));
+            break;
+         case S_CUSTOM:
+            p+=snprintf(bufer+p, max_len-p, "\"type\":\"sequential\",");
+            p+=snprintf(bufer+p, max_len-p, "\"value\":\"0x%02x\",",sensorsGetValueUint16(&sensors[i]));
+            break;
+         case S_DIMMER:
+            p+=snprintf(bufer+p, max_len-p, "\"type\":\"dimmer\",");
+            p+=snprintf(bufer+p, max_len-p, "\"value\":%u,",sensorsGetValueUint16(&sensors[i]));
+            break;
+         case S_MULTIMETER:
+            p+=snprintf(bufer+p, max_len-p, "\"type\":\"analog\",");
+            p+=snprintf(bufer+p, max_len-p, "\"value\":%u,",sensorsGetValueUint16(&sensors[i]));
+            break;
+         default:
+            break;
+         }
+         p+=snprintf(bufer+p, max_len-p,"\"serial\":\"%s\",",serialHexToString(sensors[sens_num].serial, &buf[0], ONEWIRE_SERIAL_LENGTH));
+         p+=snprintf(bufer+p, max_len-p, "\"online\":%s},", (sensors[sens_num].status & ONLINE?"true":"false"));
+         break;
+      }
    }
-   p+=snprintf(bufer+p, max_len-p,"\"serial\":\"%s\",",serialHexToString(sensors[i].serial, &buf[0], ONEWIRE_SERIAL_LENGTH));
-   p+=snprintf(bufer+p, max_len-p, "\"online\":%s},", (sensors[i].status & ONLINE?"true":"false"));
    return p;
 }
 
+#if 0
 static error_t getRestInputs(HttpConnection *connection, RestApi_t* RestApi)
 {
    int p=0;
@@ -498,7 +509,7 @@ static error_t getRestInputs(HttpConnection *connection, RestApi_t* RestApi)
          j=atoi(RestApi->objectId+1);
          for (i=0; i< MAX_NUM_SENSORS; i++)
          {
-            if ((sensors[i].type == S_BINARY || sensors[i].type == S_CUSTOM)&& sensors[i].id == j)
+            if (sensors[i].id == j)
             {
                p+=input_snprintf(&restBuffer[p], max_len-p, i);
                error = NO_ERROR;
@@ -517,11 +528,9 @@ static error_t getRestInputs(HttpConnection *connection, RestApi_t* RestApi)
    {
       for (i=0; i< MAX_NUM_SENSORS; i++)
       {
-         if (sensors[i].type == S_BINARY || sensors[i].type == S_CUSTOM || sensors[i].type == S_DIMMER || sensors[i].type == S_MULTIMETER)
-         {
-            p+=input_snprintf(&restBuffer[p], max_len-p, i);
-            error = NO_ERROR;
-         }
+
+         p+=input_snprintf(&restBuffer[p], max_len-p, i);
+         error = NO_ERROR;
       }
    }
    p--;
@@ -546,7 +555,7 @@ static error_t getRestInputs(HttpConnection *connection, RestApi_t* RestApi)
 
 
 }
-
+#endif
 static error_t initInputs (const char * data, jsmntok_t *jSMNtokens, sensor_t ** pCurrentSensor, jsmnerr_t * resultCode, uint8_t *pos)
 {
    int tokNum;
