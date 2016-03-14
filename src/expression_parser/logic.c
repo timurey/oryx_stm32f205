@@ -47,15 +47,26 @@ static error_t parseRules (char *data, size_t len, jsmn_parser* jSMNparser, jsmn
          if(tokNum>0)
          {
             lenght = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
-            memcpy(currExpr, &data[jSMNtokens[tokNum].start], lenght);
-            pExpression[i]=currExpr;
-            currExpr[lenght+1] = '\0';
-            currExpr+=(lenght+1);
-            /*
-             * todo добавить проверку входных данных.
-             * сейчас просто копируется выражение
-             */
-            flag++;
+            lenght = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
+            if (lenght<EXPRESSIONS_LENGHT-(currExpr-&expressions[0]))
+               /*
+                * может скопироваться только rules или только expression
+                */
+            {
+               memcpy(currExpr, &data[jSMNtokens[tokNum].start], lenght);
+               pExpression[i]=currExpr;
+               currExpr[lenght+1] = '\0';
+               currExpr+=(lenght+1);
+               /*
+                * todo добавить проверку входных данных.
+                * сейчас просто копируется выражение
+                */
+               flag++;
+            }
+            else
+            {
+               xprintf("Logic initialization: no more space for Expressions\r\n");
+            }
 
          }
          sprintf(&path[0],"/rules/\\[%d\\]/rules",i);
@@ -63,18 +74,28 @@ static error_t parseRules (char *data, size_t len, jsmn_parser* jSMNparser, jsmn
          if(tokNum>0)
          {
             lenght = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
-            memcpy(currRule, &data[jSMNtokens[tokNum].start], lenght);
-            pRules[i]=currRule;
-            currRule[lenght+1] = '\0';
-            currRule+=(lenght+1);
-            /*
-             * todo добавить проверку входных данных.
-             * сейчас просто копируется выражение
-             */
-            flag++;
+            if (lenght<RESULT_LENGHT-(currRule-&rules[0]))
+               /*
+                * может скопироваться только rules или только expression
+                */
+            {
+               memcpy(currRule, &data[jSMNtokens[tokNum].start], lenght);
+               pRules[i]=currRule;
+               currRule[lenght+1] = '\0';
+               currRule+=(lenght+1);
+
+               /*
+                * todo добавить проверку входных данных.
+                * сейчас просто копируется выражение
+                */
+               flag++;
+            }
+            else
+            {
+               xprintf("Logic initialization: no more space for Rules\r\n");
+            }
 
          }
-
 
       }
    }
@@ -306,11 +327,11 @@ int user_var_cb( void *user_data, const char *name, double *value ){
    //      *value = 5.0;
    //      return PARSER_TRUE;
    //   }
-   error = getVariable(name, value);
-   if (error == NO_ERROR)
-   {
-      return PARSER_TRUE;
-   }
+   //   error = getVariable(name, value);
+   //   if (error == NO_ERROR)
+   //   {
+   //      return PARSER_TRUE;
+   //   }
    return PARSER_FALSE;
 }
 
@@ -406,7 +427,7 @@ static void parse_rules(){
       d1 = result;
       f2 = result - d1;
       d2 = abs(trunc(f2 * 1000));
-      xprintf("         C: %d.%01d\n", d1, d2 );
+      xprintf("Parsed: %d.%01d\n", d1, d2 );
       i++;
    }
 

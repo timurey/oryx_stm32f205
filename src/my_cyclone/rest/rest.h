@@ -30,6 +30,7 @@ typedef error_t (*tPutRestHandler)(HttpConnection *connection, RestApi_t * rest)
 typedef error_t (*tDeleteRestHandler)(HttpConnection *connection, RestApi_t * rest);
 
 #define rest_200_ok(a, b) rest_answer(a, b, 200)
+#define rest_300_multiple_choices(a, b) rest_answer(a, b, 300)
 #define rest_400_bad_request(a, b) rest_answer(a, b, 400)
 #define rest_404_not_found(a, b) rest_answer(a, b, 404)
 #define rest_500_int_server_error(a, b) rest_answer(a, b, 500)
@@ -66,6 +67,7 @@ static const HttpMethodCodeDesc methodCodeList[] =
 };
 typedef struct
 {
+   const char *restClassName;
    const char *restClassPath;
    const tInitRestHandler restInitClassHadler;
    const tDeinitRestHandler restDenitClassHadler;
@@ -91,9 +93,12 @@ typedef struct TRestApi
 error_t restParsePath(HttpConnection *connection, RestApi_t *RestApi);
 error_t findRestHandler(RestApi_t* RestApi);
 
+#define str(s) #s
+
 #define register_rest_function(name, path, init_f, deinit_f, get_f, post_f, put_f, delete_f) \
    const restFunctions handler_##name __attribute__ ((section ("rest_functions"))) = \
 { \
+  .restClassName = str(name), \
   .restClassPath = path, \
   .restInitClassHadler = init_f, \
   .restDenitClassHadler = deinit_f, \

@@ -34,7 +34,7 @@ static int printfSensorMethods (char * bufer, int maxLen, sensFunctions * sensor
 {
    int p=0;
    int flag=0;
-   p+=snprintf(bufer+p, maxLen-p, "{\r\n\"path\": \"%s/v1/sensor%s\",\r\n\"method\" : [", &restPrefix[0], sensor->sensClassPath);
+   p+=snprintf(bufer+p, maxLen-p, "{\r\n\"name\": \"%s\",\r\n\"path\": \"%s/v1/sensors%s\",\r\n\"method\" : [",sensor->sensClassName, &restPrefix[0], sensor->sensClassPath);
    if (sensor->sensGetMethodHadler != NULL)
    {
       p+=snprintf(bufer+p, maxLen-p, "\"GET\",");
@@ -106,7 +106,7 @@ static sensFunctions * restFindSensor(RestApi_t* RestApi)
    return NULL;
 }
 
-error_t sensGetHadler(HttpConnection *connection, RestApi_t* RestApi, sensFunctions * sensor)
+static error_t sensGetHandler(HttpConnection *connection, RestApi_t* RestApi, sensFunctions * sensor)
 {
    int p=0;
    int i=0,j=0;
@@ -168,7 +168,7 @@ error_t restGetSensors(HttpConnection *connection, RestApi_t* RestApi)
       if (wantedSensor->sensGetMethodHadler != NULL)
       {//Если есть обработчик метода GET
 
-         error = sensGetHadler(connection, RestApi, wantedSensor);
+         error = sensGetHandler(connection, RestApi, wantedSensor);
       }
       else
       {  //Если нет обработчика метода GET печатаем все доступные методы
@@ -181,7 +181,7 @@ error_t restGetSensors(HttpConnection *connection, RestApi_t* RestApi)
    else
    {//Если сенсор не найден отдаем все сенсоры с методами
       printfSensor(&restBuffer[0], max_len);
-      rest_404_not_found(connection, &restBuffer[0]);
+      rest_300_multiple_choices(connection, &restBuffer[0]);
       error = ERROR_NOT_FOUND;
    }
    return error;

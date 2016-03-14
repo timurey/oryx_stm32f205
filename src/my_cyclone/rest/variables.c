@@ -209,7 +209,7 @@ static size_t snprintfVariable(char * pChar, size_t maxSize, variables * pVariab
    f2 = pVariable->value-d1;     // Get fractional part (678.0123 - 678 = 0.0123).
    d2 = abs(trunc(f2 * 10));   // Turn into integer (123).
 
-   len = snprintf(pChar, maxSize, "{name:\"%s\",value:\"%d.%01d\"}",pVariable->name, d1, d2);
+   len = snprintf(pChar, maxSize, "{\"name\":\"%s\",\"value\":%d.%01d}",pVariable->name, d1, d2);
    //Leave critical section
    osReleaseMutex(&pVariable->mutex);
    return len;
@@ -222,7 +222,7 @@ error_t restGetVariable(HttpConnection *connection, RestApi_t* RestApi)
    int i=0,j=0;
    const size_t max_len = sizeof(restBuffer);
 
-   p=sprintf(restBuffer,"{\"variable\":[ ");
+   p=sprintf(restBuffer,"{\"variables\":[ ");
    if (RestApi->objectId != NULL)
    {
       if (ISDIGIT(*(RestApi->objectId+1)))

@@ -289,7 +289,12 @@ error_t httpServerCgiCallback(HttpConnection *connection,
    //Send the contents of the specified environment variable
    return httpWriteStream(connection, connection->buffer, length);
 }
-
+static error_t send404page (HttpConnection *connection,   const char_t *uri)
+{
+   error_t error = NO_ERROR;
+   error = httpSendResponse(connection, "404.html");
+   return error;
+}
 
 /**
  * @brief URI not found callback
@@ -302,7 +307,10 @@ error_t httpServerUriNotFoundCallback(HttpConnection *connection,	const char_t *
 {
    error_t error;
    error = restTry (connection, uri);
-
+   if (error)
+   {
+      error = send404page (connection, uri);
+   }
    return error;
    //	return ERROR_NOT_FOUND;
 }
