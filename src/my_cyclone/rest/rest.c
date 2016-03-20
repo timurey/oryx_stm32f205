@@ -12,6 +12,8 @@ typedef struct{
    size_t lenght;
 }
 token_t;
+#define ISDIGIT(a) (((a)>='0') && ((a)<='9'))
+
 //Mutex that protects critical sections
 OsMutex restMutex;
 static error_t restGetRestApi(HttpConnection *connection, RestApi_t* RestApi);
@@ -24,11 +26,11 @@ char restBuffer[SIZE_OF_REST_BUFFER];
 static int printfRestClassMethods (char * bufer, int maxLen, restFunctions * cur_rest)
 {
    int p=0;
-   p+=snprintf(bufer+p, maxLen-p, "{\r\n\"type\": \"restapi\",\r\n\"attributes\":{\r\n\"links\": {\"self\": \"%s/v1%s\"},\r\n\"type\":\"%s\",\r\n",  &restPrefix[0], cur_rest->restClassPath, cur_rest->restClassName);
-   p+=snprintf(bufer+p, maxLen-p, "\"getMethod\":%s,\r\n",cur_rest->restGetClassHadler?"true":"false");
-   p+=snprintf(bufer+p, maxLen-p, "\"postMethod\":%s,\r\n",cur_rest->restPostClassHadler?"true":"false");
-   p+=snprintf(bufer+p, maxLen-p, "\"putMethod\":%s,\r\n",cur_rest->restPutClassHadler?"true":"false");
-   p+=snprintf(bufer+p, maxLen-p, "\"deleteMethod\":%s\r\n}\r\n}",cur_rest->restDeleteClassHadler?"true":"false");
+   p+=snprintf(bufer+p, maxLen-p, "{\r\n\"type\": \"restapi\",\"id\":%u,\r\n\"attributes\":{\r\n\"links\": {\"self\": \"%s/v1%s\"},\r\n\"type\":\"%s\",\r\n",  (cur_rest-&__start_rest_functions)+1,&restPrefix[0], cur_rest->restClassPath, cur_rest->restClassName);
+   p+=snprintf(bufer+p, maxLen-p, "\"read\":%s,\r\n",cur_rest->restGetClassHadler?"true":"false");
+   p+=snprintf(bufer+p, maxLen-p, "\"create\":%s,\r\n",cur_rest->restPostClassHadler?"true":"false");
+   p+=snprintf(bufer+p, maxLen-p, "\"update\":%s,\r\n",cur_rest->restPutClassHadler?"true":"false");
+   p+=snprintf(bufer+p, maxLen-p, "\"delete\":%s\r\n}\r\n}",cur_rest->restDeleteClassHadler?"true":"false");
 
    return p;
 }
@@ -52,10 +54,26 @@ static error_t restGetRestApi(HttpConnection *connection, RestApi_t* RestApi)
 {
    error_t error;
    int p =0;
+   int num = 0;
+   restFunctions *cur_rest = &__start_rest_functions;
    const size_t max_len = sizeof(restBuffer);
-
-   p = printfRestClasses(restBuffer+p, max_len);
-//   p+=snprintf(restBuffer+p, max_len-p, "\r\n");
+   if (RestApi->className == NULL)
+   {
+      p = printfRestClasses(restBuffer+p, max_len);
+   }
+   else if (ISDIGIT(*(RestApi->className+1)))
+   {
+      num = atoi(RestApi->className+1);
+      cur_rest +=num;
+      cur_rest--;
+      if ((cur_rest >= &__start_rest_functions) && (cur_rest < &__stop_rest_functions))
+      {
+         p+=snprintf(restBuffer+p, max_len-p, "{\"data\":\r\n");
+         p+=printfRestClassMethods(restBuffer+p, max_len - p, cur_rest);
+         p+=snprintf(restBuffer+p, max_len-p, "\r\n}\r\n");
+      }
+   }
+   //   p+=snprintf(restBuffer+p, max_len-p, "\r\n");
    connection->response.contentType = mimeGetType(".apijson");
    error = rest_200_ok(connection, &restBuffer[0]);
    return error;

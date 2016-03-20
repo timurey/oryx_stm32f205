@@ -27,7 +27,19 @@
 #define HOURS(a) (a*60*60)
 #define MINUTES(a) (a*60)
 #define ISDIGIT(a) (((a)>='0') && ((a)<='9'))
+#define __ctype_lookup(__c) ((__ctype_ptr__+sizeof(""[__c]))[(int)(__c)])
 
+#define  isalpha(__c)   (__ctype_lookup(__c)&(_U|_L))
+#define  isupper(__c)   ((__ctype_lookup(__c)&(_U|_L))==_U)
+#define  islower(__c)   ((__ctype_lookup(__c)&(_U|_L))==_L)
+#define  isdigit(__c)   (__ctype_lookup(__c)&_N)
+#define  isxdigit(__c)  (__ctype_lookup(__c)&(_X|_N))
+#define  isspace(__c)   (__ctype_lookup(__c)&_S)
+#define ispunct(__c) (__ctype_lookup(__c)&_P)
+#define isalnum(__c) (__ctype_lookup(__c)&(_U|_L|_N))
+#define isprint(__c) (__ctype_lookup(__c)&(_P|_U|_L|_N|_B))
+#define  isgraph(__c)   (__ctype_lookup(__c)&(_P|_U|_L|_N))
+#define iscntrl(__c) (__ctype_lookup(__c)&_C)
 
 OsTask *vNtpTask;
 struct
@@ -297,17 +309,20 @@ static error_t parseNTP (char *data, size_t len, jsmn_parser* jSMNparser, jsmnto
          /*
           * todo: проверить с 5 и более серверами в конфиге
           */
-         length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
-         if (length<MAX_LENGTH_OF_NTP_SERVER_NAME)
+         if (tokNum>0)
          {
-            memcpy(&ntpContex.ntp_candidates[i][0], &data[jSMNtokens[tokNum].start], length);
-            ntpContex.ntp_candidates[i][length]='\0';
-            ntpContex.servers++;
-         }
-         else
-         {
-            ntpContex.ntp_candidates[i][0]='\0';
-            xprintf("Warning: Name of ntp server № %D in config file \"/config/ntp.json\" is too long. Skipping", i);
+            length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
+            if (length<MAX_LENGTH_OF_NTP_SERVER_NAME)
+            {
+               memcpy(&ntpContex.ntp_candidates[i][0], &data[jSMNtokens[tokNum].start], length);
+               ntpContex.ntp_candidates[i][length]='\0';
+               ntpContex.servers++;
+            }
+            else
+            {
+               ntpContex.ntp_candidates[i][0]='\0';
+               xprintf("Warning: Name of ntp server № %D in config file \"/config/ntp.json\" is too long. Skipping", i);
+            }
          }
       }
    }
@@ -430,14 +445,41 @@ error_t getRestSNTP(HttpConnection *connection, RestApi_t* RestApi)
 {
    error_t error = NO_ERROR;
    int p=0;
+   uint32_t i;
    (void) RestApi;
+#if (REST_JSON_TYPE == JSON)
+      p+=snprintf(restBuffer+p, SIZE_OF_REST_BUFFER, "{\"ntp_servers\":[\"%s\",\"%s\",\"%s\",\"%s\"],\"timezone\":\"%s\",\"period\":%"PRIu32"}\r\n",
+         &(ntpContex.ntp_candidates[0][0]),&ntpContex.ntp_candidates[1][0],&ntpContex.ntp_candidates[2][0],&ntpContex.ntp_candidates[3][0],
+         pRTC_GetTimezone(),
+         ntpContex.period
+      );
+      connection->response.contentType = mimeGetType(".json");
+#else
+#if(REST_JSON_TYPE == JSON_API)
+   p+=snprintf(restBuffer+p, SIZE_OF_REST_BUFFER,"{\"data\":[");
 
-   p+=snprintf(restBuffer+p, SIZE_OF_REST_BUFFER, "{\"ntp_servers\":[\"%s\",\"%s\",\"%s\",\"%s\"],\"timezone\":\"%s\",\"period\":%"PRIu32"}\r\n",
-      &(ntpContex.ntp_candidates[0][0]),&ntpContex.ntp_candidates[1][0],&ntpContex.ntp_candidates[2][0],&ntpContex.ntp_candidates[3][0],
-      pRTC_GetTimezone(),
-      ntpContex.period
-   );
-   connection->response.contentType = mimeGetType(".json");
+   for (i=0;i<NUM_OF_NTP_SERVERS;i++)
+   {
+      if (isalnum(ntpContex.ntp_candidates[i][0]))
+      {
+         p+=snprintf(restBuffer+p, SIZE_OF_REST_BUFFER,"{\"type\": \"ntp\",\"id\":%"PRIu32",\"attributes\":{\"address\":\"%s\"}}", i, &ntpContex.ntp_candidates[i][0] );
+      }
+      else
+      {
+         break;
+      }
+      if ((i<NUM_OF_NTP_SERVERS) &&(isalnum(ntpContex.ntp_candidates[i+1][0])))
+      {
+         p+=snprintf(restBuffer+p, SIZE_OF_REST_BUFFER,",");
+      }
+   }
+
+
+   p+=snprintf(restBuffer+p, SIZE_OF_REST_BUFFER,"],\"meta\": {\"period\":%"PRIu32", \"timezone\":\"%s\"}}\r\n", ntpContex.period,pRTC_GetTimezone());
+
+   connection->response.contentType = mimeGetType(".apijson");
+#endif //JSON_API
+#endif //JSON
    connection->response.noCache = TRUE;
    error=rest_200_ok(connection, &restBuffer[0]);
    //Any error to report?
