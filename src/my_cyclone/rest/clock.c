@@ -23,16 +23,26 @@ error_t restGetClock(HttpConnection *connection, RestApi_t* RestApi)
 
    (void) RestApi;
    getCurrentDate(&time);
-
-   p=sprintf(restBuffer,"{\r\n\"unixtime\":%lu,\r\n", getCurrentUnixTime());
+#if (REST_JSON_TYPE == JSON)
+   p=sprintf(restBuffer,"{\"clock\":{\r\n\"unixtime\":%lu,\r\n", getCurrentUnixTime());
    p+=sprintf(restBuffer+p,"\"localtime\":\"%s %s\",\r\n",
       htmlFormatDate(&time, &buf[0]),
       pRTC_GetTimezone()
    );
    p+=sprintf(restBuffer+p,"\"time\":\"%02d:%02d:%02d\",\r\n", time.hours, time.minutes, time.seconds);
-   p+=sprintf(restBuffer+p,"\"date\":\"%04d.%02d.%02d\"\r\n}\r\n", time.year,time.month,time.day);
-
+   p+=sprintf(restBuffer+p,"\"date\":\"%04d.%02d.%02d\",\r\n", time.year,time.month,time.day);
+   p+=sprintf(restBuffer+p,"\"timezone\":\"%s\"}}\r\n",pRTC_GetTimezone());
    connection->response.contentType = mimeGetType(".json");
+#else
+#if(REST_JSON_TYPE == JSON_API)
+   p+=sprintf(restBuffer+p,"{\"data\":{\"type\":\"clock\", \"id\":0,\"attributes\":{");
+   p+=sprintf(restBuffer+p,"\"unixtime\":%lu,\"localtime\":\"%s %s\",\"time\":\"%02d:%02d:%02d\",",getCurrentUnixTime(),htmlFormatDate(&time, &buf[0]),
+      pRTC_GetTimezone(),time.hours, time.minutes, time.seconds);
+   p+=sprintf(restBuffer+p,"\"date\":\"%04d.%02d.%02d\",",time.year,time.month,time.day);
+   p+=sprintf(restBuffer+p,"\"timezone\":\"%s\"}}}",pRTC_GetTimezone());
+   connection->response.contentType = mimeGetType(".apijson");
+#endif //JSON_API
+#endif //JSON
    connection->response.noCache = TRUE;
 
    error=rest_200_ok(connection, &restBuffer[0]);

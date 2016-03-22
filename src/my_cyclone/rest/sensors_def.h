@@ -17,6 +17,7 @@ typedef error_t (*tDeleteSensHandler)(HttpConnection *connection, RestApi_t * re
 typedef error_t (*tPrintfSensHandler)(char * bufer, size_t max_len, int sens_num);
 typedef struct
 {
+   const char *sensClassName;
    const char *sensClassPath;
    const mysensor_sensor_t sensorType;
    const tInitSensHandler sensInitClassHadler;
@@ -27,10 +28,12 @@ typedef struct
    const tDeleteSensHandler sensDeleteMethodHadler;
 } sensFunctions;
 
+#define str(s) #s
 
 #define register_sens_function(name, path, type, init_f, deinit_f, get_f, post_f, put_f, delete_f) \
    const sensFunctions handler_##name __attribute__ ((section ("sens_functions"))) = \
 { \
+  .sensClassName = str(name), \
   .sensClassPath = path, \
   .sensorType = type, \
   .sensInitClassHadler = init_f, \

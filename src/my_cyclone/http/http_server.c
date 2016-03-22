@@ -70,6 +70,7 @@ static const HttpStatusCodeDesc statusCodeList[] =
    {202, "Accepted"},
    {204, "No Content"},
    //Redirection
+   {300, "Multiple Choices"},
    {301, "Moved Permanently"},
    {302, "Found"},
    {304, "Not Modified"},

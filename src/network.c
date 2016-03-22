@@ -81,7 +81,7 @@ static error_t useDefaultMacAddress(void)
 }
 static error_t useDefaultHostName(void)
 {
-   sprintf(hostname, "stm32_%X-%X-%X",uuid->b[10],uuid->b[9],uuid->b[8]);
+   sprintf(hostname, "aurora_%X-%X-%X",uuid->b[10],uuid->b[9],uuid->b[8]);
    return NO_ERROR;
 }
 #if IPV6_SUPPORT == ENABLED

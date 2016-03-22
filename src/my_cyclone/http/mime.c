@@ -78,6 +78,7 @@ const MimeType mimeTypeList[] =
    {".gzip",  "application/x-gzip"},
    {".js",    "application/javascript"},
    {".json",  "application/json"},
+   {".apijson",  "application/vnd.api+json"},
    {".ogg",   "application/ogg"},
    {".pdf",   "application/pdf"},
    {".ppt",   "application/vnd.ms-powerpoint"},
@@ -88,7 +89,14 @@ const MimeType mimeTypeList[] =
    {".xht",   "application/xhtml+xml"},
    {".xhtml", "application/xhtml+xml"},
    {".xls",   "application/vnd.ms-excel"},
-   {".zip",   "application/zip"}
+   {".zip",   "application/zip"},
+   //Fonts MIME types
+   {".eot",   "application/vnd.ms-fontobject"},
+   {".woff",   "application/font-woff"},
+   {".woff2",   "application/font-woff2"},
+   {".ttf",   "application/x-font-truetype"},
+   {".svg",   "image/svg+xml"},
+   {".otf",   "application/x-font-opentype"}
 };
 
 

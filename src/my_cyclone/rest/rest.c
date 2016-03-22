@@ -12,52 +12,33 @@ typedef struct{
    size_t lenght;
 }
 token_t;
+#define ISDIGIT(a) (((a)>='0') && ((a)<='9'))
+
 //Mutex that protects critical sections
 OsMutex restMutex;
+static error_t restGetRestApi(HttpConnection *connection, RestApi_t* RestApi);
 
 register_rest_function(test_rest, "/test", NULL, NULL, NULL, NULL, NULL, NULL);
 
+register_rest_function(restapi, "/restapi", NULL, NULL, &restGetRestApi, NULL, NULL, NULL);
 
 char restBuffer[SIZE_OF_REST_BUFFER];
 static int printfRestClassMethods (char * bufer, int maxLen, restFunctions * cur_rest)
 {
    int p=0;
-   int flag=0;
-   p+=snprintf(bufer+p, maxLen-p, "{\r\n\"path\": \"%s/v1%s\",\r\n\"method\" : [", &restPrefix[0], cur_rest->restClassPath);
-   if (cur_rest->restGetClassHadler != NULL)
-   {
-      p+=snprintf(bufer+p, maxLen-p, "\"GET\",");
-      flag++;
-   }
-   if (cur_rest->restPostClassHadler != NULL)
-   {
-      p+=snprintf(bufer+p, maxLen-p, "\"POST\",");
-      flag++;
-   }
-   if (cur_rest->restPutClassHadler != NULL)
-   {
-      p+=snprintf(bufer+p, maxLen-p, "\"PUT\",");
-      flag++;
+   p+=snprintf(bufer+p, maxLen-p, "{\r\n\"type\": \"restapi\",\"id\":%u,\r\n\"attributes\":{\r\n\"links\": {\"self\": \"%s/v1%s\"},\r\n\"type\":\"%s\",\r\n",  (cur_rest-&__start_rest_functions)+1,&restPrefix[0], cur_rest->restClassPath, cur_rest->restClassName);
+   p+=snprintf(bufer+p, maxLen-p, "\"read\":%s,\r\n",cur_rest->restGetClassHadler?"true":"false");
+   p+=snprintf(bufer+p, maxLen-p, "\"create\":%s,\r\n",cur_rest->restPostClassHadler?"true":"false");
+   p+=snprintf(bufer+p, maxLen-p, "\"update\":%s,\r\n",cur_rest->restPutClassHadler?"true":"false");
+   p+=snprintf(bufer+p, maxLen-p, "\"delete\":%s\r\n}\r\n}",cur_rest->restDeleteClassHadler?"true":"false");
 
-   }
-   if (cur_rest->restDeleteClassHadler != NULL)
-   {
-      p+=snprintf(bufer+p, maxLen-p, "\"DELETE\",");
-      flag++;
-   }
-   if (flag>0)
-   {
-      p--;
-   }
-
-   p+=snprintf(bufer+p, maxLen-p, "]\r\n}");
    return p;
 }
 
-static int printfRestClass (char * bufer, int maxLen)
+static int printfRestClasses (char * bufer, int maxLen)
 {
    int p=0;
-   p+=snprintf(bufer+p, maxLen-p, "{\"class\":[\r\n");
+   p+=snprintf(bufer+p, maxLen-p, "{\"data\":[\r\n");
    for (restFunctions *cur_rest = &__start_rest_functions; cur_rest < &__stop_rest_functions; cur_rest++)
    {
       p+=printfRestClassMethods(bufer+p, maxLen - p, cur_rest);
@@ -69,7 +50,34 @@ static int printfRestClass (char * bufer, int maxLen)
    p+=snprintf(bufer+p, maxLen-p, "\r\n]\r\n}\r\n");
    return p;
 }
-
+static error_t restGetRestApi(HttpConnection *connection, RestApi_t* RestApi)
+{
+   error_t error;
+   int p =0;
+   int num = 0;
+   restFunctions *cur_rest = &__start_rest_functions;
+   const size_t max_len = sizeof(restBuffer);
+   if (RestApi->className == NULL)
+   {
+      p = printfRestClasses(restBuffer+p, max_len);
+   }
+   else if (ISDIGIT(*(RestApi->className+1)))
+   {
+      num = atoi(RestApi->className+1);
+      cur_rest +=num;
+      cur_rest--;
+      if ((cur_rest >= &__start_rest_functions) && (cur_rest < &__stop_rest_functions))
+      {
+         p+=snprintf(restBuffer+p, max_len-p, "{\"data\":\r\n");
+         p+=printfRestClassMethods(restBuffer+p, max_len - p, cur_rest);
+         p+=snprintf(restBuffer+p, max_len-p, "\r\n}\r\n");
+      }
+   }
+   //   p+=snprintf(restBuffer+p, max_len-p, "\r\n");
+   connection->response.contentType = mimeGetType(".apijson");
+   error = rest_200_ok(connection, &restBuffer[0]);
+   return error;
+}
 error_t restTry (HttpConnection *connection, const char_t *uri)
 {
    int p=0;
@@ -87,13 +95,13 @@ error_t restTry (HttpConnection *connection, const char_t *uri)
    case ERROR_UNEXPECTED_MESSAGE:
       return ERROR_NOT_FOUND;
    case ERROR_INVALID_CLASS:
-      p = printfRestClass(restBuffer+p, max_len);
+      p = printfRestClasses(restBuffer+p, max_len);
       p+=snprintf(restBuffer+p, max_len-p, "\r\n");
-      rest_404_not_found(connection, &restBuffer[0]);
+      rest_300_multiple_choices(connection, &restBuffer[0]);
       return NO_ERROR;
       break;
    default:
-      p = printfRestClass(restBuffer+p, max_len);
+      p = printfRestClasses(restBuffer+p, max_len);
       p+=snprintf(restBuffer+p, max_len-p, "\r\n");
       rest_404_not_found(connection, &restBuffer[0]);
       return NO_ERROR;
@@ -102,7 +110,7 @@ error_t restTry (HttpConnection *connection, const char_t *uri)
    error = findRestHandler(&restAPI);
    if (error == ERROR_NOT_FOUND)
    {
-      printfRestClass(&restBuffer[0], max_len);
+      printfRestClasses(&restBuffer[0], max_len);
       rest_404_not_found(connection, &restBuffer[0]);
       return error;
    }
