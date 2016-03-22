@@ -66,13 +66,13 @@ static int jsmn_find_key(const char *pJSON, jsmntok_t * pTok, int numOfTokens, c
    jsmntok_t * pDTok = pTok;
    if (*(p)!='/')
       return -1; // Incorrect path
-
+   int parent = -1;
    while (*p)
    {
       if (*(p++) == '/')
          level++;
    }
-   p = pPath+1;
+   p = pPath;
 
    for (crntToken=0; crntToken<numOfTokens; crntToken++)
    {
@@ -84,21 +84,46 @@ static int jsmn_find_key(const char *pJSON, jsmntok_t * pTok, int numOfTokens, c
                || (*(p+ ((pDTok)->end - (pDTok)->start)) == '\0' ))\
          ) \
          || ( (*p=='\\') && ( *(p+1)=='[') && ISDIGIT(*(p+2)) )\
+         || ((*(pJSON+(pDTok)->start) == '{') || (*(pJSON+(pDTok)->start) == '}'))  \
       )
       {
-         if (( (*p=='\\') && ( *(p+1)=='[') ) && ISDIGIT(*(p+2)))
+         if (parent == pDTok->parent)
          {
-            crntToken = jsmn_get_array_value_by_tokens(pDTok, numOfTokens, crntToken, atoi(p+2));
-            if (crntToken<0)
+            parent = crntToken;
+
+            if (*(pJSON+(pDTok)->start) == '{')
             {
-               return -1; //wrong path or
+               crnLevel++;
+               p++;
+            }
+            else if (*(pJSON+(pDTok)->start) == '}')
+            {
+               crnLevel--;
+               p++;
+            }
+            else if (jsmn_strncmp((pJSON+(pDTok)->start), p, (pDTok)->end - (pDTok)->start) == 0)
+            {
+               if (crnLevel == level)
+                  return crntToken;
+               while (*++p!='/' || *p == '\0');
+            }
+            else
+            {
+               if (( (*p=='\\') && ( *(p+1)=='[') ) && ISDIGIT(*(p+2)))
+               {
+                  crntToken = jsmn_get_array_value_by_tokens(pDTok, numOfTokens, crntToken, atoi(p+2));
+                  if (crntToken<0)
+                  {
+                     return -1; //wrong path or
+                  }
+               }
             }
          }
-         if (++crnLevel == level)
-            return crntToken;
-         while (*p++!='/' || *p == '\0');
       }
+
    }
+
+
    return -1; // Path not found
 
 }
