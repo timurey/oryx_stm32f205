@@ -300,7 +300,7 @@ static error_t parseNTP (char *data, size_t len, jsmn_parser* jSMNparser, jsmnto
 
       for (i=0;i<NUM_OF_NTP_SERVERS;i++)
       {
-         tokNum = jsmn_get_array_value(data, jSMNtokens, resultCode, "/config/servers", i);
+         tokNum = jsmn_get_array_value(data, jSMNtokens, resultCode, "/servers", i);
          if ((!i) && (tokNum<1))
          {
             error = ERROR_NOT_CONFIGURED;  // If it is no data in array
@@ -396,7 +396,7 @@ static error_t parseNTP (char *data, size_t len, jsmn_parser* jSMNparser, jsmnto
    }
 
    error = NO_ERROR;
-   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/save");
+   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/needSave");
    if (tokNum >= 0)
    {
       if (strncmp (&data[jSMNtokens[tokNum].start], "true" ,4) == 0)
@@ -448,7 +448,7 @@ error_t getRestSNTP(HttpConnection *connection, RestApi_t* RestApi)
    uint32_t i;
    (void) RestApi;
 #if (REST_JSON_TYPE == JSON)
-      p+=snprintf(restBuffer+p, SIZE_OF_REST_BUFFER, "{\"ntp_servers\":[\"%s\",\"%s\",\"%s\",\"%s\"],\"timezone\":\"%s\",\"period\":%"PRIu32"}\r\n",
+      p+=snprintf(restBuffer+p, SIZE_OF_REST_BUFFER, "{\"servers\":[\"%s\",\"%s\",\"%s\",\"%s\"],\"timezone\":\"%s\",\"period\":%"PRIu32"}\r\n",
          &(ntpContex.ntp_candidates[0][0]),&ntpContex.ntp_candidates[1][0],&ntpContex.ntp_candidates[2][0],&ntpContex.ntp_candidates[3][0],
          pRTC_GetTimezone(),
          ntpContex.period
