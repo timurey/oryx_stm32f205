@@ -15,8 +15,8 @@
 #define MAX_LENGTH_OF_NTP_SERVER_NAME 32
 #define NTP_MAX_QUERY 5
 
-
-void ntpdConfigure(void);
+error_t ntp_defaults(void);
+error_t ntpdConfigure(void);
 void ntpdStop(void);
 void ntpdStart(void);
 inline void ntpdRestart(void);

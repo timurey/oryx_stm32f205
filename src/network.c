@@ -15,6 +15,7 @@
 #include "network.h"
 #include "debug.h"
 #include "rtc.h"
+#include "rest/clock.h"
 #include "uuid.h"
 
 #include "rest/sensors.h"
@@ -433,7 +434,7 @@ static error_t parseIpConfig(char *data, size_t len, jsmn_parser* jSMNparser, js
    error_t error;
    jsmn_init(jSMNparser);
    resultCode = jsmn_parse(jSMNparser, data, len, jSMNtokens, CONFIG_JSMN_NUM_TOKENS);
-   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/config/mac address");
+   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/config/mac address\0\0");
    if (tokNum >= 0)
    {
       length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
@@ -704,10 +705,15 @@ void networkServices(void *pvParametrs)
    (void) pvParametrs;
    configInit();
 
+   clock_defaults();
+   ntp_defaults();
+
    networkConfigure();
    sensorsConfigure();
    executorsConfigure();
    ntpdConfigure();
+   clockConfigure();
+
    logicConfigure();
 #if (FTP_SERVER_SUPPORT == ENABLED)
    ftpdConfigure();

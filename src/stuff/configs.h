@@ -14,7 +14,7 @@ typedef error_t (*tConfigParser)(char * data, size_t len, jsmn_parser *jSMNparse
 
 error_t configInit(void);
 void configDeinit(void);
-
+error_t read_default(char * data, size_t size, tConfigParser parser);
 error_t read_config(char * path, tConfigParser parser);
 error_t save_config (char * path, const char*	fmt, ...);
 typedef error_t (* tConfigHandler)(char *data, size_t len, jsmn_parser* jSMNparser, jsmntok_t *jSMNtokens);
