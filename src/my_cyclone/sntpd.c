@@ -49,7 +49,7 @@ struct
    int period;
    bool_t enabled;
    bool_t needSave;
-} ntpContex;
+} ntpContext;
 
 
 
@@ -58,7 +58,7 @@ static const char * default_config = "{\"servers\":[\"0.ru.pool.ntp.org\",\"1.ru
 
 static void v_NtpNextServer(char **cServerName, int iServerNum)
 {
-   *cServerName = &ntpContex.ntp_candidates[iServerNum][0];
+   *cServerName = &ntpContext.ntp_candidates[iServerNum][0];
 
 }
 
@@ -123,10 +123,10 @@ static void sntpClientTread(void *pvParametrs)
             convertUnixTimeToDate(unixTime, &date);
 
             //Debug message
-            TRACE_INFO("Current date/time: %s\r\nNext sync after %"PRIu32" seconds\r\n\r\n", formatDate(&date, NULL), ntpContex.period);
+            TRACE_INFO("Current date/time: %s\r\nNext sync after %"PRIu32" seconds\r\n\r\n", formatDate(&date, NULL), ntpContext.period);
 
             //Next sync after some period
-            vTaskDelay(1000 * ntpContex.period);
+            vTaskDelay(1000 * ntpContext.period);
             continue;
          }
       }
@@ -138,9 +138,12 @@ static void sntpClientTread(void *pvParametrs)
 }
 void ntpdStart(void)
 {
-   if (vNtpTask == NULL)
+   if (ntpContext.enabled == TRUE)
    {
-      vNtpTask = osCreateTask("SNTP_client", sntpClientTread, NULL, 196, 1);
+      if (vNtpTask == NULL)
+      {
+         vNtpTask = osCreateTask("SNTP_client", sntpClientTread, NULL, 196, 1);
+      }
    }
 }
 void ntpdStop(void)
@@ -169,15 +172,13 @@ static error_t parseNTP (char *data, size_t len, jsmn_parser* jSMNparser, jsmnto
    int period = 0;
 
    int servers =0;
-   ntpContex.needSave = FALSE;
-   //   ntpContex.enabled = TRUE;
+   ntpContext.needSave = FALSE;
+   ntpContext.enabled = TRUE;
 
    resultCode = jsmn_parse(jSMNparser, data, len, jSMNtokens, CONFIG_JSMN_NUM_TOKENS);
 
-
    if(resultCode)
    {
-
 
       for (i=0;i<NUM_OF_NTP_SERVERS;i++)
       {
@@ -195,8 +196,8 @@ static error_t parseNTP (char *data, size_t len, jsmn_parser* jSMNparser, jsmnto
             length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
             if (length<MAX_LENGTH_OF_NTP_SERVER_NAME)
             {
-               memcpy(&ntpContex.ntp_candidates[i][0], &data[jSMNtokens[tokNum].start], length);
-               ntpContex.ntp_candidates[i][length]='\0';
+               memcpy(&ntpContext.ntp_candidates[i][0], &data[jSMNtokens[tokNum].start], length);
+               ntpContext.ntp_candidates[i][length]='\0';
                servers++;
             }
             else
@@ -209,10 +210,10 @@ static error_t parseNTP (char *data, size_t len, jsmn_parser* jSMNparser, jsmnto
    }
    if (servers>0)
    {
-      ntpContex.servers = servers;
+      ntpContext.servers = servers;
       while (servers<NUM_OF_NTP_SERVERS)
       {
-         ntpContex.ntp_candidates[servers][0]='\0';
+         ntpContext.ntp_candidates[servers][0]='\0';
          servers++;
       }
    }
@@ -228,7 +229,7 @@ static error_t parseNTP (char *data, size_t len, jsmn_parser* jSMNparser, jsmnto
          period = atoi(&data[jSMNtokens[tokNum].start] );
          if ((period > 0) && (period<= HOURS(48)))
          {
-            ntpContex.period = period;
+            ntpContext.period = period;
          }
       }
    }
@@ -239,7 +240,7 @@ static error_t parseNTP (char *data, size_t len, jsmn_parser* jSMNparser, jsmnto
    {
       if (strncmp (&data[jSMNtokens[tokNum].start], "true" ,4) == 0)
       {
-         ntpContex.needSave = TRUE;
+         ntpContext.needSave = TRUE;
       }
    }
 
@@ -248,7 +249,7 @@ static error_t parseNTP (char *data, size_t len, jsmn_parser* jSMNparser, jsmnto
    {
       if (strncmp (&data[jSMNtokens[tokNum].start], "false" ,5) == 0)
       {
-         ntpContex.enabled = FALSE;
+         ntpContext.enabled = FALSE;
       }
    }
    else
@@ -260,8 +261,9 @@ static error_t parseNTP (char *data, size_t len, jsmn_parser* jSMNparser, jsmnto
 
 static void ntpdSaveConfig (void)
 {
-   save_config("/config/ntp.json","{\"servers\":[\"%s\",\"%s\",\"%s\",\"%s\"],\"period\":%D}",
-      &ntpContex.ntp_candidates[0][0],&ntpContex.ntp_candidates[1][0],&ntpContex.ntp_candidates[2][0],&ntpContex.ntp_candidates[3][0],ntpContex.period);
+   save_config("/config/ntp.json","{\"servers\":[\"%s\",\"%s\",\"%s\",\"%s\"],\"period\":%D, \"enabled\":%S}",
+      &ntpContext.ntp_candidates[0][0],&ntpContext.ntp_candidates[1][0],&ntpContext.ntp_candidates[2][0],&ntpContext.ntp_candidates[3][0],ntpContext.period,
+      (ntpContext.enabled==TRUE)?"true":"false");
 }
 
 error_t ntp_defaults(void)
@@ -284,10 +286,9 @@ error_t getRestSNTP(HttpConnection *connection, RestApi_t* RestApi)
 
    (void) RestApi;
 #if (REST_JSON_TYPE == JSON)
-   p+=snprintf(restBuffer+p, SIZE_OF_REST_BUFFER, "{\"servers\":[\"%s\",\"%s\",\"%s\",\"%s\"],\"timezone\":\"%s\",\"period\":%d}\r\n",
-      &(ntpContex.ntp_candidates[0][0]),&ntpContex.ntp_candidates[1][0],&ntpContex.ntp_candidates[2][0],&ntpContex.ntp_candidates[3][0],
-      pRTC_GetTimezone(),
-      ntpContex.period
+   p+=snprintf(restBuffer+p, SIZE_OF_REST_BUFFER, "{\"servers\":[\"%s\",\"%s\",\"%s\",\"%s\"],\"timezone\":\"%s\",\"period\":%d,\"enabled\":%s}\r\n",
+      &(ntpContext.ntp_candidates[0][0]),&ntpContext.ntp_candidates[1][0],&ntpContext.ntp_candidates[2][0],&ntpContext.ntp_candidates[3][0],
+      pRTC_GetTimezone(),ntpContext.period,(ntpContext.enabled==TRUE)?"true":"false"
    );
    connection->response.contentType = mimeGetType(".json");
 #else
@@ -297,22 +298,22 @@ error_t getRestSNTP(HttpConnection *connection, RestApi_t* RestApi)
 
    for (i=0;i<NUM_OF_NTP_SERVERS;i++)
    {
-      if (isalnum(ntpContex.ntp_candidates[i][0]))
+      if (isalnum(ntpContext.ntp_candidates[i][0]))
       {
-         p+=snprintf(restBuffer+p, SIZE_OF_REST_BUFFER,"{\"type\": \"ntp\",\"id\":%"PRIu32",\"attributes\":{\"address\":\"%s\"}}", i, &ntpContex.ntp_candidates[i][0] );
+         p+=snprintf(restBuffer+p, SIZE_OF_REST_BUFFER,"{\"type\": \"ntp\",\"id\":%"PRIu32",\"attributes\":{\"address\":\"%s\"}}", i, &ntpContext.ntp_candidates[i][0] );
       }
       else
       {
          break;
       }
-      if ((i<NUM_OF_NTP_SERVERS) &&(isalnum(ntpContex.ntp_candidates[i+1][0])))
+      if ((i<NUM_OF_NTP_SERVERS) &&(isalnum(ntpContext.ntp_candidates[i+1][0])))
       {
          p+=snprintf(restBuffer+p, SIZE_OF_REST_BUFFER,",");
       }
    }
 
 
-   p+=snprintf(restBuffer+p, SIZE_OF_REST_BUFFER,"],\"meta\": {\"period\":%"PRIu32", \"timezone\":\"%s\"}}\r\n", ntpContex.period,pRTC_GetTimezone());
+   p+=snprintf(restBuffer+p, SIZE_OF_REST_BUFFER,"],\"meta\": {\"period\":%"PRIu32", \"timezone\":\"%s\"}}\r\n", ntpContext.period,pRTC_GetTimezone());
 
    connection->response.contentType = mimeGetType(".apijson");
 #endif //JSON_API
@@ -336,6 +337,7 @@ error_t putRestSNTP(HttpConnection *connection, RestApi_t* RestApi)
    jsmntok_t tokens[32]; // a number >= total number of tokens
    size_t received;
    error_t error = NO_ERROR;
+
    (void) RestApi;
    error = httpReadStream(connection, connection->buffer, connection->request.contentLength, &received, HTTP_FLAG_BREAK_CRLF);
    if (error) return error;
@@ -345,20 +347,16 @@ error_t putRestSNTP(HttpConnection *connection, RestApi_t* RestApi)
    }
    jsmn_init(&parser);
    error = parseNTP(connection->buffer,  connection->request.contentLength,&parser, &tokens[0]);
-   if (ntpContex.needSave == TRUE)
+   if (ntpContext.needSave == TRUE)
    {
       ntpdSaveConfig();
-      ntpContex.needSave = FALSE;
+      ntpContext.needSave = FALSE;
       ntpdRestart();
 
    }
-   connection->response.noCache = TRUE;
-
-   if (error)
-   {
-      return error;
-   }
-   return rest_200_ok(connection,"all right");
+   error=getRestSNTP(connection, RestApi);
+   //Any error to report?
+   return error;
 }
 
 error_t deleteRestSNTP(HttpConnection *connection, RestApi_t* RestApi)

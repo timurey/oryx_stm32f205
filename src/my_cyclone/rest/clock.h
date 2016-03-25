@@ -10,6 +10,8 @@
 
 #include "rest.h"
 #include "rtc.h"
+error_t clock_defaults(void);
+error_t clockConfigure(void);
 error_t restGetClock(HttpConnection *connection, RestApi_t* RestApi);
 error_t restPostClock(HttpConnection *connection, RestApi_t* RestApi);
 error_t restPutClock(HttpConnection *connection, RestApi_t* RestApi);

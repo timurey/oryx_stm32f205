@@ -15,6 +15,7 @@
 #include "network.h"
 #include "debug.h"
 #include "rtc.h"
+#include "rest/clock.h"
 #include "uuid.h"
 
 #include "rest/sensors.h"
@@ -704,12 +705,15 @@ void networkServices(void *pvParametrs)
    (void) pvParametrs;
    configInit();
 
+   clock_defaults();
    ntp_defaults();
 
    networkConfigure();
    sensorsConfigure();
    executorsConfigure();
    ntpdConfigure();
+   clockConfigure();
+
    logicConfigure();
 #if (FTP_SERVER_SUPPORT == ENABLED)
    ftpdConfigure();

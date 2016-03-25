@@ -44,7 +44,7 @@
 #define __DAY_OF_WEEK__ 4
 #endif
 
-#define TIMEZONE_LENGTH 24
+#define TIMEZONE_LENGTH 64
 
 /***************************************************************************//**
  * Declare function prototypes

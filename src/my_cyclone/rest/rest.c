@@ -147,6 +147,7 @@ error_t restTry (HttpConnection *connection, const char_t *uri)
       }
       break;
    case METHOD_PUT:
+   case METHOD_PATCH:
       if (restAPI.restClassHadlers->restPutClassHadler)
       {
          error = restAPI.restClassHadlers->restPutClassHadler(connection, &restAPI);

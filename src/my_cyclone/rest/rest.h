@@ -50,7 +50,8 @@ typedef enum
 	METHOD_GET = 0x01,
 	METHOD_POST = 0x02,
 	METHOD_PUT = 0x03,
-	METHOD_DELETE = 0x04
+	METHOD_PATCH = 0x04,
+	METHOD_DELETE = 0x05
 } HttpMethod_t;
 
 typedef struct
@@ -65,6 +66,7 @@ static const HttpMethodCodeDesc methodCodeList[] =
 		{METHOD_GET, "GET"},
 		{METHOD_POST, "POST"},
 		{METHOD_PUT, "PUT"},
+		{METHOD_PATCH, "PATCH"},
 		{METHOD_DELETE, "DELETE"}
 
 };
