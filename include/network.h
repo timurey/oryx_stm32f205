@@ -38,7 +38,8 @@ error_t networkConfigure (void);
 error_t networkStart (void);
 
 void networkServices(void *pvParametrs);
-//void start_ntp(void);
+error_t restGetNetwork(HttpConnection *connection, RestApi_t* RestApi);
+error_t restPutNetwork(HttpConnection *connection, RestApi_t* RestApi);
 //void stop_ntp(void);
 //void sntpClientTread(void *pvParametrs);
 

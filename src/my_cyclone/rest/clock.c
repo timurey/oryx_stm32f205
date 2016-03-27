@@ -29,7 +29,7 @@ jsmntok_t tokens[15]; // a number >= total number of tokens
 #define iscntrl(__c) (__ctype_lookup(__c)&_C)
 
 register_rest_function(clock, "/clock", NULL, NULL, &restGetClock, &restPostClock, &restPutClock, &restDeleteClock);
-static const char * default_config = "{\"timezone\":\"GMT+0500 (YEKT)\"}";
+register_defalt_config( "{\"timezone\":\"GMT+0500 (YEKT)\"}");
 
 struct clockContext_t{
    time_t unixtime;
@@ -47,22 +47,22 @@ error_t restGetClock(HttpConnection *connection, RestApi_t* RestApi)
    (void) RestApi;
    getCurrentDate(&time);
 #if (REST_JSON_TYPE == JSON)
-   p=sprintf(restBuffer,"{\"clock\":{\r\n\"unixtime\":%lu,\r\n", getCurrentUnixTime());
-   p+=sprintf(restBuffer+p,"\"localtime\":\"%s %s\",\r\n",
+   p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"{\"clock\":{\r\n\"unixtime\":%lu,\r\n", getCurrentUnixTime());
+   p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"localtime\":\"%s %s\",\r\n",
       htmlFormatDate(&time, &buf[0]),
       pRTC_GetTimezone()
    );
-   p+=sprintf(restBuffer+p,"\"time\":\"%02d:%02d:%02d\",\r\n", time.hours, time.minutes, time.seconds);
-   p+=sprintf(restBuffer+p,"\"date\":\"%04d.%02d.%02d\",\r\n", time.year,time.month,time.day);
-   p+=sprintf(restBuffer+p,"\"timezone\":\"%s\"}}\r\n",pRTC_GetTimezone());
+   p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"time\":\"%02d:%02d:%02d\",\r\n", time.hours, time.minutes, time.seconds);
+   p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"date\":\"%04d.%02d.%02d\",\r\n", time.year,time.month,time.day);
+   p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"timezone\":\"%s\"}}\r\n",pRTC_GetTimezone());
    connection->response.contentType = mimeGetType(".json");
 #else
 #if(REST_JSON_TYPE == JSON_API)
-   p+=sprintf(restBuffer+p,"{\"data\":{\"type\":\"clock\", \"id\":0,\"attributes\":{");
-   p+=sprintf(restBuffer+p,"\"unixtime\":%lu,\"localtime\":\"%s %s\",\"time\":\"%02d:%02d:%02d\",",getCurrentUnixTime(),htmlFormatDate(&time, &buf[0]),
+   p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"{\"data\":{\"type\":\"clock\", \"id\":0,\"attributes\":{");
+   p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"unixtime\":%lu,\"localtime\":\"%s %s\",\"time\":\"%02d:%02d:%02d\",",getCurrentUnixTime(),htmlFormatDate(&time, &buf[0]),
       pRTC_GetTimezone(),time.hours, time.minutes, time.seconds);
-   p+=sprintf(restBuffer+p,"\"date\":\"%04d.%02d.%02d\",",time.year,time.month,time.day);
-   p+=sprintf(restBuffer+p,"\"timezone\":\"%s\"}}}",pRTC_GetTimezone());
+   p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"date\":\"%04d.%02d.%02d\",",time.year,time.month,time.day);
+   p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"timezone\":\"%s\"}}}",pRTC_GetTimezone());
    connection->response.contentType = mimeGetType(".apijson");
 #endif //JSON_API
 #endif //JSON
@@ -135,13 +135,11 @@ static error_t parseClock (char *data, size_t len, jsmn_parser* jSMNparser, jsmn
    return error;
 }
 
-error_t clock_defaults(void)
-{
-   return read_default(default_config, strlen(default_config), &parseClock);
-}
+
 error_t clockConfigure(void)
 {
    error_t error;
+   error = read_default(&defaultConfig, &parseClock);
    error = read_config("/config/clock.json",&parseClock);
    return error;
 }

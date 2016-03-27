@@ -23,8 +23,11 @@
 #include "rest/variables.h"
 
 #include "expression_parser/logic.h"
-
+#include "rest/rest.h"
 static NetInterface *interface;
+
+register_defalt_config( "{\"ipv4\":{\"useipv4\":true,\"usedhcp\":true,\"address\":\"192.168.1.211\",\"netmask\":\"255.255.255.0\",\"gateway\":\"192.168.1.1\",\"primarydns\":\"192.168.1.1\",\"secondarydns\":\"8.8.8.8\"},\"ipv6\":{\"useipv6\":false,\"useslaac\":false,\"linklocaladdress\":\"fe80::107\",\"ipv6prefix\":\"2001:db8::\",\"ipv6prefixlength\":64,\"ipv6globaladdress\":\"2001:db8::107\",\"ipv6router\":\"fe80::1\",\"ipv6primarydns\":\"2001:4860:4860::8888\",\"ipv6secondarydns\":\"2001:4860:486\"}}");
+
 
 #if (AUTO_IP_SUPPORT == ENABLED)
 AutoIpSettings autoIpSettings;
@@ -45,17 +48,28 @@ SlaacContext slaacContext;
 
 #endif //IPV6_SUPPORT
 
+typedef struct
+{
+   bool_t useDhcp;
+   bool_t useIpV4;
+   bool_t useIpV6;
+   bool_t needSave;
+   Ipv4Addr ipv4Addr;
+   Ipv4Addr ipv4Mask;
+   Ipv4Addr ipv4Gateway;
+   Ipv4Addr ipv4Dns1;
+   Ipv4Addr ipv4Dns2;
+   char sMacAddr[18];
+   MacAddr macAddr;
+   char hostname[NET_MAX_HOSTNAME_LEN];
 
-static bool_t useDhcp = FALSE;
+} networkContext_t;
 
-static Ipv4Addr ipv4Addr;
-static Ipv4Addr ipv4Mask;
-static Ipv4Addr ipv4Gateway;
-static Ipv4Addr ipv4Dns1;
-static Ipv4Addr ipv4Dns2;
-static char sMacAddr[18];
-static    MacAddr macAddr;
-static char hostname[NET_MAX_HOSTNAME_LEN];
+static networkContext_t networkContext;
+
+static void networkSaveConfig (char * bufer, size_t maxLen);
+static error_t parseNetwork(char *data, size_t len, jsmn_parser* jSMNparser, jsmntok_t *jSMNtokens);
+register_rest_function(network, "/network", NULL, NULL, &restGetNetwork, NULL, &restPutNetwork, NULL);
 
 
 
@@ -69,382 +83,245 @@ MdnsResponderContext mdnsResponderContext;
 MdnsResponderSettings mdnsResponderSettings;
 #endif
 
-static void ipv4UseDefaultConfigs(void)
+static error_t getNetworkContext (NetInterface *_interface, networkContext_t * context)
 {
-   useDhcp = TRUE;
+   ipv4GetHostAddr(_interface, &context->ipv4Addr);
+   ipv4GetSubnetMask(_interface, &context->ipv4Mask);
+   ipv4GetDefaultGateway(_interface, &context->ipv4Gateway);
+   ipv4GetDnsServer(_interface, 0, &context->ipv4Dns1);
+   ipv4GetDnsServer(_interface, 1, &context->ipv4Dns2);
+   return NO_ERROR;
 }
+error_t restGetNetwork(HttpConnection *connection, RestApi_t* RestApi)
+{
+   error_t error = NO_ERROR;
+   int p=0;
+   (void) RestApi;
+   getNetworkContext(interface, &networkContext );
+#if (REST_JSON_TYPE == JSON)
+
+   p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"{\"ipv4\":{\"useipv4\":%s,\"usedhcp\":%s,", (networkContext.useIpV4 == TRUE)?"true":"false", (networkContext.useDhcp == TRUE)?"true":"false");
+   p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"address\":\"%s\",",ipv4AddrToString(networkContext.ipv4Addr, NULL));
+   p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"netmask\":\"%s\",",ipv4AddrToString(networkContext.ipv4Mask, NULL));
+   p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"gateway\":\"%s\",",ipv4AddrToString(networkContext.ipv4Gateway, NULL));
+   p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"primarydns\":\"%s\",",ipv4AddrToString(networkContext.ipv4Dns1, NULL));
+   p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"secondarydns\":\"%s\"}}",ipv4AddrToString(networkContext.ipv4Dns2, NULL));
+
+   connection->response.contentType = mimeGetType(".json");
+#else
+#if(REST_JSON_TYPE == JSON_API)
+   p+=sprintf(restBuffer+p,"{\"data\":{\"type\":\"clock\", \"id\":0,\"attributes\":{");
+   p+=sprintf(restBuffer+p,"\"unixtime\":%lu,\"localtime\":\"%s %s\",\"time\":\"%02d:%02d:%02d\",",getCurrentUnixTime(),htmlFormatDate(&time, &buf[0]),
+      pRTC_GetTimezone(),time.hours, time.minutes, time.seconds);
+   p+=sprintf(restBuffer+p,"\"date\":\"%04d.%02d.%02d\",",time.year,time.month,time.day);
+   p+=sprintf(restBuffer+p,"\"timezone\":\"%s\"}}}",pRTC_GetTimezone());
+   connection->response.contentType = mimeGetType(".apijson");
+#endif //JSON_API
+#endif //JSON
+   connection->response.noCache = TRUE;
+
+   error=rest_200_ok(connection, &restBuffer[0]);
+   //Any error to report?
+
+   return error;
+}
+
+error_t restPutNetwork(HttpConnection *connection, RestApi_t* RestApi)
+{
+   jsmn_parser parser;
+   jsmntok_t tokens[32]; // a number >= total number of tokens
+   size_t received;
+   error_t error = NO_ERROR;
+
+   (void) RestApi;
+   error = httpReadStream(connection, connection->buffer, connection->request.contentLength, &received, HTTP_FLAG_BREAK_CRLF);
+   if (error) return error;
+   if (received == connection->request.contentLength)
+   {
+      connection->buffer[received] = '\0';
+   }
+   jsmn_init(&parser);
+   error = parseNetwork(connection->buffer,  connection->request.contentLength,&parser, &tokens[0]);
+   if (networkContext.needSave == TRUE)
+   {
+      networkSaveConfig(connection->buffer, HTTP_SERVER_BUFFER_SIZE);
+      networkContext.needSave = FALSE;
+      //      networkRestart();
+   }
+   error=restGetNetwork(connection, RestApi);
+   //Any error to report?
+   return error;
+}
+
 static error_t useDefaultMacAddress(void)
 {
    error_t error;
-   sprintf(sMacAddr, "00-50-C2-%X-%X-%X",uuid->b[10],uuid->b[9],uuid->b[8]);
-   error = macStringToAddr(&sMacAddr[0], &macAddr);
+   sprintf(networkContext.sMacAddr, "00-50-C2-%X-%X-%X",uuid->b[10],uuid->b[9],uuid->b[8]);
+   error = macStringToAddr(&(networkContext.sMacAddr[0]), &networkContext.macAddr);
    return error;
 }
 static error_t useDefaultHostName(void)
 {
-   sprintf(hostname, "aurora_%X-%X-%X",uuid->b[10],uuid->b[9],uuid->b[8]);
+   sprintf(networkContext.hostname, "aurora_%X-%X-%X",uuid->b[10],uuid->b[9],uuid->b[8]);
    return NO_ERROR;
 }
-#if IPV6_SUPPORT == ENABLED
-static void ipv6_use_default_configs (void)
-{
-   error_t error;
-   //Get default settings
-   slaacGetDefaultSettings(&slaacSettings);
-   //Set the network interface to be configured
-   slaacSettings.interface = interface;
 
-   //SLAAC initialization
-   error = slaacInit(&slaacContext, &slaacSettings);
-   //Failed to initialize SLAAC?
-   if(error)
-   {
-      //Debug message
-      TRACE_ERROR("Failed to initialize SLAAC!\r\n");
-   }
-
-   //Start IPv6 address autoconfiguration process
-   error = slaacStart(&slaacContext);
-   //Failed to start SLAAC process?
-   if(error)
-   {
-      //Debug message
-      TRACE_ERROR("Failed to start SLAAC!\r\n");
-   }
-   //	//Set link-local address
-   //	ipv6StringToAddr(APP_IPV6_LINK_LOCAL_ADDR, &ipv6Addr);
-   //	ipv6SetLinkLocalAddr(interface, &ipv6Addr);
-   //
-   //	//Set IPv6 prefix
-   //	ipv6StringToAddr(APP_IPV6_PREFIX, &ipv6Addr);
-   //	ipv6SetPrefix(interface, &ipv6Addr, APP_IPV6_PREFIX_LENGTH);
-   //
-   //	//Set global address
-   //	ipv6StringToAddr(APP_IPV6_GLOBAL_ADDR, &ipv6Addr);
-   //	ipv6SetGlobalAddr(interface, &ipv6Addr);
-   //
-   //	//Set router
-   //	ipv6StringToAddr(APP_IPV6_ROUTER, &ipv6Addr);
-   //	ipv6SetRouter(interface, &ipv6Addr);
-   //
-   //	//Set primary and secondary DNS servers
-   //	ipv6StringToAddr(APP_IPV6_PRIMARY_DNS, &ipv6Addr);
-   //	ipv6SetDnsServer(interface, 0, &ipv6Addr);
-   //	ipv6StringToAddr(APP_IPV6_SECONDARY_DNS, &ipv6Addr);
-   //	ipv6SetDnsServer(interface, 1, &ipv6Addr);
-}
-#endif
 
 static uint8_t parseIpv4Config(char *data, jsmntok_t *jSMNtokens, jsmnerr_t resultCode)
 {
    error_t error;
    int tokNum;
-   uint8_t correct = 0;
-   char ipString[] = "255.255.255.255\0";
+
+   char ipAddr[] = "xxx.xxx.xxx.xxx\0";
+   char ipMask[] = "xxx.xxx.xxx.xxx\0";
+   char ipGateway[] = "xxx.xxx.xxx.xxx\0";
+   char ipDns1[] = "xxx.xxx.xxx.xxx\0";
+   char ipDns2[] = "xxx.xxx.xxx.xxx\0";
+   static Ipv4Addr testIpAddres;
    int length;
 #if (IPV4_SUPPORT == ENABLED)
 
-   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/config/ipv4/use dhcp");
+   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/ipv4/usedhcp");
    if ((tokNum >= 0) & (strncmp (&data[jSMNtokens[tokNum].start], "true" ,4) == 0))
    {
-      useDhcp = TRUE;
-      return 5;
+      networkContext.useDhcp = TRUE;
+      error = NO_ERROR;
    }
 
-   else
+
+   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/ipv4/address");
+   if (tokNum >= 0)
    {
-      tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/config/ipv4/ipv4 address");
-      if (tokNum >= 0)
+      length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
+      if (length<=15 && length>0)
       {
-         length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
-         if (length<=15)
-         {
-            memcpy(&ipString[0], &data[jSMNtokens[tokNum].start], length);
-            ipString[length]='\0';
-            //Set ip address
-            error = ipv4StringToAddr(&ipString[0], &ipv4Addr);
-            if (error)
-               return correct;
-            correct++;
-         }
-         else
-         {
-            xprintf("Warning: wrong ip address in config file \"/config/lan.json\" ");
-            return correct;
-         }
+         memcpy(&ipAddr[0], &data[jSMNtokens[tokNum].start], length);
+         ipAddr[length]='\0';
       }
-      tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/config/ipv4/ipv4 netmask");
-      if (tokNum >= 0)
+      else
       {
-         length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
-         if (length<=15)
-         {
-            memcpy(&ipString[0], &data[jSMNtokens[tokNum].start], length);
-            ipString[length]='\0';
-            //Set subnet mask
-            error = ipv4StringToAddr(&ipString[0], &ipv4Mask);
-            if (error)
-               return correct;
-            correct++;
-         }
-         else
-         {
-            xprintf("Warning: wrong subnet mask in config file \"/config/lan.json\" ");
-            return correct;
-         }
+         xprintf("Warning: wrong ip address in config file \"/config/lan.json\" ");
       }
+   }
+   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/ipv4/netmask");
+   if (tokNum >= 0)
+   {
+      length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
+      if (length<=15 && length>0)
+      {
+         memcpy(&ipMask[0], &data[jSMNtokens[tokNum].start], length);
+         ipMask[length]='\0';
 
-      tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/config/ipv4/ipv4 gateway");
-      if (tokNum >= 0)
-      {
-         length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
-         if (length<=15)
-         {
-            memcpy(&ipString[0], &data[jSMNtokens[tokNum].start], length);
-            ipString[length]='\0';
-            //Set default gateway
-            error = ipv4StringToAddr(&ipString[0], &ipv4Gateway);
-            if (error)
-               return correct;
-            correct++;
-         }
-         else
-         {
-            xprintf("Warning: wrong default gateway in config file \"/config/lan.json\" ");
-            return correct;
-         }
       }
-      tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/config/ipv4/ipv4 primary dns");
-      if (tokNum >= 0)
+      else
       {
-         length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
-         if (length<=15)
-         {
-            memcpy(&ipString[0], &data[jSMNtokens[tokNum].start], length);
-            ipString[length]='\0';
-            //Set primary DNS server
-            error = ipv4StringToAddr(&ipString[0], &ipv4Dns1);
-            if (error)
-               return correct;
-            correct++;
-         }
-         else
-         {
-            xprintf("Warning: wrong primary dns in config file \"/config/lan.json\" ");
-            return correct;
-         }
+         xprintf("Warning: wrong subnet mask in config file \"/lan.json\" ");
       }
-      tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/config/ipv4/ipv4 secondary dns");
-      if (tokNum >= 0)
-      {
-         length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
-         if (length<=15)
-         {
-            memcpy(&ipString[0], &data[jSMNtokens[tokNum].start], length);
-            ipString[length]='\0';
-            //Set secondary DNS server
-            error = ipv4StringToAddr(&ipString[0], &ipv4Dns2);
-            if (error)
-               return correct;
-            correct++;
-         }
-         else
-         {
-            xprintf("Warning: wrong primary dns in config file \"/config/lan.json\" ");
-            return correct;
-         }
-      }
+   }
 
+   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/ipv4/gateway");
+   if (tokNum >= 0)
+   {
+      length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
+      if (length<=15 && length>0)
+      {
+         memcpy(&ipGateway[0], &data[jSMNtokens[tokNum].start], length);
+         ipGateway[length]='\0';
+      }
+      else
+      {
+         xprintf("Warning: wrong default gateway in config file \"/config/lan.json\" ");
+      }
+   }
+   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/ipv4/primarydns");
+   if (tokNum >= 0)
+   {
+      length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
+      if (length<=15 && length>0)
+      {
+         memcpy(&ipDns1[0], &data[jSMNtokens[tokNum].start], length);
+         ipDns1[length]='\0';
+      }
+      else
+      {
+         xprintf("Warning: wrong primary dns in config file \"/config/lan.json\" ");
+      }
+   }
+   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/ipv4/secondarydns");
+   if (tokNum >= 0)
+   {
+      length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
+      if (length<=15 && length>0)
+      {
+         memcpy(&ipDns2[0], &data[jSMNtokens[tokNum].start], length);
+         ipDns2[length]='\0';
+      }
+      else
+      {
+         xprintf("Warning: wrong primary dns in config file \"/config/lan.json\" ");
+      }
+   }
 
 #endif
-      return correct;
-   }
-}
+   //Check addresses
+   error = ipv4StringToAddr(&ipAddr[0], &testIpAddres);
+   if (error == NO_ERROR)
+      error = ipv4StringToAddr(&ipMask[0], &testIpAddres);
+   if (!error == NO_ERROR)
+      error = ipv4StringToAddr(&ipGateway[0], &testIpAddres);
 
-#if (IPV6_SUPPORT == ENABLED)
-
-static uint8_t parseIpv6Config(char *data, jsmntok_t *jSMNtokens, jsmnerr_t resultCode)
-{
-   error_t error;
-   int tokNum;
-   uint8_t correct = 0;
-   char ipString[] = "255.255.255.255\0";
-   int length;
-
-
-   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/config/ipv6/use slaac");
-   if ((tokNum >= 0) & (strncmp (&data[jSMNtokens[tokNum].start], "true" ,4) == 0))
+   if (error == NO_ERROR)
    {
-      slaacGetDefaultSettings(&slaacSettings);
-      //Set the network interface to be configured
-      slaacSettings.interface = interface;
-
-      //SLAAC initialization
-      error = slaacInit(&slaacContext, &slaacSettings);
-      //Failed to initialize SLAAC?
-      if(error)
-      {
-         //Debug message
-         TRACE_ERROR("Failed to initialize SLAAC!\r\n");
-      }
-
-      //Start IPv6 address autoconfiguration process
-      error = slaacStart(&slaacContext);
-      //Failed to start SLAAC process?
-      if(error)
-      {
-         //Debug message
-         TRACE_ERROR("Failed to start SLAAC!\r\n");
-      }
-      return 5;
+      ipv4StringToAddr(&ipAddr[0], &networkContext.ipv4Addr);
+      ipv4StringToAddr(&ipMask[0], &networkContext.ipv4Mask);
+      ipv4StringToAddr(&ipGateway[0], &networkContext.ipv4Gateway);
    }
+   ipv4StringToAddr(&ipDns1[0], &networkContext.ipv4Dns1);
+   ipv4StringToAddr(&ipDns1[0], &networkContext.ipv4Dns2);
 
-   //
-   //	else
-   //	{
-   //		tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/config/ipv4/ipv4 address");
-   //		if (tokNum >= 0)
-   //		{
-   //			length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
-   //			if (length<=15)
-   //			{
-   //				memcpy(&ipString[0], &data[jSMNtokens[tokNum].start], length);
-   //				ipString[length]='\0';
-   //				//Set IPv4 host address
-   //				error = ipv4StringToAddr(&ipString[0], &ipv4Addr);
-   //				if (error)
-   //					return correct;
-   //				error = ipv4SetHostAddr(interface, ipv4Addr);
-   //				if (error)
-   //					return correct;
-   //				correct++;
-   //			}
-   //			else
-   //			{
-   //				xprintf("Warning: wrong ip address in config file \"/config/lan.json\" ");
-   //				return correct;
-   //			}
-   //		}
-   //		tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/config/ipv4/ipv4 netmask");
-   //		if (tokNum >= 0)
-   //		{
-   //			length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
-   //			if (length<=15)
-   //			{
-   //				memcpy(&ipString[0], &data[jSMNtokens[tokNum].start], length);
-   //				ipString[length]='\0';
-   //				//Set subnet mask
-   //				error = ipv4StringToAddr(&ipString[0], &ipv4Addr);
-   //				if (error)
-   //					return correct;
-   //				error = ipv4SetSubnetMask(interface, ipv4Addr);
-   //				if (error)
-   //					return correct;
-   //				correct++;
-   //			}
-   //			else
-   //			{
-   //				xprintf("Warning: wrong subnet mask in config file \"/config/lan.json\" ");
-   //				return correct;
-   //			}
-   //		}
-   //
-   //		tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/config/ipv4/ipv4 gateway");
-   //		if (tokNum >= 0)
-   //		{
-   //			length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
-   //			if (length<=15)
-   //			{
-   //				memcpy(&ipString[0], &data[jSMNtokens[tokNum].start], length);
-   //				ipString[length]='\0';
-   //				//Set default gateway
-   //				error = ipv4StringToAddr(&ipString[0], &ipv4Addr);
-   //				if (error)
-   //					return correct;
-   //				error = ipv4SetDefaultGateway(interface, ipv4Addr);
-   //				if (error)
-   //					return correct;
-   //				correct++;
-   //			}
-   //			else
-   //			{
-   //				xprintf("Warning: wrong default gateway in config file \"/config/lan.json\" ");
-   //				return correct;
-   //			}
-   //		}
-   //		tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/config/ipv4/ipv4 primary dns");
-   //		if (tokNum >= 0)
-   //		{
-   //			length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
-   //			if (length<=15)
-   //			{
-   //				memcpy(&ipString[0], &data[jSMNtokens[tokNum].start], length);
-   //				ipString[length]='\0';
-   //				//Set primary DNS server
-   //				error = ipv4StringToAddr(&ipString[0], &ipv4Addr);
-   //				if (error)
-   //					return correct;
-   //				error = ipv4SetDnsServer(interface, 0, ipv4Addr);
-   //				if (error)
-   //					return correct;
-   //				correct++;
-   //			}
-   //			else
-   //			{
-   //				xprintf("Warning: wrong primary dns in config file \"/config/lan.json\" ");
-   //				return correct;
-   //			}
-   //		}
-   //		tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/config/ipv4/ipv4 secondary dns");
-   //		if (tokNum >= 0)
-   //		{
-   //			length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
-   //			if (length<=15)
-   //			{
-   //				memcpy(&ipString[0], &data[jSMNtokens[tokNum].start], length);
-   //				ipString[length]='\0';
-   //				//Set secondary DNS server
-   //				error = ipv4StringToAddr(&ipString[0], &ipv4Addr);
-   //				if (error)
-   //					return correct;
-   //				error = ipv4SetDnsServer(interface, 1, ipv4Addr);
-   //				if (error)
-   //					return correct;
-   //				correct++;
-   //			}
-   //			else
-   //			{
-   //				xprintf("Warning: wrong primary dns in config file \"/config/lan.json\" ");
-   //				return correct;
-   //			}
-   //		}
-   //
-   //
 
-   return correct;
-   //	}
+   return error;
 }
-#endif
-static error_t parseIpConfig(char *data, size_t len, jsmn_parser* jSMNparser, jsmntok_t *jSMNtokens)
+
+
+inline void networkSaveConfig (char * bufer, size_t maxLen)
 {
-   uint8_t ipEnable = 0;
+   int p=0;
+   getNetworkContext(interface, &networkContext );
+   p+=snprintf(bufer+p, maxLen-p,"{\"ipv4\":{\"useipv4\":%s,\"usedhcp\":%s,", (networkContext.useIpV4 == TRUE)?"true":"false", (networkContext.useDhcp == TRUE)?"true":"false");
+   p+=snprintf(bufer+p, maxLen-p,"\"address\":\"%s\",",ipv4AddrToString(networkContext.ipv4Addr, NULL));
+   p+=snprintf(bufer+p, maxLen-p,"\"netmask\":\"%s\",",ipv4AddrToString(networkContext.ipv4Mask, NULL));
+   p+=snprintf(bufer+p, maxLen-p,"\"gateway\":\"%s\",",ipv4AddrToString(networkContext.ipv4Gateway, NULL));
+   p+=snprintf(bufer+p, maxLen-p,"\"primarydns\":\"%s\",",ipv4AddrToString(networkContext.ipv4Dns1, NULL));
+   p+=snprintf(bufer+p, maxLen-p,"\"secondarydns\":\"%s\"}}",ipv4AddrToString(networkContext.ipv4Dns2, NULL));
+
+   save_config("/config/network.json","%S", bufer);
+
+}
+
+static error_t parseNetwork(char *data, size_t len, jsmn_parser* jSMNparser, jsmntok_t *jSMNtokens)
+{
    jsmnerr_t resultCode;
    int length;
    int tokNum;
    error_t error;
    jsmn_init(jSMNparser);
+   networkContext.needSave = FALSE;
+   networkContext.useIpV4 = FALSE;
+   networkContext.useIpV6 = FALSE;
+   networkContext.useDhcp = FALSE;
    resultCode = jsmn_parse(jSMNparser, data, len, jSMNtokens, CONFIG_JSMN_NUM_TOKENS);
-   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/config/mac address\0\0");
+   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/mac\0\0");
    if (tokNum >= 0)
    {
       length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
 
-      if (length<=18)
+      if (length<=18 && length>0)
       {
-         memcpy(&sMacAddr[0], &data[jSMNtokens[tokNum].start], length);
-         sMacAddr[length]='\0';
+         memcpy(&networkContext.sMacAddr[0], &data[jSMNtokens[tokNum].start], length);
+         networkContext.sMacAddr[length]='\0';
          //Set ip address
-         error = macStringToAddr(&sMacAddr[0], &macAddr);
+         error = macStringToAddr(&networkContext.sMacAddr[0], &networkContext.macAddr);
          if (error)
          {
             useDefaultMacAddress();
@@ -455,14 +332,15 @@ static error_t parseIpConfig(char *data, size_t len, jsmn_parser* jSMNparser, js
    {
       useDefaultMacAddress();
    }
-   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/config/hostname");
+   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/hostname");
    if (tokNum >= 0)
    {
       length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
 
-      if (length<=NET_MAX_HOSTNAME_LEN)
+      if (length<NET_MAX_HOSTNAME_LEN && length>0)
       {
-         memcpy(&hostname[0], &data[jSMNtokens[tokNum].start], length);
+         memcpy(&networkContext.hostname[0], &data[jSMNtokens[tokNum].start], length);
+         networkContext.hostname[length]='\0';
       }
    }
    else
@@ -470,19 +348,24 @@ static error_t parseIpConfig(char *data, size_t len, jsmn_parser* jSMNparser, js
       useDefaultHostName();
    }
 
-   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/config/ipv4/use ipv4");
+   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/ipv4/useipv4");
    if (tokNum >= 0)
    {
       if (strncmp (&data[jSMNtokens[tokNum].start], "true" ,4) == 0)
       {
-         if (parseIpv4Config(data, jSMNtokens, resultCode)!=5)
-            ipv4UseDefaultConfigs();
-         ipEnable++;
+         networkContext.useIpV4 = TRUE;
+         parseIpv4Config(data, jSMNtokens, resultCode);
+
       }
+      else
+      {
+         networkContext.useIpV4 = FALSE;
+      }
+
 
    }
 #if IPV6_SUPPORT == ENABLED
-   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/config/ipv6/use ipv6");
+   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/ipv6/useipv6");
    if (tokNum >= 0)
    {
       if (strncmp (&data[jSMNtokens[tokNum].start], "true" ,4) == 0)
@@ -498,12 +381,23 @@ static error_t parseIpConfig(char *data, size_t len, jsmn_parser* jSMNparser, js
       ipv6_use_default_configs();
    }
 #endif
+   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/needSave");
+   if (tokNum > 0)
+   {
+      if (strncmp (&data[jSMNtokens[tokNum].start], "true" ,4) == 0)
+      {
+         networkContext.needSave = TRUE;
+      }
+   }
    return NO_ERROR;
 }
+
 error_t networkConfigure (void)
 {
    error_t error;
-   error = read_config("/config/lan.json",&parseIpConfig);
+   error = read_default(&defaultConfig, &parseNetwork);
+
+   error = read_config("/config/lan.json",&parseNetwork);
    return error;
 }
 
@@ -513,7 +407,7 @@ error_t networkStart(void)
    error_t error; //for debugging
    char name[NET_MAX_HOSTNAME_LEN + 9];
    char *aurora = "aurora - ";
-   char *pHostname = &hostname[0];
+   char *pHostname = &(networkContext.hostname[0]);
    char *pName  = &name[0];
 
    xprintf("System clock: %uHz\n", SystemCoreClock);
@@ -538,10 +432,10 @@ error_t networkStart(void)
    //Set external interrupt line driver
    netSetExtIntDriver(interface, &extIntDriver);
 
-   netSetMacAddr(interface, &macAddr);
+   netSetMacAddr(interface, &networkContext.macAddr);
    error = netConfigInterface(interface);
 
-   if (useDhcp == TRUE)
+   if (networkContext.useDhcp == TRUE)
    {
       //Get default settings
       dhcpClientGetDefaultSettings(&dhcpClientSettings);
@@ -572,19 +466,19 @@ error_t networkStart(void)
    {
       //Set IPv4 host address
 
-      error = ipv4SetHostAddr(interface, ipv4Addr);
+      error = ipv4SetHostAddr(interface, networkContext.ipv4Addr);
       if (error)
          return error;
-      error = ipv4SetSubnetMask(interface, ipv4Mask);
+      error = ipv4SetSubnetMask(interface, networkContext.ipv4Mask);
       if (error)
          return error;
-      error = ipv4SetDefaultGateway(interface, ipv4Gateway);
+      error = ipv4SetDefaultGateway(interface, networkContext.ipv4Gateway);
       if (error)
          return error;
-      error = ipv4SetDnsServer(interface, 0, ipv4Dns1);
+      error = ipv4SetDnsServer(interface, 0, networkContext.ipv4Dns1);
       if (error)
          return error;
-      error = ipv4SetDnsServer(interface, 1, ipv4Dns2);
+      error = ipv4SetDnsServer(interface, 1, networkContext.ipv4Dns2);
       if (error)
          return error;
 
@@ -661,32 +555,32 @@ error_t networkStart(void)
    }
    //Register DNS-SD service
    error = dnsSdRegisterService(&dnsSdContext,
-               "_http._tcp",
-               0,
-               0,
-               80,
-               "txtvers=1;"
-               "path=/");
+      "_http._tcp",
+      0,
+      0,
+      80,
+      "txtvers=1;"
+      "path=/");
 
    error = dnsSdRegisterService(&dnsSdContext,
-               "_ftp._tcp",
-               0,
-               0,
-               21,
-               "");
-//   error = dnsSdRegisterService(&dnsSdContext,
-//      "_hap._tcp",
-//      0,
-//      0,
-//      80,
-//      "c#=5;"
-//      "ff=0x1;"
-//      "id=00:11:22:33:44:55;"
-//      "md=AcmeFan;"
-//      "pv=1.0;"
-//      "s#=1;"
-//      "sf=0x0;"
-//      "ci=5");
+      "_ftp._tcp",
+      0,
+      0,
+      21,
+      "");
+   //   error = dnsSdRegisterService(&dnsSdContext,
+   //      "_hap._tcp",
+   //      0,
+   //      0,
+   //      80,
+   //      "c#=5;"
+   //      "ff=0x1;"
+   //      "id=00:11:22:33:44:55;"
+   //      "md=AcmeFan;"
+   //      "pv=1.0;"
+   //      "s#=1;"
+   //      "sf=0x0;"
+   //      "ci=5");
    //Start DNS-SD
    error = dnsSdStart(&dnsSdContext);
    //Failed to start DNS-SD?
@@ -705,8 +599,6 @@ void networkServices(void *pvParametrs)
    (void) pvParametrs;
    configInit();
 
-   clock_defaults();
-   ntp_defaults();
 
    networkConfigure();
    sensorsConfigure();
@@ -724,15 +616,228 @@ void networkServices(void *pvParametrs)
 
    networkStart();
    ntpdStart();
-   logicStart();
+//   logicStart();
 #if (FTP_SERVER_SUPPORT == ENABLED)
    ftpdStart();
 #endif
    httpdStart();
 
-//   vTaskDelay(1000);
+   //   vTaskDelay(1000);
 
    vTaskDelete(NULL);
 }
 
+#if (IPV6_SUPPORT == ENABLED)
 
+static uint8_t parseIpv6Config(char *data, jsmntok_t *jSMNtokens, jsmnerr_t resultCode)
+{
+   error_t error;
+   int tokNum;
+   uint8_t correct = 0;
+   char ipString[] = "255.255.255.255\0";
+   int length;
+
+
+   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/ipv6/use slaac");
+   if ((tokNum >= 0) & (strncmp (&data[jSMNtokens[tokNum].start], "true" ,4) == 0))
+   {
+      slaacGetDefaultSettings(&slaacSettings);
+      //Set the network interface to be configured
+      slaacSettings.interface = interface;
+
+      //SLAAC initialization
+      error = slaacInit(&slaacContext, &slaacSettings);
+      //Failed to initialize SLAAC?
+      if(error)
+      {
+         //Debug message
+         TRACE_ERROR("Failed to initialize SLAAC!\r\n");
+      }
+
+      //Start IPv6 address autoconfiguration process
+      error = slaacStart(&slaacContext);
+      //Failed to start SLAAC process?
+      if(error)
+      {
+         //Debug message
+         TRACE_ERROR("Failed to start SLAAC!\r\n");
+      }
+      return 5;
+   }
+
+   //
+   // else
+   // {
+   //    tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/ipv4/ipv4 address");
+   //    if (tokNum >= 0)
+   //    {
+   //       length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
+   //       if (length<=15)
+   //       {
+   //          memcpy(&ipString[0], &data[jSMNtokens[tokNum].start], length);
+   //          ipString[length]='\0';
+   //          //Set IPv4 host address
+   //          error = ipv4StringToAddr(&ipString[0], &ipv4Addr);
+   //          if (error)
+   //             return correct;
+   //          error = ipv4SetHostAddr(interface, ipv4Addr);
+   //          if (error)
+   //             return correct;
+   //          correct++;
+   //       }
+   //       else
+   //       {
+   //          xprintf("Warning: wrong ip address in config file \"/config/lan.json\" ");
+   //          return correct;
+   //       }
+   //    }
+   //    tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/ipv4/ipv4 netmask");
+   //    if (tokNum >= 0)
+   //    {
+   //       length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
+   //       if (length<=15)
+   //       {
+   //          memcpy(&ipString[0], &data[jSMNtokens[tokNum].start], length);
+   //          ipString[length]='\0';
+   //          //Set subnet mask
+   //          error = ipv4StringToAddr(&ipString[0], &ipv4Addr);
+   //          if (error)
+   //             return correct;
+   //          error = ipv4SetSubnetMask(interface, ipv4Addr);
+   //          if (error)
+   //             return correct;
+   //          correct++;
+   //       }
+   //       else
+   //       {
+   //          xprintf("Warning: wrong subnet mask in config file \"/config/lan.json\" ");
+   //          return correct;
+   //       }
+   //    }
+   //
+   //    tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/ipv4/ipv4 gateway");
+   //    if (tokNum >= 0)
+   //    {
+   //       length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
+   //       if (length<=15)
+   //       {
+   //          memcpy(&ipString[0], &data[jSMNtokens[tokNum].start], length);
+   //          ipString[length]='\0';
+   //          //Set default gateway
+   //          error = ipv4StringToAddr(&ipString[0], &ipv4Addr);
+   //          if (error)
+   //             return correct;
+   //          error = ipv4SetDefaultGateway(interface, ipv4Addr);
+   //          if (error)
+   //             return correct;
+   //          correct++;
+   //       }
+   //       else
+   //       {
+   //          xprintf("Warning: wrong default gateway in config file \"/config/lan.json\" ");
+   //          return correct;
+   //       }
+   //    }
+   //    tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/ipv4/ipv4 primary dns");
+   //    if (tokNum >= 0)
+   //    {
+   //       length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
+   //       if (length<=15)
+   //       {
+   //          memcpy(&ipString[0], &data[jSMNtokens[tokNum].start], length);
+   //          ipString[length]='\0';
+   //          //Set primary DNS server
+   //          error = ipv4StringToAddr(&ipString[0], &ipv4Addr);
+   //          if (error)
+   //             return correct;
+   //          error = ipv4SetDnsServer(interface, 0, ipv4Addr);
+   //          if (error)
+   //             return correct;
+   //          correct++;
+   //       }
+   //       else
+   //       {
+   //          xprintf("Warning: wrong primary dns in config file \"/config/lan.json\" ");
+   //          return correct;
+   //       }
+   //    }
+   //    tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/ipv4/ipv4 secondary dns");
+   //    if (tokNum >= 0)
+   //    {
+   //       length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
+   //       if (length<=15)
+   //       {
+   //          memcpy(&ipString[0], &data[jSMNtokens[tokNum].start], length);
+   //          ipString[length]='\0';
+   //          //Set secondary DNS server
+   //          error = ipv4StringToAddr(&ipString[0], &ipv4Addr);
+   //          if (error)
+   //             return correct;
+   //          error = ipv4SetDnsServer(interface, 1, ipv4Addr);
+   //          if (error)
+   //             return correct;
+   //          correct++;
+   //       }
+   //       else
+   //       {
+   //          xprintf("Warning: wrong primary dns in config file \"/config/lan.json\" ");
+   //          return correct;
+   //       }
+   //    }
+   //
+   //
+
+   return correct;
+   // }
+}
+#endif
+
+#if IPV6_SUPPORT == ENABLED
+static void ipv6_use_default_configs (void)
+{
+   error_t error;
+   //Get default settings
+   slaacGetDefaultSettings(&slaacSettings);
+   //Set the network interface to be configured
+   slaacSettings.interface = interface;
+
+   //SLAAC initialization
+   error = slaacInit(&slaacContext, &slaacSettings);
+   //Failed to initialize SLAAC?
+   if(error)
+   {
+      //Debug message
+      TRACE_ERROR("Failed to initialize SLAAC!\r\n");
+   }
+
+   //Start IPv6 address autoconfiguration process
+   error = slaacStart(&slaacContext);
+   //Failed to start SLAAC process?
+   if(error)
+   {
+      //Debug message
+      TRACE_ERROR("Failed to start SLAAC!\r\n");
+   }
+   // //Set link-local address
+   // ipv6StringToAddr(APP_IPV6_LINK_LOCAL_ADDR, &ipv6Addr);
+   // ipv6SetLinkLocalAddr(interface, &ipv6Addr);
+   //
+   // //Set IPv6 prefix
+   // ipv6StringToAddr(APP_IPV6_PREFIX, &ipv6Addr);
+   // ipv6SetPrefix(interface, &ipv6Addr, APP_IPV6_PREFIX_LENGTH);
+   //
+   // //Set global address
+   // ipv6StringToAddr(APP_IPV6_GLOBAL_ADDR, &ipv6Addr);
+   // ipv6SetGlobalAddr(interface, &ipv6Addr);
+   //
+   // //Set router
+   // ipv6StringToAddr(APP_IPV6_ROUTER, &ipv6Addr);
+   // ipv6SetRouter(interface, &ipv6Addr);
+   //
+   // //Set primary and secondary DNS servers
+   // ipv6StringToAddr(APP_IPV6_PRIMARY_DNS, &ipv6Addr);
+   // ipv6SetDnsServer(interface, 0, &ipv6Addr);
+   // ipv6StringToAddr(APP_IPV6_SECONDARY_DNS, &ipv6Addr);
+   // ipv6SetDnsServer(interface, 1, &ipv6Addr);
+}
+#endif

@@ -105,7 +105,7 @@ static int jsmn_find_key(const char *pJSON, jsmntok_t * pTok, int numOfTokens, c
             {
                if (crnLevel == level)
                   return crntToken;
-               while (*++p!='/' || *p == '\0');
+               while (*++p!='/' || *p == '\0' || (*p =='\\' && *(p+1) == '['));
             }
             else
             {

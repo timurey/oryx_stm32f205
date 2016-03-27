@@ -53,7 +53,7 @@ struct
 
 
 
-static const char * default_config = "{\"servers\":[\"0.ru.pool.ntp.org\",\"1.ru.pool.ntp.org\",\"2.ru.pool.ntp.org\",\"3.ru.pool.ntp.org\"],\"period\":86400,\"enabled\":true}";
+register_defalt_config( "{\"servers\":[\"0.ru.pool.ntp.org\",\"1.ru.pool.ntp.org\",\"2.ru.pool.ntp.org\",\"3.ru.pool.ntp.org\"],\"period\":86400,\"enabled\":true}");
 
 
 static void v_NtpNextServer(char **cServerName, int iServerNum)
@@ -266,14 +266,15 @@ static void ntpdSaveConfig (void)
       (ntpContext.enabled==TRUE)?"true":"false");
 }
 
-error_t ntp_defaults(void)
-{
-   return read_default(default_config, strlen(default_config), &parseNTP);
-}
+//error_t ntp_defaults(void)
+//{
+//   return read_default(default_config, strlen(default_config), &parseNTP);
+//}
 
 error_t ntpdConfigure(void)
 {
    error_t error;
+   error = read_default(&defaultConfig, &parseNTP);
    error = read_config("/config/ntp.json",&parseNTP);
    return error;
 }

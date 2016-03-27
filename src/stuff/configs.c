@@ -33,10 +33,10 @@ void configDeinit(void)
    osFreeMem(jSMNtokens);
 }
 
-error_t read_default(char * data, size_t size, tConfigParser parser)
+error_t read_default(const defaultConfig_t * defaultConfig, tConfigParser parser)
 {
    error_t error = NO_ERROR;
-   error =  parser(data, size, jSMNparser, jSMNtokens);
+   error =  parser(defaultConfig->config, defaultConfig->len, jSMNparser, jSMNtokens);
    return error;
 }
 error_t read_config(char * path, tConfigParser parser)
