@@ -12,7 +12,7 @@
 
 #ifdef JSMN_PARENT_LINKS
 
-int jsmn_find_value(const char *js, jsmntok_t *tokens, unsigned int num_tokens,  char * pPath);
+int jsmn_get_value(const char *js, jsmntok_t *tokens, unsigned int num_tokens,  char * pPath);
 
 #endif /* JSMN_PARENT_LINKS */
 #endif /* _JSMN_EXTRAS_H_ */

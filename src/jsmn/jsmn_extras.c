@@ -7,11 +7,39 @@
 
 
 #include "jsmn_extras.h"
-#include <stdlib.h>
-#include "macros.h"
+
+#define ISDIGIT(a) ((a>='0' && a<='9'))
+#define ISUPPER(a) (a>='A' && a<= 'Z')
+#define ISALPHA(a) ((a>='a' && a<='z')||(a>='A' && a<= 'Z'))
+#define ISALNUM(a) (ISDIGIT(a)||ISALPHA(a))
+#define ISSPACE(a) (a==' ' || a=='\t' || a== '\n')
+#define ISDOT(a) (a=='.')
+
+
 #ifdef JSMN_PARENT_LINKS
+/*
+ * Implement of atoi function
+ * This implementation do not support negative numbers
+ */
 
+static int jsmn_atoi ( char *s)
+{
 
+   int i =0;
+   int sign = 1;
+   while (ISSPACE(*s))
+   {
+      s++;
+   }
+
+   while (ISDIGIT(*s))
+   {
+      i=i*10+(*s-'0');
+      s++;
+   }
+   return(i*sign);
+
+}
 /**
  * Implement of strncmp function.
  */
@@ -132,7 +160,7 @@ static int findTokenByParentAndName(const char *pJSON, jsmntok_t * pTok, int par
    }
    else if (ISDIGIT(*path)) //Элемент массива
    {
-      arrayEl = atoi(path);
+      arrayEl = jsmn_atoi(path);
       if (arrayEl < (pTok+par_token)->size)
       {
          for (token = par_token+1; token < numOfTokens && childEl <= arrayEl; token++)
@@ -179,7 +207,6 @@ static int findTokenByParentAndName(const char *pJSON, jsmntok_t * pTok, int par
 
 
 int jsmn_get_value(const char *js, jsmntok_t *tokens, unsigned int num_tokens,  char * pPath)
-//int jsmn_find_value(const char *pJSON, jsmntok_t * pTok, int numOfTokens,  char * pPath)
 {
    char *path = pPath;
    int token =-1;
