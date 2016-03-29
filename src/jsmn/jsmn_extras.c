@@ -7,10 +7,39 @@
 
 
 #include "jsmn_extras.h"
-#include <stdlib.h>
-#ifdef JSMN_PARENT_LINKS
-#define ISDIGIT(a) (((a)>='0') && ((a)<='9'))
 
+#define ISDIGIT(a) ((a>='0' && a<='9'))
+#define ISUPPER(a) (a>='A' && a<= 'Z')
+#define ISALPHA(a) ((a>='a' && a<='z')||(a>='A' && a<= 'Z'))
+#define ISALNUM(a) (ISDIGIT(a)||ISALPHA(a))
+#define ISSPACE(a) (a==' ' || a=='\t' || a== '\n')
+#define ISDOT(a) (a=='.')
+
+
+#ifdef JSMN_PARENT_LINKS
+/*
+ * Implement of atoi function
+ * This implementation do not support negative numbers
+ */
+
+static int jsmn_atoi ( char *s)
+{
+
+   int i =0;
+   int sign = 1;
+   while (ISSPACE(*s))
+   {
+      s++;
+   }
+
+   while (ISDIGIT(*s))
+   {
+      i=i*10+(*s-'0');
+      s++;
+   }
+   return(i*sign);
+
+}
 /**
  * Implement of strncmp function.
  */
@@ -24,158 +53,191 @@ static int jsmn_strncmp(const char *s1, const char *s2, size_t len)
    }
    return(*s1-*s2);
 }
-/**
- * Find an element of array, specified by parent token id and element number
- * and return a number of token in tokens array
+
+/*
+ * todo check every iteration on '\0'
  */
-static int jsmn_get_array_value_by_tokens (jsmntok_t * pTok, int numOfTokens, int parentToken, int numOfElement)
+static char * nextNode(char * previousNode)
 {
-   int crntToken;
-   int cur_num=0;
+   char * next = previousNode;
 
-   if (parentToken < 0) return -1; // Incorrect path or path not found
-   if (pTok->type != JSMN_ARRAY) return -1; //Path is not array
-   if (pTok->size < 1) return -1; //Path is not ended by array or array is empty
 
-   for (crntToken=parentToken; crntToken<numOfTokens; crntToken++) // перебираем все токены, начиная с родительского
+
+   if (*next == '.')
    {
-      if (pTok->parent == parentToken)
+      next++;
+   }
+   else if (*next == '[')
+   {
+      next++;
+   }
+   else if (ISDIGIT(*next))
+   {
+      while(ISDIGIT(*next))
       {
-         if (cur_num++== numOfElement)
-            return crntToken;
+         next++;
       }
-      pTok++;
+      if (*next == ']')
+      {
+         next++;
+         if (*next == '.')
+         {
+            next++;
+         }
+      }
+   }
+   else if (ISALNUM(*next))
+   {
+      while(ISALNUM(*next) || ISSPACE(*next))
+      {
+         next++;
+      }
+   }
+   else if (*next == '$')
+   {
+      next++;
+   }
+   else
+   {
+      next = NULL;
    }
 
-   return -1; //Array's element not reached...
+   return next;
 }
+
+static int lenOFNode(char * node)
+{
+   int len = 0;
+   if (*node == '$')//если узел -корень
+   {
+      len = 1;
+   }
+   else if(*node == '.')
+   {
+      len = 1;
+
+   }
+   else if (*node == '[')
+   {
+      len = 1;
+   }
+   else if (ISALNUM(*node) || ISSPACE(*node))
+   {
+      while(ISALNUM(*node) || ISSPACE(*node))
+      {
+         len++;
+         node++;
+      }
+   }
+   else
+   {
+      len = 0;
+   }
+   return len;
+}
+
 /**
  * Find a key, specified by path and return a number of token in tokens array
  */
-/*
- * todo некорректно пропускается пустой элемент массива,
- * рассмотреть такой вариант адресации элементов
- * let obj = json?["workplan"]?["presets"]?[1]?["id"] as? Int
- */
-static int jsmn_find_key(const char *pJSON, jsmntok_t * pTok, int numOfTokens, char * pPath)
+static int findTokenByParentAndName(const char *pJSON, jsmntok_t * pTok, int par_token, char * path, int numOfTokens)
 {
-   char *p = pPath;
-   int level=0;
-   int crnLevel = 0;
-   int crntToken=0;
-   jsmntok_t * pDTok = pTok;
-   if (*(p)!='/')
-      return -1; // Incorrect path
-   int parent = -1;
-   while (*p)
-   {
-      if (*(p++) == '/')
-         level++;
-   }
-   p = pPath;
+   int result =-1;
+   int token = 0;
+   int childEl = 0;
+   int arrayEl;
 
-   for (crntToken=0; crntToken<numOfTokens; crntToken++)
+   if ((*path == '.') || (*path == '['))
    {
-      pDTok = pTok + crntToken;
-      //Found token with needed parrent and name
-      if(
-         (jsmn_strncmp((pJSON+(pDTok)->start), p, (pDTok)->end - (pDTok)->start) == 0 \
-            && ((*(p+ ((pDTok)->end - (pDTok)->start)) == '/' )\
-               || (*(p+ ((pDTok)->end - (pDTok)->start)) == '\0' ))\
-         ) \
-         || ( (*p=='\\') && ( *(p+1)=='[') && ISDIGIT(*(p+2)) )\
-         || ((*(pJSON+(pDTok)->start) == '{') || (*(pJSON+(pDTok)->start) == '}'))  \
-      )
+      for (token = par_token+1; token<= numOfTokens; token++)
       {
-         if (parent == pDTok->parent)
+         if ((pTok+token)->parent == par_token) //Перебираем токены, которые являются дочерними к par_token
          {
-            parent = crntToken;
+            result = token;
+            break;
+         }
 
-            if (*(pJSON+(pDTok)->start) == '{')
+      }
+   }
+   else if (ISDIGIT(*path)) //Элемент массива
+   {
+      arrayEl = jsmn_atoi(path);
+      if (arrayEl < (pTok+par_token)->size)
+      {
+         for (token = par_token+1; token < numOfTokens && childEl <= arrayEl; token++)
+         {
+            if ((pTok+token)->parent == par_token) //Перебираем токены, которые являются дочерними к par_token
             {
-               crnLevel++;
-               p++;
-            }
-            else if (*(pJSON+(pDTok)->start) == '}')
-            {
-               crnLevel--;
-               p++;
-            }
-            else if (jsmn_strncmp((pJSON+(pDTok)->start), p, (pDTok)->end - (pDTok)->start) == 0)
-            {
-               if (crnLevel == level)
-                  return crntToken;
-               while (*++p!='/' || *p == '\0');
-            }
-            else
-            {
-               if (( (*p=='\\') && ( *(p+1)=='[') ) && ISDIGIT(*(p+2)))
+               if (childEl == arrayEl)
                {
-                  crntToken = jsmn_get_array_value_by_tokens(pDTok, numOfTokens, crntToken, atoi(p+2));
-                  if (crntToken<0)
-                  {
-                     return -1; //wrong path or
-                  }
+                  result=token;
+                  break;
                }
+               childEl++;
             }
          }
       }
-
    }
-
-
-   return -1; // Path not found
-
-}
-
-/**
- * Find a value, specified by path and return a number of token in tokens array
- */
-int jsmn_get_value (const char *pJSON, jsmntok_t * pTok, int numOfTokens, char * pPath)
-{
-   int crntToken;
-   int parentToken = jsmn_find_key(pJSON, pTok, numOfTokens, pPath);
-
-   if (parentToken < 1) return -1; // Incorrect path or path not found
-
-   if ((pTok+parentToken)->size!=1) return -1; //Path is not ended by key
-
-   for (crntToken=parentToken; crntToken<numOfTokens; crntToken++)
+   else if (ISALNUM(*path))
    {
-      if ((pTok+crntToken)->parent == parentToken)
-         return crntToken;
-   }
 
-   return -1; //Something was wrong...
-}
-
-
-
-
-
-/**
- * Find an element of array, specified by path and element number
- * and return a number of token in tokens array
- */
-int jsmn_get_array_value (const char *pJSON, jsmntok_t * pTok, int numOfTokens, char * pPath, int numOfElement)
-{
-   int crntToken;
-   int cur_num=0;
-   int parentToken = jsmn_get_value(pJSON, pTok, numOfTokens, pPath);
-
-   if (parentToken < 0) return -1; // Incorrect path or path not found
-   if ((pTok+parentToken)->type != JSMN_ARRAY) return -1; //Path is not array
-   if ((pTok+parentToken)->size < 1) return -1; //Path is not ended by array or array is empty
-
-   for (crntToken=parentToken; crntToken<numOfTokens; crntToken++)
-   {
-      if ((pTok+crntToken)->parent == parentToken)
+      for (token = par_token+1; token < numOfTokens && childEl < (pTok+par_token)->size; token++)
       {
-         if (cur_num++== numOfElement)
-            return crntToken;
+         if ((pTok+token)->parent == par_token) //Перебираем токены, которые являются дочерними к par_token
+         {
+            if (lenOFNode(path) == (pTok+token)->end-((pTok+token)->start)) //Быстрое сравнение длины
+            {
+               if (jsmn_strncmp((pJSON+(pTok+token)->start), path, ((pTok+token)->end-((pTok+token)->start))) == 0)
+               {
+                  result=token;
+                  break;
+               }
+            }
+            childEl++;
+         }
+
       }
    }
+   else if (*path == '$')
+   {
+      result = -1;
+   }
 
-   return -1; //Array's element not reached...
+   return result;
 }
+
+
+int jsmn_get_value(const char *js, jsmntok_t *tokens, unsigned int num_tokens,  char * pPath)
+{
+   char *path = pPath;
+   int token =-1;
+   if (*path == '$')
+   {
+      path = nextNode(path);
+      token = findTokenByParentAndName(js, tokens, token, path, num_tokens); //Must be 0
+      path = nextNode(path);
+      while (*path && token>=0 )
+      {
+
+         token = findTokenByParentAndName(js, tokens, token, path, num_tokens);
+         path = nextNode(path);
+
+      }
+      if (token>=0)
+      {
+         volatile jsmntok_t * parent = tokens+((tokens +token)->parent);
+         if (parent->type == JSMN_OBJECT)
+         {
+            token = findTokenByParentAndName(js, tokens, token, ".", num_tokens);
+         }
+      }
+   }
+   else
+   {
+      token = -2;
+   }
+   return token;
+
+}
+
+
 #endif
