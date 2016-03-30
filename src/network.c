@@ -181,7 +181,7 @@ static uint8_t parseIpv4Config(char *data, jsmntok_t *jSMNtokens, jsmnerr_t resu
    int length;
 #if (IPV4_SUPPORT == ENABLED)
 
-   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/ipv4/usedhcp");
+   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.ipv4.usedhcp");
    if ((tokNum >= 0) & (strncmp (&data[jSMNtokens[tokNum].start], "true" ,4) == 0))
    {
       networkContext.useDhcp = TRUE;
@@ -189,7 +189,7 @@ static uint8_t parseIpv4Config(char *data, jsmntok_t *jSMNtokens, jsmnerr_t resu
    }
 
 
-   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/ipv4/address");
+   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.ipv4.address");
    if (tokNum >= 0)
    {
       length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
@@ -203,7 +203,7 @@ static uint8_t parseIpv4Config(char *data, jsmntok_t *jSMNtokens, jsmnerr_t resu
          xprintf("Warning: wrong ip address in config file \"/config/lan.json\" ");
       }
    }
-   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/ipv4/netmask");
+   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.ipv4.netmask");
    if (tokNum >= 0)
    {
       length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
@@ -219,7 +219,7 @@ static uint8_t parseIpv4Config(char *data, jsmntok_t *jSMNtokens, jsmnerr_t resu
       }
    }
 
-   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/ipv4/gateway");
+   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.ipv4.gateway");
    if (tokNum >= 0)
    {
       length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
@@ -233,7 +233,7 @@ static uint8_t parseIpv4Config(char *data, jsmntok_t *jSMNtokens, jsmnerr_t resu
          xprintf("Warning: wrong default gateway in config file \"/config/lan.json\" ");
       }
    }
-   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/ipv4/primarydns");
+   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.ipv4.primarydns");
    if (tokNum >= 0)
    {
       length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
@@ -247,7 +247,7 @@ static uint8_t parseIpv4Config(char *data, jsmntok_t *jSMNtokens, jsmnerr_t resu
          xprintf("Warning: wrong primary dns in config file \"/config/lan.json\" ");
       }
    }
-   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/ipv4/secondarydns");
+   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.ipv4.secondarydns");
    if (tokNum >= 0)
    {
       length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
@@ -311,7 +311,7 @@ static error_t parseNetwork(char *data, size_t len, jsmn_parser* jSMNparser, jsm
    networkContext.useIpV6 = FALSE;
    networkContext.useDhcp = FALSE;
    resultCode = jsmn_parse(jSMNparser, data, len, jSMNtokens, CONFIG_JSMN_NUM_TOKENS);
-   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/mac\0\0");
+   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.mac\0\0");
    if (tokNum >= 0)
    {
       length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
@@ -332,7 +332,7 @@ static error_t parseNetwork(char *data, size_t len, jsmn_parser* jSMNparser, jsm
    {
       useDefaultMacAddress();
    }
-   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/hostname");
+   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.hostname");
    if (tokNum >= 0)
    {
       length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
@@ -348,7 +348,7 @@ static error_t parseNetwork(char *data, size_t len, jsmn_parser* jSMNparser, jsm
       useDefaultHostName();
    }
 
-   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/ipv4/useipv4");
+   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.ipv4.useipv4");
    if (tokNum >= 0)
    {
       if (strncmp (&data[jSMNtokens[tokNum].start], "true" ,4) == 0)
@@ -365,7 +365,7 @@ static error_t parseNetwork(char *data, size_t len, jsmn_parser* jSMNparser, jsm
 
    }
 #if IPV6_SUPPORT == ENABLED
-   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/ipv6/useipv6");
+   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.ipv6.useipv6");
    if (tokNum >= 0)
    {
       if (strncmp (&data[jSMNtokens[tokNum].start], "true" ,4) == 0)
@@ -381,7 +381,7 @@ static error_t parseNetwork(char *data, size_t len, jsmn_parser* jSMNparser, jsm
       ipv6_use_default_configs();
    }
 #endif
-   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/needSave");
+   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.needSave");
    if (tokNum > 0)
    {
       if (strncmp (&data[jSMNtokens[tokNum].start], "true" ,4) == 0)
@@ -638,7 +638,7 @@ static uint8_t parseIpv6Config(char *data, jsmntok_t *jSMNtokens, jsmnerr_t resu
    int length;
 
 
-   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/ipv6/use slaac");
+   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.ipv6.use slaac");
    if ((tokNum >= 0) & (strncmp (&data[jSMNtokens[tokNum].start], "true" ,4) == 0))
    {
       slaacGetDefaultSettings(&slaacSettings);

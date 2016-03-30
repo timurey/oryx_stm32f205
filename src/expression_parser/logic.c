@@ -42,7 +42,7 @@ static error_t parseRules (char *data, size_t len, jsmn_parser* jSMNparser, jsmn
    {
       for (i=0;i<EXPRESSION_MAX_COUNT;i++)
       {
-         sprintf(&path[0],"/rules/\\[%d\\]/expression",i);
+         sprintf(&path[0],"$.rules.[%d].expression",i);
          tokNum = jsmn_get_value(data, jSMNtokens, resultCode, &path[0]);
          if(tokNum>0)
          {
@@ -69,7 +69,7 @@ static error_t parseRules (char *data, size_t len, jsmn_parser* jSMNparser, jsmn
             }
 
          }
-         sprintf(&path[0],"/rules/\\[%d\\]/rules",i);
+         sprintf(&path[0],"$.rules.[%d].rules",i);
          tokNum = jsmn_get_value(data, jSMNtokens, resultCode, &path[0]);
          if(tokNum>0)
          {

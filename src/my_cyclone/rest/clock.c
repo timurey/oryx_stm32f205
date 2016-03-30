@@ -6,7 +6,7 @@
  */
 #include "clock.h"
 #include "configs.h"
-#include <ctype.h>
+#include "macros.h"
 
 jsmn_parser parser;
 jsmntok_t tokens[15]; // a number >= total number of tokens
@@ -14,19 +14,7 @@ jsmntok_t tokens[15]; // a number >= total number of tokens
 
 #define HOURS(a) (a*60*60)
 #define MINUTES(a) (a*60)
-#define __ctype_lookup(__c) ((__ctype_ptr__+sizeof(""[__c]))[(int)(__c)])
 
-#define  isalpha(__c)   (__ctype_lookup(__c)&(_U|_L))
-#define  isupper(__c)   ((__ctype_lookup(__c)&(_U|_L))==_U)
-#define  islower(__c)   ((__ctype_lookup(__c)&(_U|_L))==_L)
-#define  isdigit(__c)   (__ctype_lookup(__c)&_N)
-#define  isxdigit(__c)  (__ctype_lookup(__c)&(_X|_N))
-#define  isspace(__c)   (__ctype_lookup(__c)&_S)
-#define ispunct(__c) (__ctype_lookup(__c)&_P)
-#define isalnum(__c) (__ctype_lookup(__c)&(_U|_L|_N))
-#define isprint(__c) (__ctype_lookup(__c)&(_P|_U|_L|_N|_B))
-#define  isgraph(__c)   (__ctype_lookup(__c)&(_P|_U|_L|_N))
-#define iscntrl(__c) (__ctype_lookup(__c)&_C)
 
 register_rest_function(clock, "/clock", NULL, NULL, &restGetClock, &restPostClock, &restPutClock, &restDeleteClock);
 register_defalt_config( "{\"timezone\":\"GMT+0500 (YEKT)\"}");
@@ -93,7 +81,7 @@ static error_t parseClock (char *data, size_t len, jsmn_parser* jSMNparser, jsmn
    if (resultCode>0)
    {
 
-      tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/timezone");
+      tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.timezone");
 
       if (tokNum>0)
       {
@@ -103,27 +91,27 @@ static error_t parseClock (char *data, size_t len, jsmn_parser* jSMNparser, jsmn
             memcpy(&clockContext.tz, &data[jSMNtokens[tokNum].start], length);
             clockContext.tz[length] = '\0';
             data[jSMNtokens[tokNum].end] = '\0';
-            RTC_SetTimezone(&clockContext.tz);
+            RTC_SetTimezone(&(clockContext.tz[0]));
             error = NO_ERROR;
          }
 
       }
 
-      tokNum=jsmn_get_value(data, jSMNtokens, resultCode, "/unixtime");
+      tokNum=jsmn_get_value(data, jSMNtokens, resultCode, "$.unixtime");
       if (tokNum>0)
       {
-         if(isdigit(jSMNtokens[tokNum].start))
+         if(ISDIGIT(*(data+jSMNtokens[tokNum].start)))
          {
             length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
             clockContext.unixtime=atoi(&data[jSMNtokens[tokNum].start]);
             xprintf("unixtime: %lU\r\n", clockContext.unixtime);
-            RTC_CalendarConfig(clockContext.unixtime);
+            RTC_CalendarConfig(clockContext.unixtime+RTC_GetTimezone());
             error = NO_ERROR;
          }
 
       }
 
-      tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/needSave");
+      tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.needSave");
       if (tokNum > 0)
       {
          if (strncmp (&data[jSMNtokens[tokNum].start], "true" ,4) == 0)

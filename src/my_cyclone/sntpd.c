@@ -170,7 +170,7 @@ static error_t parseNTP (char *data, size_t len, jsmn_parser* jSMNparser, jsmnto
    int i;
    int length;
    int period = 0;
-
+   char path[] = "$.servers[xxx]";
    int servers =0;
    ntpContext.needSave = FALSE;
    ntpContext.enabled = TRUE;
@@ -182,7 +182,8 @@ static error_t parseNTP (char *data, size_t len, jsmn_parser* jSMNparser, jsmnto
 
       for (i=0;i<NUM_OF_NTP_SERVERS;i++)
       {
-         tokNum = jsmn_get_array_value(data, jSMNtokens, resultCode, "/servers", i);
+         sprintf(&path[0], "$.servers[%d]", i);
+         tokNum = jsmn_get_value(data, jSMNtokens, resultCode, &path[0]);
          if ((!i) && (tokNum<1))
          {
             // If it is no data in array
@@ -220,7 +221,7 @@ static error_t parseNTP (char *data, size_t len, jsmn_parser* jSMNparser, jsmnto
 
 
 
-   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/period");
+   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.period");
 
    if (tokNum>0)
    {
@@ -235,7 +236,7 @@ static error_t parseNTP (char *data, size_t len, jsmn_parser* jSMNparser, jsmnto
    }
 
 
-   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/needSave");
+   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.needSave");
    if (tokNum > 0)
    {
       if (strncmp (&data[jSMNtokens[tokNum].start], "true" ,4) == 0)
@@ -244,7 +245,7 @@ static error_t parseNTP (char *data, size_t len, jsmn_parser* jSMNparser, jsmnto
       }
    }
 
-   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/enabled");
+   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.enabled");
    if (tokNum > 0)
    {
       if (strncmp (&data[jSMNtokens[tokNum].start], "false" ,5) == 0)

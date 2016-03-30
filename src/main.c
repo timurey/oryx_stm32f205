@@ -20,31 +20,6 @@
 #include "cli_hal.h"
 
 
-/*For jsmn
- *
- */
-#include "jsmn_extras.h"
-char object[]="{\"sensors\":{\"temperature\":{\"onewire\":[{\"serial\":\"28:3A:CF:7B:04:00:00:D3\",\"name\":\"Температура воздуха\",\"place\":\"room\"},{\"serial\":\"10:86:85:9E:02:08:00:77\",\"name\":\"air\",\"place\":\"kitchen\"},{\"serial\":\"28:A7:74:7c:04:00:00:91\",\"name\":\"hot water\",\"place\":\"bath room\"}],\"analog\":[]},\"humidity\":{\"onewire\":[{\"id\":\"12345\",\"name\":\"Humidity\",\"place\":\"living room\"}]},\"inputs\":{\"analog\":[{\"serial\":\"34:51:0D:31:32:39:32:00\",\"name\":\"water level\",\"place\":\"bath\"}],\"digital\":[{\"serial\":\"34:51:0D:31:32:39:32:05\",\"name\":\"bath is full\",\"place\":\"bath\"}],\"dimmer\":[{\"serial\":\"34:51:0D:31:32:39:32:04\",\"name\":\"light dimmer\",\"place\":\"bedroom\"}],\"sequential\":[{\"serial\":\"34:51:0D:31:32:39:32:06\",\"name\":\"door is opened\",\"place\":\"room\"}]}},\"comment\":\"serial is hexademical: 00, 01..09, 0a,0b..0f\"}";
-char path[]="$.sensors.temperature.onewire[0].serial";
-#define CONFIG_JSMN_NUM_TOKENS 256
-#define STRLEN(s) (sizeof(s)/sizeof(s[0]))
-static jsmn_parser jSMNparser;
-static jsmntok_t jSMNtokens[CONFIG_JSMN_NUM_TOKENS];
-
-error_t configInit(void)
-{
-   int toknum;
-   jsmnerr_t resultCode;
-
-   jsmn_init(&jSMNparser);
-   resultCode = jsmn_parse(jSMNparser, &object[0], STRLEN(object), jSMNtokens, CONFIG_JSMN_NUM_TOKENS);
-   toknum = findvalue(jSMNtokens, &object[0], STRLEN(object), &path);
-   return NO_ERROR;
-}
-
-/*
- * End for jsmn
- */
 // ----- main() ---------------------------------------------------------------
 
 int main(void)
@@ -54,7 +29,6 @@ int main(void)
    RTC_Init();
    /* Configure the system clock to 120 MHz */
    SystemClock_Config();
-   configInit();
 
    osCreateTask("Blinker", vBlinker, NULL, 38, 4);
    osCreateTask("startup", startup_task, NULL, configMINIMAL_STACK_SIZE*2, 3);

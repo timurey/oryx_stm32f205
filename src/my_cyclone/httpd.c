@@ -51,7 +51,7 @@ static error_t parseHttpdConfig (char *data, size_t len, jsmn_parser* jSMNparser
    resultCode = jsmn_parse(jSMNparser, data, len, jSMNtokens, CONFIG_JSMN_NUM_TOKENS);
    if (resultCode >0 )
    {
-      tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/config/port");
+      tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.config.port");
       if (tokNum >= 0)
       {
          httpServerSettings.port = atoi(&data[jSMNtokens[tokNum].start]);
@@ -59,7 +59,7 @@ static error_t parseHttpdConfig (char *data, size_t len, jsmn_parser* jSMNparser
 
       }
 
-      tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/config/max connections");
+      tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.config.max connections");
       if (tokNum >= 0)
       {
          httpServerSettings.maxConnections = MIN (atoi(&data[jSMNtokens[tokNum].start]), APP_HTTP_MAX_CONNECTIONS);
@@ -67,7 +67,7 @@ static error_t parseHttpdConfig (char *data, size_t len, jsmn_parser* jSMNparser
 
       }
 
-      tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/config/root directory");
+      tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.config.root directory");
       if (tokNum >= 0)
       {
          length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
@@ -81,7 +81,7 @@ static error_t parseHttpdConfig (char *data, size_t len, jsmn_parser* jSMNparser
 
       }
 #if (HTTP_SERVER_GZIPED_FILES == ENABLED)
-      tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/config/gziped directory");
+      tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.config.gziped directory");
       if (tokNum >= 0)
       {
          length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
@@ -97,7 +97,7 @@ static error_t parseHttpdConfig (char *data, size_t len, jsmn_parser* jSMNparser
 #else
       httpEnable++;
 #endif
-      tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "/config/default document");
+      tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.config.default document");
       if (tokNum >= 0)
       {
          length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
