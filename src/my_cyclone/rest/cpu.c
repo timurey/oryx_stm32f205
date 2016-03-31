@@ -30,11 +30,21 @@ error_t restGetCpuStatus(HttpConnection *connection, RestApi_t* RestApi)
    error_t error = NO_ERROR;
 
    volatile size_t free = xPortGetFreeHeapSize();
+   if (RestApi->restVersion == 1)
+   {
    p+=snprintf(restBuffer+p, sizeof(restBuffer)-p, "{\"cpu\": {\"load\" : %u, \"clock\" : %u, \"temperature\" : %u}, ", GetCPU_Load(), (unsigned int)SystemCoreClock, 38);
    p+=snprintf(restBuffer+p, sizeof(restBuffer)-p, "\"memory\" : {\"total\" : %lu, \"heap\" : %lu, \"free\" : %lu, \"usage\" : %lu}, ", 128*1024ul, (unsigned long int)configTOTAL_HEAP_SIZE, (unsigned long)free, (unsigned long int)configTOTAL_HEAP_SIZE-(unsigned long)free);
    p+=snprintf(restBuffer+p, sizeof(restBuffer)-p, "\"uid\" : \"%s\" }\r\n",  get_uuid(NULL) ) ; //Print full UUID
 
    connection->response.contentType = mimeGetType(".json");
+   }
+   else    if (RestApi->restVersion == 2)
+   {
+      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p, "{\"data\":{\"type:\":\"cpu\",\"id\":0,\"attributes\": {\"load\" : %u, \"clock\" : %u, \"temperature\" : %u, ", GetCPU_Load(), (unsigned int)SystemCoreClock, 38);
+         p+=snprintf(restBuffer+p, sizeof(restBuffer)-p, "\"total\" : %lu, \"heap\" : %lu, \"free\" : %lu, \"usage\" : %lu,", 128*1024ul, (unsigned long int)configTOTAL_HEAP_SIZE, (unsigned long)free, (unsigned long int)configTOTAL_HEAP_SIZE-(unsigned long)free);
+         p+=snprintf(restBuffer+p, sizeof(restBuffer)-p, "\"uid\" : \"%s\" }}}\r\n",  get_uuid(NULL) ) ; //Print full UUID
+
+   }
    connection->response.noCache = TRUE;
 
    error=rest_200_ok(connection, &restBuffer[0]);

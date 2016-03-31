@@ -35,10 +35,12 @@ static void initOutput(executor_t * currentExecutor)
 }
 error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCurrentExecutor, jsmnerr_t * resultCode, uint8_t * pos)
 {
-   int tokNum;
+#define MAXLEN 64
+   char tmp_str[MAXLEN];
+   char * str = &tmp_str[0];
+   int len;
    int i, j=0;
    char path[64];
-   int length;
    uint8_t dac_used =0;
    uint8_t flag = 0;
    error_t error;
@@ -50,27 +52,24 @@ error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCur
        * Code for digital outputs
        */
       sprintf(&path[0],"$.executors.output.digital[%d].serial",i);
-      tokNum = jsmn_get_value(data, jSMNtokens, *resultCode, &path[0]);
-      if(tokNum>0)
+      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      if(len>0)
       {
-         length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
-         error = serialStringToHex( &data[jSMNtokens[tokNum].start], length, &currentExecutor->serial[0], OUTPUT_SERIAL_LENGTH);
+         error = serialStringToHex(str, len, &currentExecutor->serial[0], OUTPUT_SERIAL_LENGTH);
          if (error == NO_ERROR)
          {
             flag++;
          }
       }
       sprintf(&path[0],"$.executors.output.digital[%d].name",i);
-      tokNum = jsmn_get_value(data, jSMNtokens, *resultCode, &path[0]);
-      if(tokNum>0)
+      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      if(len>0)
       {
-         length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
-
-         currentExecutor->name = sensorsFindName(&data[jSMNtokens[tokNum].start], length);
+         currentExecutor->name = sensorsFindName(str, len);
 
          if (currentExecutor->name == 0)
          {
-            currentExecutor->name = sensorsAddName(&data[jSMNtokens[tokNum].start], length);
+            currentExecutor->name = sensorsAddName(str, len);
             flag++;
             if (currentExecutor->name == 0)
             {
@@ -79,16 +78,15 @@ error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCur
          }
       }
       sprintf(&path[0],"$.executors.output.digital[%d].place",i);
-      tokNum = jsmn_get_value(data, jSMNtokens, *resultCode, &path[0]);
-      if(tokNum>0)
+      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      if(len>0)
       {
-         length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
 
-         currentExecutor->place = sensorsFindPlace(&data[jSMNtokens[tokNum].start], length);
+         currentExecutor->place = sensorsFindPlace(str, len);
 
          if (currentExecutor->place==0)
          {
-            currentExecutor->place = sensorsAddPlace(&data[jSMNtokens[tokNum].start], length);
+            currentExecutor->place = sensorsAddPlace(str, len);
             flag++;
             if (currentExecutor->place == 0)
             {
@@ -117,27 +115,27 @@ error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCur
        * Code for analog outnputs
        */
       sprintf(&path[0],"$.executors.output.analog[%d].serial",i);
-      tokNum = jsmn_get_value(data, jSMNtokens, *resultCode, &path[0]);
-      if(tokNum>0)
+      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      if(len>0)
       {
-         length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
-         error = serialStringToHex( &data[jSMNtokens[tokNum].start], length, &currentExecutor->serial[0], OUTPUT_SERIAL_LENGTH);
+
+         error = serialStringToHex( str, len, &currentExecutor->serial[0], OUTPUT_SERIAL_LENGTH);
          if (error == NO_ERROR)
          {
             flag++;
          }
       }
       sprintf(&path[0],"$.executors.output.analog[%d].name",i);
-      tokNum = jsmn_get_value(data, jSMNtokens, *resultCode, &path[0]);
-      if(tokNum>0)
+      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      if(len>0)
       {
-         length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
 
-         currentExecutor->name = sensorsFindName(&data[jSMNtokens[tokNum].start], length);
+
+         currentExecutor->name = sensorsFindName(str, len);
 
          if (currentExecutor->name == 0)
          {
-            currentExecutor->name = sensorsAddName(&data[jSMNtokens[tokNum].start], length);
+            currentExecutor->name = sensorsAddName(str, len);
             flag++;
             if (currentExecutor->name == 0)
             {
@@ -146,16 +144,16 @@ error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCur
          }
       }
       sprintf(&path[0],"$.executors.output.analog[%d].place",i);
-      tokNum = jsmn_get_value(data, jSMNtokens, *resultCode, &path[0]);
-      if(tokNum>0)
+      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      if(len>0)
       {
-         length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
 
-         currentExecutor->place = sensorsFindPlace(&data[jSMNtokens[tokNum].start], length);
+
+         currentExecutor->place = sensorsFindPlace(str, len);
 
          if (currentExecutor->place==0)
          {
-            currentExecutor->place = sensorsAddPlace(&data[jSMNtokens[tokNum].start], length);
+            currentExecutor->place = sensorsAddPlace(str, len);
             flag++;
             if (currentExecutor->place == 0)
             {
@@ -183,27 +181,27 @@ error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCur
        * Code for dimmers outputs
        */
       sprintf(&path[0],"$.executors.output.dimmer[%d].serial",i);
-      tokNum = jsmn_get_value(data, jSMNtokens, *resultCode, &path[0]);
-      if(tokNum>0)
+      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      if(len>0)
       {
-         length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
-         error = serialStringToHex( &data[jSMNtokens[tokNum].start], length, &currentExecutor->serial[0], OUTPUT_SERIAL_LENGTH);
+
+         error = serialStringToHex( str, len, &currentExecutor->serial[0], OUTPUT_SERIAL_LENGTH);
          if (error == NO_ERROR)
          {
             flag++;
          }
       }
       sprintf(&path[0],"$.executors.output.dimmer[%d].name",i);
-      tokNum = jsmn_get_value(data, jSMNtokens, *resultCode, &path[0]);
-      if(tokNum>0)
+      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      if(len>0)
       {
-         length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
 
-         currentExecutor->name = sensorsFindName(&data[jSMNtokens[tokNum].start], length);
+
+         currentExecutor->name = sensorsFindName(str, len);
 
          if (currentExecutor->name == 0)
          {
-            currentExecutor->name = sensorsAddName(&data[jSMNtokens[tokNum].start], length);
+            currentExecutor->name = sensorsAddName(str, len);
             flag++;
             if (currentExecutor->name == 0)
             {
@@ -212,16 +210,16 @@ error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCur
          }
       }
       sprintf(&path[0],"$.executors.output.dimmer[%d].place",i);
-      tokNum = jsmn_get_value(data, jSMNtokens, *resultCode, &path[0]);
-      if(tokNum>0)
+      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      if(len>0)
       {
-         length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
 
-         currentExecutor->place = sensorsFindPlace(&data[jSMNtokens[tokNum].start], length);
+
+         currentExecutor->place = sensorsFindPlace(str, len);
 
          if (currentExecutor->place==0)
          {
-            currentExecutor->place = sensorsAddPlace(&data[jSMNtokens[tokNum].start], length);
+            currentExecutor->place = sensorsAddPlace(str, len);
             flag++;
             if (currentExecutor->place == 0)
             {
@@ -249,27 +247,27 @@ error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCur
        * Code for HTTP commands
        */
       sprintf(&path[0],"$.executors.output.http[%d].serial",i);
-      tokNum = jsmn_get_value(data, jSMNtokens, *resultCode, &path[0]);
-      if(tokNum>0)
+      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      if(len>0)
       {
-         length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
-         error = serialStringToHex( &data[jSMNtokens[tokNum].start], length, &currentExecutor->serial[0], OUTPUT_SERIAL_LENGTH);
+
+         error = serialStringToHex( str, len, &currentExecutor->serial[0], OUTPUT_SERIAL_LENGTH);
          if (error == NO_ERROR)
          {
             flag++;
          }
       }
       sprintf(&path[0],"$.executors.output.http[%d].name",i);
-      tokNum = jsmn_get_value(data, jSMNtokens, *resultCode, &path[0]);
-      if(tokNum>0)
+      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      if(len>0)
       {
-         length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
 
-         currentExecutor->name = sensorsFindName(&data[jSMNtokens[tokNum].start], length);
+
+         currentExecutor->name = sensorsFindName(str, len);
 
          if (currentExecutor->name == 0)
          {
-            currentExecutor->name = sensorsAddName(&data[jSMNtokens[tokNum].start], length);
+            currentExecutor->name = sensorsAddName(str, len);
             flag++;
             if (currentExecutor->name == 0)
             {
@@ -278,16 +276,16 @@ error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCur
          }
       }
       sprintf(&path[0],"$.executors.output.http[%d].place",i);
-      tokNum = jsmn_get_value(data, jSMNtokens, *resultCode, &path[0]);
-      if(tokNum>0)
+      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      if(len>0)
       {
-         length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
 
-         currentExecutor->place = sensorsFindPlace(&data[jSMNtokens[tokNum].start], length);
+
+         currentExecutor->place = sensorsFindPlace(str, len);
 
          if (currentExecutor->place==0)
          {
-            currentExecutor->place = sensorsAddPlace(&data[jSMNtokens[tokNum].start], length);
+            currentExecutor->place = sensorsAddPlace(str, len);
             flag++;
             if (currentExecutor->place == 0)
             {

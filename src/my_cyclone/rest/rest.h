@@ -12,7 +12,7 @@
 #include "jsmn_extras.h"
 #define SIZE_OF_REST_BUFFER 4096
 
-#define REST_JSON_TYPE JSON
+//#define REST_JSON_TYPE JSON
 //#define REST_JSON_TYPE JSON_API
 extern char restBuffer[SIZE_OF_REST_BUFFER];
 extern OsMutex restMutex;

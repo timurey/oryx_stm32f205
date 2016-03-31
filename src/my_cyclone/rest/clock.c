@@ -34,26 +34,27 @@ error_t restGetClock(HttpConnection *connection, RestApi_t* RestApi)
 
    (void) RestApi;
    getCurrentDate(&time);
-#if (REST_JSON_TYPE == JSON)
-   p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"{\"clock\":{\r\n\"unixtime\":%lu,\r\n", getCurrentUnixTime());
-   p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"localtime\":\"%s %s\",\r\n",
-      htmlFormatDate(&time, &buf[0]),
-      pRTC_GetTimezone()
-   );
-   p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"time\":\"%02d:%02d:%02d\",\r\n", time.hours, time.minutes, time.seconds);
-   p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"date\":\"%04d.%02d.%02d\",\r\n", time.year,time.month,time.day);
-   p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"timezone\":\"%s\"}}\r\n",pRTC_GetTimezone());
-   connection->response.contentType = mimeGetType(".json");
-#else
-#if(REST_JSON_TYPE == JSON_API)
-   p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"{\"data\":{\"type\":\"clock\", \"id\":0,\"attributes\":{");
-   p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"unixtime\":%lu,\"localtime\":\"%s %s\",\"time\":\"%02d:%02d:%02d\",",getCurrentUnixTime(),htmlFormatDate(&time, &buf[0]),
-      pRTC_GetTimezone(),time.hours, time.minutes, time.seconds);
-   p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"date\":\"%04d.%02d.%02d\",",time.year,time.month,time.day);
-   p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"timezone\":\"%s\"}}}",pRTC_GetTimezone());
-   connection->response.contentType = mimeGetType(".apijson");
-#endif //JSON_API
-#endif //JSON
+   if (RestApi->restVersion == 1)
+   {
+      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"{\"clock\":{\r\n\"unixtime\":%lu,\r\n", getCurrentUnixTime());
+      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"localtime\":\"%s %s\",\r\n",
+         htmlFormatDate(&time, &buf[0]),
+         pRTC_GetTimezone()
+      );
+      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"time\":\"%02d:%02d:%02d\",\r\n", time.hours, time.minutes, time.seconds);
+      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"date\":\"%04d.%02d.%02d\",\r\n", time.year,time.month,time.day);
+      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"timezone\":\"%s\"}}\r\n",pRTC_GetTimezone());
+      connection->response.contentType = mimeGetType(".json");
+   }
+   else if (RestApi->restVersion == 2)
+   {
+      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"{\"data\":{\"type\":\"clock\", \"id\":0,\"attributes\":{");
+      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"unixtime\":%lu,\"localtime\":\"%s %s\",\"time\":\"%02d:%02d:%02d\",",getCurrentUnixTime(),htmlFormatDate(&time, &buf[0]),
+         pRTC_GetTimezone(),time.hours, time.minutes, time.seconds);
+      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"date\":\"%04d.%02d.%02d\",",time.year,time.month,time.day);
+      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"timezone\":\"%s\"}}}",pRTC_GetTimezone());
+      connection->response.contentType = mimeGetType(".apijson");
+   }
    connection->response.noCache = TRUE;
 
    error=rest_200_ok(connection, &restBuffer[0]);
@@ -70,55 +71,34 @@ error_t restPostClock(HttpConnection *connection, RestApi_t* RestApi)
 static error_t parseClock (char *data, size_t len, jsmn_parser* jSMNparser, jsmntok_t *jSMNtokens)
 {
    jsmnerr_t resultCode;
-   int tokNum;
-   jsmn_init(jSMNparser);
-   int length;
+   int strLen = 0;
+   char str[12];
    error_t error = ERROR_UNSUPPORTED_REQUEST;
 
+   jsmn_init(jSMNparser);
    clockContext.needSave = FALSE;
 
    resultCode = jsmn_parse(jSMNparser, data, len, jSMNtokens, CONFIG_JSMN_NUM_TOKENS);
    if (resultCode>0)
    {
-
-      tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.timezone");
-
-      if (tokNum>0)
+      strLen = jsmn_get_string(data, jSMNtokens, resultCode, "$.timezone", &clockContext.tz[0], TIMEZONE_LENGTH);
+      if (strLen)
       {
-         length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
-         if (length < TIMEZONE_LENGTH)
-         {
-            memcpy(&clockContext.tz, &data[jSMNtokens[tokNum].start], length);
-            clockContext.tz[length] = '\0';
-            data[jSMNtokens[tokNum].end] = '\0';
-            RTC_SetTimezone(&(clockContext.tz[0]));
-            error = NO_ERROR;
-         }
-
+         RTC_SetTimezone(&(clockContext.tz[0]));
+         error = NO_ERROR;
       }
 
-      tokNum=jsmn_get_value(data, jSMNtokens, resultCode, "$.unixtime");
-      if (tokNum>0)
-      {
-         if(ISDIGIT(*(data+jSMNtokens[tokNum].start)))
-         {
-            length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
-            clockContext.unixtime=atoi(&data[jSMNtokens[tokNum].start]);
-            xprintf("unixtime: %lU\r\n", clockContext.unixtime);
-            RTC_CalendarConfig(clockContext.unixtime+RTC_GetTimezone());
-            error = NO_ERROR;
-         }
 
+      strLen=jsmn_get_string(data, jSMNtokens, resultCode, "$.unixtime", &str[0], 12);
+      if (strLen)
+      {
+         clockContext.unixtime=atoi(str);
+         RTC_CalendarConfig(clockContext.unixtime+RTC_GetTimezone());
+         error = NO_ERROR;
       }
 
-      tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.needSave");
-      if (tokNum > 0)
-      {
-         if (strncmp (&data[jSMNtokens[tokNum].start], "true" ,4) == 0)
-         {
-            clockContext.needSave = TRUE;
-         }
-      }
+      clockContext.needSave = jsmn_get_bool(data, jSMNtokens, resultCode, "$.needSave");
+
    }
    return error;
 }
@@ -166,7 +146,7 @@ error_t restPutClock(HttpConnection *connection, RestApi_t* RestApi)
    {
       clockSaveConfig();
       clockContext.needSave = FALSE;
-//      ntpdRestart();
+      //      ntpdRestart();
 
    }
 

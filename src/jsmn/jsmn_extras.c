@@ -7,7 +7,7 @@
 
 
 #include "jsmn_extras.h"
-
+#include <string.h>
 #define ISDIGIT(a) ((a>='0' && a<='9'))
 #define ISUPPER(a) (a>='A' && a<= 'Z')
 #define ISALPHA(a) ((a>='a' && a<='z')||(a>='A' && a<= 'Z'))
@@ -15,6 +15,13 @@
 #define ISSPACE(a) (a==' ' || a=='\t' || a== '\n')
 #define ISDOT(a) (a=='.')
 
+#ifndef FALSE
+#define FALSE 0
+#endif
+
+#ifndef TRUE
+#define TRUE 1
+#endif
 
 #ifdef JSMN_PARENT_LINKS
 /*
@@ -146,7 +153,7 @@ static int findTokenByParentAndName(const char *pJSON, jsmntok_t * pTok, int par
    int childEl = 0;
    int arrayEl;
 
-   if ((*path == '.') || (*path == '['))
+   if ((*path == '.') || (*path == '[')) //Assume what we searh key of object
    {
       for (token = par_token+1; token<= numOfTokens; token++)
       {
@@ -158,21 +165,24 @@ static int findTokenByParentAndName(const char *pJSON, jsmntok_t * pTok, int par
 
       }
    }
-   else if (ISDIGIT(*path)) //Элемент массива
+   else if (ISDIGIT(*path)) //Assume what we searh element of array
    {
-      arrayEl = jsmn_atoi(path);
-      if (arrayEl < (pTok+par_token)->size)
+      if ((pTok+par_token)->type == JSMN_ARRAY) //Check parrent type
       {
-         for (token = par_token+1; token < numOfTokens && childEl <= arrayEl; token++)
+         arrayEl = jsmn_atoi(path);
+         if (arrayEl < (pTok+par_token)->size)
          {
-            if ((pTok+token)->parent == par_token) //Перебираем токены, которые являются дочерними к par_token
+            for (token = par_token+1; token < numOfTokens && childEl <= arrayEl; token++)
             {
-               if (childEl == arrayEl)
+               if ((pTok+token)->parent == par_token) //Перебираем токены, которые являются дочерними к par_token
                {
-                  result=token;
-                  break;
+                  if (childEl == arrayEl)
+                  {
+                     result=token;
+                     break;
+                  }
+                  childEl++;
                }
-               childEl++;
             }
          }
       }
@@ -213,7 +223,10 @@ int jsmn_get_value(const char *js, jsmntok_t *tokens, unsigned int num_tokens,  
    if (*path == '$')
    {
       path = nextNode(path);
-      token = findTokenByParentAndName(js, tokens, token, path, num_tokens); //Must be 0
+      if (path)
+      {
+         token = findTokenByParentAndName(js, tokens, token, path, num_tokens); //Must be 0
+      }
       path = nextNode(path);
       while (*path && token>=0 )
       {
@@ -224,7 +237,7 @@ int jsmn_get_value(const char *js, jsmntok_t *tokens, unsigned int num_tokens,  
       }
       if (token>=0)
       {
-         volatile jsmntok_t * parent = tokens+((tokens +token)->parent);
+         jsmntok_t * parent = tokens+((tokens +token)->parent);
          if (parent->type == JSMN_OBJECT)
          {
             token = findTokenByParentAndName(js, tokens, token, ".", num_tokens);
@@ -239,5 +252,43 @@ int jsmn_get_value(const char *js, jsmntok_t *tokens, unsigned int num_tokens,  
 
 }
 
+int jsmn_get_string(const char *js, jsmntok_t *tokens, unsigned int num_tokens,  char * pPath, char * string, int maxlen)
+{
+   int tokNum;
+   int length =0;
+   tokNum = jsmn_get_value(js, tokens, num_tokens, pPath);
 
+   if (tokNum>0)
+   {
+
+      length = tokens[tokNum].end - tokens[tokNum].start;
+      if (length < maxlen)
+      {
+         memcpy(string, &js[tokens[tokNum].start], length);
+         string[length] = '\0';
+      }
+      else
+      {
+         length = 0;
+      }
+   }
+
+   return length;
+}
+int jsmn_get_bool(const char *js, jsmntok_t *tokens, unsigned int num_tokens,  char * pPath)
+{
+   int result = FALSE;
+   int tokNum;
+
+   tokNum = jsmn_get_value(js, tokens, num_tokens, pPath);
+
+   if (tokNum > 0)
+   {
+      if (strncmp (&js[tokens[tokNum].start], "true" ,4) == 0)
+      {
+         result = TRUE;
+      }
+   }
+   return result;
+}
 #endif

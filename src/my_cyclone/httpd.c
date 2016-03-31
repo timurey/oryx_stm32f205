@@ -43,77 +43,53 @@ static void httpdUseDefaultConfig(void)
 
 static error_t parseHttpdConfig (char *data, size_t len, jsmn_parser* jSMNparser, jsmntok_t *jSMNtokens)
 {
+#define MAXLEN 64
+   char tmp_str[MAXLEN];
+   char * str = &tmp_str[0];
    uint8_t httpEnable = 0;
    jsmnerr_t resultCode;
-   int tokNum;
+   int strLen;
    int length;
    jsmn_init(jSMNparser);
    resultCode = jsmn_parse(jSMNparser, data, len, jSMNtokens, CONFIG_JSMN_NUM_TOKENS);
    if (resultCode >0 )
    {
-      tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.config.port");
-      if (tokNum >= 0)
+      strLen = jsmn_get_string(data, jSMNtokens, resultCode, "$.config.port", str, MAXLEN);
+      if (strLen > 0)
       {
-         httpServerSettings.port = atoi(&data[jSMNtokens[tokNum].start]);
+         httpServerSettings.port = atoi(str);
          httpEnable++;
-
       }
 
-      tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.config.max connections");
-      if (tokNum >= 0)
+      strLen = jsmn_get_string(data, jSMNtokens, resultCode, "$.config.max connections", str, MAXLEN);
+      if (strLen > 0)
       {
-         httpServerSettings.maxConnections = MIN (atoi(&data[jSMNtokens[tokNum].start]), APP_HTTP_MAX_CONNECTIONS);
+         httpServerSettings.maxConnections = MIN (atoi(str), APP_HTTP_MAX_CONNECTIONS);
          httpEnable++;
-
       }
 
-      tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.config.root directory");
-      if (tokNum >= 0)
+      strLen = jsmn_get_string(data, jSMNtokens, resultCode, "$.config.root directory", &(httpServerSettings.rootDirectory[0]), HTTP_SERVER_ROOT_DIR_MAX_LEN);
+      if (strLen > 0)
       {
-         length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
-         if (length<=HTTP_SERVER_ROOT_DIR_MAX_LEN)
-         {
-            memcpy(&httpServerSettings.rootDirectory, &data[jSMNtokens[tokNum].start], length);
-            httpServerSettings.rootDirectory[length]='\0';
-
             httpEnable++;
-         }
-
       }
 #if (HTTP_SERVER_GZIPED_FILES == ENABLED)
-      tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.config.gziped directory");
-      if (tokNum >= 0)
+      strLen = jsmn_get_string(data, jSMNtokens, resultCode, "$.config.gziped directory", &(httpServerSettings.gzipedDirectory[0]), HTTP_SERVER_ROOT_DIR_MAX_LEN);
+      if (strLen >= 0)
       {
-         length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
-         if (length<=HTTP_SERVER_ROOT_DIR_MAX_LEN)
-         {
-            memcpy(&httpServerSettings.gzipedDirectory, &data[jSMNtokens[tokNum].start], length);
-            httpServerSettings.gzipedDirectory[length]='\0';
-
             httpEnable++;
-         }
-
       }
 #else
       httpEnable++;
 #endif
-      tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.config.default document");
-      if (tokNum >= 0)
+      strLen = jsmn_get_string(data, jSMNtokens, resultCode, "$.config.default document", &(httpServerSettings.defaultDocument[0]), HTTP_SERVER_DEFAULT_DOC_MAX_LEN);
+      if (strLen >= 0)
       {
-         length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
-         if (length<=HTTP_SERVER_DEFAULT_DOC_MAX_LEN)
-         {
-            memcpy(&httpServerSettings.defaultDocument, &data[jSMNtokens[tokNum].start], length);
-            httpServerSettings.defaultDocument[length]='\0';
-
             httpEnable++;
-         }
-
       }
 
       if (httpEnable<5)
          httpdUseDefaultConfig();
-
       return NO_ERROR;
    }
    else

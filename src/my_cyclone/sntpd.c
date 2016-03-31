@@ -165,7 +165,10 @@ inline void ntpdRestart(void)
 static error_t parseNTP (char *data, size_t len, jsmn_parser* jSMNparser, jsmntok_t *jSMNtokens)
 {
    jsmnerr_t resultCode;
-   int tokNum;
+#define MAXLEN 12
+   char tmp_str[MAXLEN];
+   char * str = &tmp_str[0];
+   int strLen;
    jsmn_init(jSMNparser);
    int i;
    int length;
@@ -183,28 +186,15 @@ static error_t parseNTP (char *data, size_t len, jsmn_parser* jSMNparser, jsmnto
       for (i=0;i<NUM_OF_NTP_SERVERS;i++)
       {
          sprintf(&path[0], "$.servers[%d]", i);
-         tokNum = jsmn_get_value(data, jSMNtokens, resultCode, &path[0]);
-         if ((!i) && (tokNum<1))
+         strLen = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], &ntpContext.ntp_candidates[i][0],MAX_LENGTH_OF_NTP_SERVER_NAME);
+
+         if (i ==0 && strLen == 0)
          {
-            // If it is no data in array
             break;
          }
-         /*
-          * todo: проверить с 5 и более серверами в конфиге
-          */
-         if (tokNum>0)
+         else
          {
-            length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
-            if (length<MAX_LENGTH_OF_NTP_SERVER_NAME)
-            {
-               memcpy(&ntpContext.ntp_candidates[i][0], &data[jSMNtokens[tokNum].start], length);
-               ntpContext.ntp_candidates[i][length]='\0';
-               servers++;
-            }
-            else
-            {
-               xprintf("Warning: Name of ntp server № %D in config file \"/config/ntp.json\" is too long. Skipping", i);
-            }
+            servers++;
          }
 
       }
@@ -221,13 +211,13 @@ static error_t parseNTP (char *data, size_t len, jsmn_parser* jSMNparser, jsmnto
 
 
 
-   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.period");
+   strLen = jsmn_get_string(data, jSMNtokens, resultCode, "$.period", str, MAXLEN);
 
-   if (tokNum>0)
+   if (strLen>0)
    {
-      if (ISDIGIT(data[jSMNtokens[tokNum].start] ))
+      if (ISDIGIT(*str))
       {
-         period = atoi(&data[jSMNtokens[tokNum].start] );
+         period = atoi(str);
          if ((period > 0) && (period<= HOURS(48)))
          {
             ntpContext.period = period;
@@ -236,27 +226,11 @@ static error_t parseNTP (char *data, size_t len, jsmn_parser* jSMNparser, jsmnto
    }
 
 
-   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.needSave");
-   if (tokNum > 0)
-   {
-      if (strncmp (&data[jSMNtokens[tokNum].start], "true" ,4) == 0)
-      {
-         ntpContext.needSave = TRUE;
-      }
-   }
+   ntpContext.needSave = jsmn_get_bool(data, jSMNtokens, resultCode, "$.needSave");
 
-   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.enabled");
-   if (tokNum > 0)
-   {
-      if (strncmp (&data[jSMNtokens[tokNum].start], "false" ,5) == 0)
-      {
-         ntpContext.enabled = FALSE;
-      }
-   }
-   else
-   {
 
-   }
+   ntpContext.enabled = jsmn_get_bool(data, jSMNtokens, resultCode, "$.enabled");
+
    return NO_ERROR;
 }
 

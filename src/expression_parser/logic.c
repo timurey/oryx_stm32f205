@@ -24,17 +24,13 @@
 
 static error_t parseRules (char *data, size_t len, jsmn_parser* jSMNparser, jsmntok_t *jSMNtokens)
 {
-   int tokNum;
    int i;
    char path[64];
-   int lenght;
-   uint8_t flag = 0;
-   error_t error;
    int resultCode;
 
    char * currExpr = &expressions[0];
    char * currRule = &rules[0];
-
+   int strLen = 0;
    jsmn_init(jSMNparser);
 
    resultCode = jsmn_parse(jSMNparser, data, len, jSMNtokens, CONFIG_JSMN_NUM_TOKENS);
@@ -42,60 +38,23 @@ static error_t parseRules (char *data, size_t len, jsmn_parser* jSMNparser, jsmn
    {
       for (i=0;i<EXPRESSION_MAX_COUNT;i++)
       {
-         sprintf(&path[0],"$.rules.[%d].expression",i);
-         tokNum = jsmn_get_value(data, jSMNtokens, resultCode, &path[0]);
-         if(tokNum>0)
+
+         sprintf(&path[0],"$.rules[%d].expression",i);
+         strLen = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], currExpr, EXPRESSIONS_LENGHT-(currExpr-&expressions[0]));
+         if (strLen>0)
          {
-            lenght = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
-            lenght = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
-            if (lenght<EXPRESSIONS_LENGHT-(currExpr-&expressions[0]))
-               /*
-                * может скопироваться только rules или только expression
-                */
-            {
-               memcpy(currExpr, &data[jSMNtokens[tokNum].start], lenght);
-               pExpression[i]=currExpr;
-               currExpr[lenght+1] = '\0';
-               currExpr+=(lenght+1);
-               /*
-                * todo добавить проверку входных данных.
-                * сейчас просто копируется выражение
-                */
-               flag++;
-            }
-            else
-            {
-               xprintf("Logic initialization: no more space for Expressions\r\n");
-            }
-
+            pExpression[i]=currExpr;
+            currExpr+=strlen(currExpr)+1;
          }
-         sprintf(&path[0],"$.rules.[%d].rules",i);
-         tokNum = jsmn_get_value(data, jSMNtokens, resultCode, &path[0]);
-         if(tokNum>0)
+         strLen=0;
+         sprintf(&path[0],"$.rules[%d].result",i);
+         strLen = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], currRule, RESULT_LENGHT-(currRule-&rules[0]));
+         if (strLen>0)
          {
-            lenght = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
-            if (lenght<RESULT_LENGHT-(currRule-&rules[0]))
-               /*
-                * может скопироваться только rules или только expression
-                */
-            {
-               memcpy(currRule, &data[jSMNtokens[tokNum].start], lenght);
-               pRules[i]=currRule;
-               currRule[lenght+1] = '\0';
-               currRule+=(lenght+1);
-
-               /*
-                * todo добавить проверку входных данных.
-                * сейчас просто копируется выражение
-                */
-               flag++;
-            }
-            else
-            {
-               xprintf("Logic initialization: no more space for Rules\r\n");
-            }
-
+            pRules[i]=currRule;
+            currRule+=strlen(currRule)+1;
          }
+
 
       }
    }

@@ -14,7 +14,7 @@
 #include "dns_sd/dns_sd.h"
 
 #define APP_MAC_ADDR "00-1C-37-EF-01-07"
-
+#define APP_MAC_ADDR_LEN 18
 
 #define APP_IPV4_HOST_ADDR "192.168.100.211"
 #define APP_IPV4_SUBNET_MASK "255.255.255.0"

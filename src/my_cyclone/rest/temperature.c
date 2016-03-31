@@ -26,7 +26,10 @@ error_t deinitTemperature (void)
 
 error_t initTemperature (const char * data, jsmntok_t *jSMNtokens, sensor_t ** pCurrentSensor, jsmnerr_t * resultCode, uint8_t * pos)
 {
-   int tokNum;
+#define MAXLEN 64
+   char tmp_str[MAXLEN];
+   char * str = &tmp_str[0];
+   int len;
    int i;
    char path[64];
    int length;
@@ -38,27 +41,24 @@ error_t initTemperature (const char * data, jsmntok_t *jSMNtokens, sensor_t ** p
    {
 
       sprintf(&path[0],"$.sensors.temperature.onewire[%d].serial",i);
-      tokNum = jsmn_get_value(data, jSMNtokens, *resultCode, &path[0]);
-      if(tokNum>0)
+      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      if(len>0)
       {
-         length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
-         error = serialStringToHex( &data[jSMNtokens[tokNum].start], length, &currentSensor->serial[0], ONEWIRE_SERIAL_LENGTH);
+         error = serialStringToHex( str, len, &currentSensor->serial[0], ONEWIRE_SERIAL_LENGTH);
          if (error == NO_ERROR)
          {
             flag++;
          }
       }
       sprintf(&path[0],"$.sensors.temperature.onewire[%d].name",i);
-      tokNum = jsmn_get_value(data, jSMNtokens, *resultCode, &path[0]);
-      if(tokNum>0)
+      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      if(len>0)
       {
-         length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
-
-         currentSensor->name = sensorsFindName(&data[jSMNtokens[tokNum].start], length);
+         currentSensor->name = sensorsFindName(str, len);
 
          if (currentSensor->name == 0)
          {
-            currentSensor->name = sensorsAddName(&data[jSMNtokens[tokNum].start], length);
+            currentSensor->name = sensorsAddName(str, len);
             flag++;
             if (currentSensor->name == 0)
             {
@@ -67,23 +67,20 @@ error_t initTemperature (const char * data, jsmntok_t *jSMNtokens, sensor_t ** p
          }
       }
       sprintf(&path[0],"$.sensors.temperature.onewire[%d].place",i);
-      tokNum = jsmn_get_value(data, jSMNtokens, *resultCode, &path[0]);
-      if(tokNum>0)
+      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      if(len>0)
       {
-         length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
-
-         currentSensor->place = sensorsFindPlace(&data[jSMNtokens[tokNum].start], length);
+         currentSensor->place = sensorsFindPlace(str, len);
 
          if (currentSensor->place==0)
          {
-            currentSensor->place = sensorsAddPlace(&data[jSMNtokens[tokNum].start], length);
+            currentSensor->place = sensorsAddPlace(str, len);
             flag++;
             if (currentSensor->place == 0)
             {
                xprintf("error parsing ds1820 place: no avalible memory for saving place");
             }
          }
-
       }
       if (flag >0)
       {

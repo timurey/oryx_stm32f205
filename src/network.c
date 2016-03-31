@@ -59,7 +59,7 @@ typedef struct
    Ipv4Addr ipv4Gateway;
    Ipv4Addr ipv4Dns1;
    Ipv4Addr ipv4Dns2;
-   char sMacAddr[18];
+   char sMacAddr[APP_MAC_ADDR_LEN];
    MacAddr macAddr;
    char hostname[NET_MAX_HOSTNAME_LEN];
 
@@ -98,26 +98,28 @@ error_t restGetNetwork(HttpConnection *connection, RestApi_t* RestApi)
    int p=0;
    (void) RestApi;
    getNetworkContext(interface, &networkContext );
-#if (REST_JSON_TYPE == JSON)
+   if (RestApi->restVersion == 1)
+   {
+      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"{\"ipv4\":{\"useipv4\":%s,\"usedhcp\":%s,", (networkContext.useIpV4 == TRUE)?"true":"false", (networkContext.useDhcp == TRUE)?"true":"false");
+      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"address\":\"%s\",",ipv4AddrToString(networkContext.ipv4Addr, NULL));
+      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"netmask\":\"%s\",",ipv4AddrToString(networkContext.ipv4Mask, NULL));
+      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"gateway\":\"%s\",",ipv4AddrToString(networkContext.ipv4Gateway, NULL));
+      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"primarydns\":\"%s\",",ipv4AddrToString(networkContext.ipv4Dns1, NULL));
+      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"secondarydns\":\"%s\"}}",ipv4AddrToString(networkContext.ipv4Dns2, NULL));
 
-   p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"{\"ipv4\":{\"useipv4\":%s,\"usedhcp\":%s,", (networkContext.useIpV4 == TRUE)?"true":"false", (networkContext.useDhcp == TRUE)?"true":"false");
-   p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"address\":\"%s\",",ipv4AddrToString(networkContext.ipv4Addr, NULL));
-   p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"netmask\":\"%s\",",ipv4AddrToString(networkContext.ipv4Mask, NULL));
-   p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"gateway\":\"%s\",",ipv4AddrToString(networkContext.ipv4Gateway, NULL));
-   p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"primarydns\":\"%s\",",ipv4AddrToString(networkContext.ipv4Dns1, NULL));
-   p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"secondarydns\":\"%s\"}}",ipv4AddrToString(networkContext.ipv4Dns2, NULL));
-
-   connection->response.contentType = mimeGetType(".json");
-#else
-#if(REST_JSON_TYPE == JSON_API)
-   p+=sprintf(restBuffer+p,"{\"data\":{\"type\":\"clock\", \"id\":0,\"attributes\":{");
-   p+=sprintf(restBuffer+p,"\"unixtime\":%lu,\"localtime\":\"%s %s\",\"time\":\"%02d:%02d:%02d\",",getCurrentUnixTime(),htmlFormatDate(&time, &buf[0]),
-      pRTC_GetTimezone(),time.hours, time.minutes, time.seconds);
-   p+=sprintf(restBuffer+p,"\"date\":\"%04d.%02d.%02d\",",time.year,time.month,time.day);
-   p+=sprintf(restBuffer+p,"\"timezone\":\"%s\"}}}",pRTC_GetTimezone());
-   connection->response.contentType = mimeGetType(".apijson");
-#endif //JSON_API
-#endif //JSON
+      connection->response.contentType = mimeGetType(".json");
+   }
+   else if (RestApi->restVersion == 2)
+   {
+      p+=sprintf(restBuffer+p,"{\"data\":{\"type\":\"network\", \"id\":0,\"attributes\":{");
+      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"useipv4\":%s,\"usedhcp\":%s,", (networkContext.useIpV4 == TRUE)?"true":"false", (networkContext.useDhcp == TRUE)?"true":"false");
+      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"address\":\"%s\",",ipv4AddrToString(networkContext.ipv4Addr, NULL));
+      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"netmask\":\"%s\",",ipv4AddrToString(networkContext.ipv4Mask, NULL));
+      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"gateway\":\"%s\",",ipv4AddrToString(networkContext.ipv4Gateway, NULL));
+      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"primarydns\":\"%s\",",ipv4AddrToString(networkContext.ipv4Dns1, NULL));
+      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"secondarydns\":\"%s\"}}}",ipv4AddrToString(networkContext.ipv4Dns2, NULL));
+      connection->response.contentType = mimeGetType(".apijson");
+   }
    connection->response.noCache = TRUE;
 
    error=rest_200_ok(connection, &restBuffer[0]);
@@ -170,96 +172,47 @@ static error_t useDefaultHostName(void)
 static uint8_t parseIpv4Config(char *data, jsmntok_t *jSMNtokens, jsmnerr_t resultCode)
 {
    error_t error;
-   int tokNum;
 
-   char ipAddr[] = "xxx.xxx.xxx.xxx\0";
-   char ipMask[] = "xxx.xxx.xxx.xxx\0";
-   char ipGateway[] = "xxx.xxx.xxx.xxx\0";
-   char ipDns1[] = "xxx.xxx.xxx.xxx\0";
-   char ipDns2[] = "xxx.xxx.xxx.xxx\0";
+   char ipAddr[] = {"xxx.xxx.xxx.xxx\0"};
+   char ipMask[] = {"xxx.xxx.xxx.xxx\0"};
+   char ipGateway[] = {"xxx.xxx.xxx.xxx\0"};
+   char ipDns1[] = {"xxx.xxx.xxx.xxx\0"};
+   char ipDns2[] = {"xxx.xxx.xxx.xxx\0"};
    static Ipv4Addr testIpAddres;
    int length;
 #if (IPV4_SUPPORT == ENABLED)
 
-   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.ipv4.usedhcp");
-   if ((tokNum >= 0) & (strncmp (&data[jSMNtokens[tokNum].start], "true" ,4) == 0))
-   {
-      networkContext.useDhcp = TRUE;
-      error = NO_ERROR;
-   }
+   networkContext.useDhcp = jsmn_get_bool(data, jSMNtokens, resultCode, "$.ipv4.usedhcp");
 
 
-   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.ipv4.address");
-   if (tokNum >= 0)
+   length = jsmn_get_string(data, jSMNtokens, resultCode, "$.ipv4.address", &ipAddr[0], 15);
+   if (length ==0 || length > 15)
    {
-      length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
-      if (length<=15 && length>0)
-      {
-         memcpy(&ipAddr[0], &data[jSMNtokens[tokNum].start], length);
-         ipAddr[length]='\0';
-      }
-      else
-      {
-         xprintf("Warning: wrong ip address in config file \"/config/lan.json\" ");
-      }
+      xprintf("Warning: wrong ip address in config file \"/config/lan.json\" ");
    }
-   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.ipv4.netmask");
-   if (tokNum >= 0)
+   length = jsmn_get_string(data, jSMNtokens, resultCode, "$.ipv4.netmask", &ipMask[0], 15);
+   if (length ==0 || length > 15)
    {
-      length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
-      if (length<=15 && length>0)
-      {
-         memcpy(&ipMask[0], &data[jSMNtokens[tokNum].start], length);
-         ipMask[length]='\0';
-
-      }
-      else
-      {
-         xprintf("Warning: wrong subnet mask in config file \"/lan.json\" ");
-      }
+      xprintf("Warning: wrong subnet mask in config file \"/lan.json\" ");
    }
 
-   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.ipv4.gateway");
-   if (tokNum >= 0)
+   length = jsmn_get_string(data, jSMNtokens, resultCode, "$.ipv4.gateway", &ipGateway[0], 15);
+   if (length ==0 || length > 15)
    {
-      length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
-      if (length<=15 && length>0)
-      {
-         memcpy(&ipGateway[0], &data[jSMNtokens[tokNum].start], length);
-         ipGateway[length]='\0';
-      }
-      else
-      {
-         xprintf("Warning: wrong default gateway in config file \"/config/lan.json\" ");
-      }
+      xprintf("Warning: wrong default gateway in config file \"/config/lan.json\" ");
    }
-   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.ipv4.primarydns");
-   if (tokNum >= 0)
+
+   length = jsmn_get_string(data, jSMNtokens, resultCode, "$.ipv4.primarydns", &ipDns1[0], 15);
+   if (length ==0 || length > 15)
    {
-      length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
-      if (length<=15 && length>0)
-      {
-         memcpy(&ipDns1[0], &data[jSMNtokens[tokNum].start], length);
-         ipDns1[length]='\0';
-      }
-      else
-      {
-         xprintf("Warning: wrong primary dns in config file \"/config/lan.json\" ");
-      }
+      xprintf("Warning: wrong primary dns in config file \"/config/lan.json\" ");
    }
-   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.ipv4.secondarydns");
-   if (tokNum >= 0)
+
+   length = jsmn_get_string(data, jSMNtokens, resultCode, "$.ipv4.secondarydns", &ipDns2[0], 15);
+
+   if (length ==0 || length > 15)
    {
-      length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
-      if (length<=15 && length>0)
-      {
-         memcpy(&ipDns2[0], &data[jSMNtokens[tokNum].start], length);
-         ipDns2[length]='\0';
-      }
-      else
-      {
-         xprintf("Warning: wrong primary dns in config file \"/config/lan.json\" ");
-      }
+      xprintf("Warning: wrong primary dns in config file \"/config/lan.json\" ");
    }
 
 #endif
@@ -277,7 +230,7 @@ static uint8_t parseIpv4Config(char *data, jsmntok_t *jSMNtokens, jsmnerr_t resu
       ipv4StringToAddr(&ipGateway[0], &networkContext.ipv4Gateway);
    }
    ipv4StringToAddr(&ipDns1[0], &networkContext.ipv4Dns1);
-   ipv4StringToAddr(&ipDns1[0], &networkContext.ipv4Dns2);
+   ipv4StringToAddr(&ipDns2[0], &networkContext.ipv4Dns2);
 
 
    return error;
@@ -302,8 +255,7 @@ inline void networkSaveConfig (char * bufer, size_t maxLen)
 static error_t parseNetwork(char *data, size_t len, jsmn_parser* jSMNparser, jsmntok_t *jSMNtokens)
 {
    jsmnerr_t resultCode;
-   int length;
-   int tokNum;
+   int strLen;
    error_t error;
    jsmn_init(jSMNparser);
    networkContext.needSave = FALSE;
@@ -311,62 +263,27 @@ static error_t parseNetwork(char *data, size_t len, jsmn_parser* jSMNparser, jsm
    networkContext.useIpV6 = FALSE;
    networkContext.useDhcp = FALSE;
    resultCode = jsmn_parse(jSMNparser, data, len, jSMNtokens, CONFIG_JSMN_NUM_TOKENS);
-   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.mac\0\0");
-   if (tokNum >= 0)
-   {
-      length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
 
-      if (length<=18 && length>0)
-      {
-         memcpy(&networkContext.sMacAddr[0], &data[jSMNtokens[tokNum].start], length);
-         networkContext.sMacAddr[length]='\0';
-         //Set ip address
-         error = macStringToAddr(&networkContext.sMacAddr[0], &networkContext.macAddr);
-         if (error)
-         {
-            useDefaultMacAddress();
-         }
-      }
-   }
-   else
+   strLen = jsmn_get_string(data, jSMNtokens, resultCode, "$.mac", &networkContext.sMacAddr[0], APP_MAC_ADDR_LEN);
+   if (strLen == 0)
    {
       useDefaultMacAddress();
    }
-   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.hostname");
-   if (tokNum >= 0)
-   {
-      length = jSMNtokens[tokNum].end - jSMNtokens[tokNum].start;
 
-      if (length<NET_MAX_HOSTNAME_LEN && length>0)
-      {
-         memcpy(&networkContext.hostname[0], &data[jSMNtokens[tokNum].start], length);
-         networkContext.hostname[length]='\0';
-      }
-   }
-   else
+   strLen = jsmn_get_string(data, jSMNtokens, resultCode, "$.hostname", &networkContext.hostname[0], NET_MAX_HOSTNAME_LEN);
+   if (strLen == 0)
    {
       useDefaultHostName();
    }
 
-   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.ipv4.useipv4");
-   if (tokNum >= 0)
+   networkContext.useIpV4 = jsmn_get_bool(data, jSMNtokens, resultCode, "$.ipv4.useipv4");
+   if (networkContext.useIpV4 == TRUE)
    {
-      if (strncmp (&data[jSMNtokens[tokNum].start], "true" ,4) == 0)
-      {
-         networkContext.useIpV4 = TRUE;
-         parseIpv4Config(data, jSMNtokens, resultCode);
-
-      }
-      else
-      {
-         networkContext.useIpV4 = FALSE;
-      }
-
-
+      parseIpv4Config(data, jSMNtokens, resultCode);
    }
 #if IPV6_SUPPORT == ENABLED
-   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.ipv6.useipv6");
-   if (tokNum >= 0)
+   networkContext.useIpV6 = jsmn_get_bool(data, jSMNtokens, resultCode, "$.ipv6.useipv6");
+   if (networkContext.useIpV6 == TRUE)
    {
       if (strncmp (&data[jSMNtokens[tokNum].start], "true" ,4) == 0)
       {
@@ -381,14 +298,9 @@ static error_t parseNetwork(char *data, size_t len, jsmn_parser* jSMNparser, jsm
       ipv6_use_default_configs();
    }
 #endif
-   tokNum = jsmn_get_value(data, jSMNtokens, resultCode, "$.needSave");
-   if (tokNum > 0)
-   {
-      if (strncmp (&data[jSMNtokens[tokNum].start], "true" ,4) == 0)
-      {
-         networkContext.needSave = TRUE;
-      }
-   }
+
+   networkContext.needSave = jsmn_get_bool(data, jSMNtokens, resultCode, "$.needSave");
+
    return NO_ERROR;
 }
 
@@ -616,7 +528,7 @@ void networkServices(void *pvParametrs)
 
    networkStart();
    ntpdStart();
-//   logicStart();
+   //   logicStart();
 #if (FTP_SERVER_SUPPORT == ENABLED)
    ftpdStart();
 #endif
