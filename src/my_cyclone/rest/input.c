@@ -31,7 +31,7 @@ static error_t getRestInputs(HttpConnection *connection, RestApi_t* RestApi);
 static void inputTask(void * pvParameters);
 static error_t initInputs (const char * data, jsmntok_t *jSMNtokens, sensor_t ** pCurrentSensor, jsmnerr_t * resultCode, uint8_t * pos);
 
-int input_snprintf(char * bufer, size_t max_len, int sensnum);
+int input_snprintf(char * bufer, size_t max_len, int sensnum, int restVersion);
 
 register_sens_function(inputs, "/inputs", S_BINARY, &initInputs, NULL, &input_snprintf, NULL, NULL, NULL);
 
@@ -458,7 +458,7 @@ static void inputTask(void * pvParameters)
       osDelayTask(scan_interval);
    }
 }
-int input_snprintf(char * bufer, size_t max_len, int sens_num)
+int input_snprintf(char * bufer, size_t max_len, int sens_num, int restVersion)
 {
    int p=0;
    int i;
@@ -466,7 +466,15 @@ int input_snprintf(char * bufer, size_t max_len, int sens_num)
    {
       if ((sensors[sens_num].type == S_BINARY || sensors[sens_num].type == S_CUSTOM || sensors[sens_num].type == S_DIMMER || sensors[sens_num].type == S_MULTIMETER) && sensors[i].id == sens_num)
       {
-         p+=snprintf(bufer+p, max_len-p, "{\"id\":%d,",sensors[i].id);
+         if (restVersion == 1)
+
+         {
+            p+=snprintf(bufer+p, max_len-p, "{\"id\":%d,",sensors[i].id);
+         }
+         else if (restVersion ==2)
+         {
+            p+=snprintf(bufer+p, max_len-p, "{\"type\":\"inputs\",\"id\":%d,\"attributes\":{",sensors[i].id);
+         }
          p+=snprintf(bufer+p, max_len-p, "\"name\":\"%s\",", sensors[i].name);
          p+=snprintf(bufer+p, max_len-p, "\"place\":\"%s\",", sensors[i].place);
          switch (sensors[sens_num].type)
@@ -491,7 +499,14 @@ int input_snprintf(char * bufer, size_t max_len, int sens_num)
             break;
          }
          p+=snprintf(bufer+p, max_len-p,"\"serial\":\"%s\",",serialHexToString(sensors[sens_num].serial, &buf[0], ONEWIRE_SERIAL_LENGTH));
-         p+=snprintf(bufer+p, max_len-p, "\"online\":%s},", (sensors[sens_num].status & ONLINE?"true":"false"));
+         if (restVersion == 1)
+         {
+            p+=snprintf(bufer+p, max_len-p, "\"online\":%s},", ((sensors[i].status & ONLINE)?"true":"false"));
+         }
+         else if (restVersion == 2)
+         {
+            p+=snprintf(bufer+p, max_len-p, "\"online\":%s}},", ((sensors[i].status & ONLINE)?"true":"false"));
+         }
          break;
       }
    }
@@ -569,7 +584,7 @@ static error_t initInputs (const char * data, jsmntok_t *jSMNtokens, sensor_t **
    char path[64];
    char tmp_str[MAXLEN];
    char * str = &tmp_str[0];
-//   int length;
+   //   int length;
    error_t error = NO_ERROR;
    uint8_t flag = 0;
    uint8_t adc_used=0;

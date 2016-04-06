@@ -11,7 +11,7 @@
 #include "os_port.h"
 
 #include <math.h>
-int temperature_snprintf(char * bufer, size_t max_len, int sens_num);
+int temperature_snprintf(char * bufer, size_t max_len, int sens_num, int restVersion);
 register_sens_function(temperature, "/temperature", S_TEMP, &initTemperature, &deinitTemperature, &temperature_snprintf, NULL, NULL, NULL);
 
 #if (OW_DS1820_SUPPORT == ENABLE)
@@ -32,7 +32,6 @@ error_t initTemperature (const char * data, jsmntok_t *jSMNtokens, sensor_t ** p
    int len;
    int i;
    char path[64];
-   int length;
    uint8_t flag = 0;
    error_t error;
    sensor_t * currentSensor = *pCurrentSensor;
@@ -97,7 +96,7 @@ error_t initTemperature (const char * data, jsmntok_t *jSMNtokens, sensor_t ** p
    return NO_ERROR;
 }
 
-int temperature_snprintf(char * bufer, size_t max_len, int sens_num)
+int temperature_snprintf(char * bufer, size_t max_len, int sens_num, int restVersion)
 {
    int p=0;
    int d1, d2;
@@ -120,13 +119,27 @@ int temperature_snprintf(char * bufer, size_t max_len, int sens_num)
          d1 = temp_val;            // Get the integer part (678).
          f2 = temp_val - d1;     // Get fractional part (678.0123 - 678 = 0.0123).
          d2 = abs(trunc(f2 * 10));   // Turn into integer (123).
-         p+=snprintf(bufer+p, max_len-p, "{\"id\":%d,",sensors[i].id);
+         if (restVersion == 1)
+         {
+            p+=snprintf(bufer+p, max_len-p, "{\"id\":%d,",sensors[i].id);
+         }
+         else if (restVersion ==2)
+         {
+            p+=snprintf(bufer+p, max_len-p, "{\"type\":\"temperature\",\"id\":%d,\"attributes\":{",sensors[i].id);
+         }
          p+=snprintf(bufer+p, max_len-p, "\"name\":\"%s\",", sensors[i].name);
          p+=snprintf(bufer+p, max_len-p, "\"place\":\"%s\",", sensors[i].place);
          p+=snprintf(bufer+p, max_len-p, "\"value\":\"%d.%01d\",", d1, d2);//sensorsDS1820[i].value
          p+=snprintf(bufer+p, max_len-p, "\"serial\":\"%s\",",serialHexToString(sensors[i].serial, &buf[0], ONEWIRE_SERIAL_LENGTH));
          p+=snprintf(bufer+p, max_len-p, "\"health\":%d,", sensorsHealthGetValue(&sensors[i]));
-         p+=snprintf(bufer+p, max_len-p, "\"online\":%s},", ((sensors[i].status & ONLINE)?"true":"false"));
+         if (restVersion == 1)
+         {
+            p+=snprintf(bufer+p, max_len-p, "\"online\":%s},", ((sensors[i].status & ONLINE)?"true":"false"));
+         }
+         else if (restVersion == 2)
+         {
+            p+=snprintf(bufer+p, max_len-p, "\"online\":%s}},", ((sensors[i].status & ONLINE)?"true":"false"));
+         }
          break;
       }
    }

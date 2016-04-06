@@ -10,7 +10,7 @@
 #define MY_CYCLONE_REST_SENSORS_DEF_H_
 typedef error_t (*tInitSensHandler)(const char * data, jsmntok_t *jSMNtokens, sensor_t ** pCurrentSensor, jsmnerr_t * resultCode, uint8_t * pos);
 typedef error_t (*tDeinitSensHandler)(void);
-typedef int (*tGetSensHandler)(char * bufer, size_t max_len, int sens_num);
+typedef int (*tGetSensHandler)(char * bufer, size_t max_len, int sens_num, int restVersion);
 typedef error_t (*tPostSensHandler)(HttpConnection *connection, RestApi_t * rest);
 typedef error_t (*tPutSensHandler)(HttpConnection *connection, RestApi_t * rest);
 typedef error_t (*tDeleteSensHandler)(HttpConnection *connection, RestApi_t * rest);
