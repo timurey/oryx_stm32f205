@@ -275,7 +275,7 @@ int jsmn_get_string(const char *js, jsmntok_t *tokens, unsigned int num_tokens, 
 
    return length;
 }
-int jsmn_get_bool(const char *js, jsmntok_t *tokens, unsigned int num_tokens,  char * pPath)
+int jsmn_get_bool(const char *js, jsmntok_t *tokens, unsigned int num_tokens,  char * pPath, int* pointer)
 {
    int result = FALSE;
    int tokNum;
@@ -286,9 +286,13 @@ int jsmn_get_bool(const char *js, jsmntok_t *tokens, unsigned int num_tokens,  c
    {
       if (strncmp (&js[tokens[tokNum].start], "true" ,4) == 0)
       {
-         result = TRUE;
+         *pointer = TRUE;
+      }
+      else if (strncmp (&js[tokens[tokNum].start], "false" ,5) == 0)
+      {
+         *pointer = FALSE;
       }
    }
-   return result;
+   return tokNum;
 }
 #endif

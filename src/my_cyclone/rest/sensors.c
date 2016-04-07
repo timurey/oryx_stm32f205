@@ -15,7 +15,7 @@
 #include "configs.h"
 #include <ctype.h>
 #include "debug.h"
-
+#include "macros.h"
 
 char places[PLACES_CACHE_LENGTH];
 char names[NAMES_CACHE_LENGTH];
@@ -120,7 +120,7 @@ static sensFunctions * restFindSensor(RestApi_t* RestApi)
 {
    for (sensFunctions *cur_sensor = &__start_sens_functions; cur_sensor < &__stop_sens_functions; cur_sensor++)
    {
-      if (CLASS_EQU(RestApi, cur_sensor->sensClassPath))
+      if (REST_CLASS_EQU(RestApi, cur_sensor->sensClassPath))
       {
          return cur_sensor;
       }
@@ -199,24 +199,33 @@ error_t restGetSensors(HttpConnection *connection, RestApi_t* RestApi)
    const size_t max_len = sizeof(restBuffer);
    error_t error = NO_ERROR;
    sensFunctions * wantedSensor;
-   wantedSensor = restFindSensor(RestApi);
-   if (wantedSensor != NULL)
-   {//Если сенсор найден
-      if (wantedSensor->sensGetMethodHadler != NULL)
-      {//Если есть обработчик метода GET
+   if (RestApi->className!=NULL)
+   {
+      wantedSensor = restFindSensor(RestApi);
+      if (wantedSensor != NULL)
+      {//Если сенсор найден
+         if (wantedSensor->sensGetMethodHadler != NULL)
+         {//Если есть обработчик метода GET
 
-         error = sensGetHandler(connection, RestApi, wantedSensor);
+            error = sensGetHandler(connection, RestApi, wantedSensor);
+         }
+         else
+         {  //Если нет обработчика метода GET печатаем все доступные методы
+            p = printfSensorMethods(restBuffer+p, max_len, wantedSensor, RestApi->restVersion);
+            p+=snprintf(restBuffer+p, max_len-p, "\r\n");
+            rest_501_not_implemented(connection, &restBuffer[0]);
+            error = ERROR_NOT_IMPLEMENTED;
+         }
       }
-      else
-      {  //Если нет обработчика метода GET печатаем все доступные методы
-         p = printfSensorMethods(restBuffer+p, max_len, wantedSensor, RestApi->restVersion);
-         p+=snprintf(restBuffer+p, max_len-p, "\r\n");
-         rest_501_not_implemented(connection, &restBuffer[0]);
-         error = ERROR_NOT_IMPLEMENTED;
+      else//Если сенсор возвращяем ошибку
+      {
+         rest_404_not_found(connection, "sensor not found\r\n");
       }
+
+
    }
    else
-   {//Если сенсор не найден отдаем все сенсоры с методами
+   {
       printfSensor(&restBuffer[0], max_len, RestApi->restVersion);
       if (RestApi->restVersion == 1)
       {
@@ -677,6 +686,8 @@ void sensorsHealthSetValue(sensor_t * sensor, int value)
 
 }
 
+
+
 void sensorsSetValueUint16(sensor_t * sensor, uint16_t value)
 {
 
@@ -710,7 +721,76 @@ void sensorsSetValueFloat(sensor_t * sensor, float value)
    osReleaseMutex(&sensor->mutex);
 
 }
+static sensor_t * findSensorByName(char * name)
+{
+   int sens_num;
+   int i;
+   int res;
+   size_t len=0;
+   char * p = name;
+   sensFunctions * sensor =NULL;
+   sensor_t * result = NULL;
+   while (ISALPHA(*p))
+   {
+      p++;
+      len++;
+   }
+   sens_num = atoi(p);
+   for (sensFunctions *cur_sensor = &__start_sens_functions; cur_sensor < &__stop_sens_functions; cur_sensor++)
+   {
+            if (NAME_EQU(name, len, cur_sensor->sensClassName))
+//      if (len == strlen(cur_sensor->sensClassName))
+//      {
+//         res = strncmp(name, cur_sensor->sensClassName, len);
+//         if ( res == 0)
+         {
+            sensor = cur_sensor;
+            break;
+//         }
+      }
+   }
+   if (sensor)
+   {
+      for(i=0; i <= MAX_NUM_SENSORS; i++)
+      {
+         if (sensors[i].type == sensor->sensorType && sensors[i].id == sens_num)
+         {
+            result = &(sensors[i]);
+            break;
+         }
 
+      }
+   }
+   return result;
+}
+
+error_t sensorsGetValue(char *name, double * value)
+{
+   error_t error = ERROR_OBJECT_NOT_FOUND;
+   sensor_t * sensor = findSensorByName(name);
+
+   if(sensor)
+   {
+      {
+         switch (sensor->valueType)
+         {
+         case FLOAT:
+            *value =  (double) sensorsGetValueFloat(sensor);
+            error = NO_ERROR;
+            break;
+         case UINT16:
+            *value = sensorsGetValueUint16(sensor);
+            error = NO_ERROR;
+            break;
+         case CHAR://Not supported yet by parser
+         case PCHAR:
+         default:
+            break;
+         }
+      }
+   }
+   return error;
+}
 uint16_t sensorsGetValueUint16(sensor_t * sensor)
 {
    uint16_t value;

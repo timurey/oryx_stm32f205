@@ -39,7 +39,8 @@ typedef error_t (*tDeleteRestHandler)(HttpConnection *connection, RestApi_t * re
 #define rest_500_int_server_error(a, b) rest_answer(a, b, 500)
 #define rest_501_not_implemented(a, b) rest_answer(a, b, 501)
 
-#define CLASS_EQU(rest , class) ( (rest->classNameLen == strlen(class) && (strncmp(rest->className, class, strlen(class)) == 0) ))
+#define REST_CLASS_EQU(rest , class) ( (rest->classNameLen == strlen(class) && (strncmp(rest->className, class, strlen(class)) == 0) ))
+#define NAME_EQU(name1, len, name2) ( (len == strlen(name2) && (strncmp(name1, name2, len) == 0) ))
 
 /**
  * @brief HTTP version numbers

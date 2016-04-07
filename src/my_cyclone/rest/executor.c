@@ -38,7 +38,7 @@ static executorFunctions * restFindExecutors(RestApi_t* RestApi)
 {
    for (executorFunctions *cur_executor = &__start_executor_functions; cur_executor < &__stop_executor_functions; cur_executor++)
    {
-      if (CLASS_EQU(RestApi, cur_executor->executorClassPath))
+      if (REST_CLASS_EQU(RestApi, cur_executor->executorClassPath))
       {
          return cur_executor;
       }

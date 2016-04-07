@@ -10,7 +10,7 @@
 #include <math.h>
 
 register_rest_function(variables, "/variables", &restInitVariables, NULL, &restGetVariable, &restPostVariable, &restPutVariable, &restDeleteVariable);
-
+//register_executor_function();
 variables pVariables[NUM_VARIABLES];
 
 #define ISDIGIT(a) (((a)>='0') && ((a)<='9'))
@@ -25,7 +25,7 @@ error_t restInitVariables(void)
       if(!osCreateMutex(&(pVariables[i].mutex)))
       {
          //Failed to create mutex
-         xprintf("Sensors: Can't create variables#%d mutex.\r\n", i);
+         xprintf("Variables: Can't create variables#%d mutex.\r\n", i);
          error= ERROR_OUT_OF_RESOURCES;
       }
       pVariables[i].name=NULL;

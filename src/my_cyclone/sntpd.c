@@ -182,7 +182,6 @@ static error_t parseNTP (char *data, size_t len, jsmn_parser* jSMNparser, jsmnto
 
    if(resultCode)
    {
-
       for (i=0;i<NUM_OF_NTP_SERVERS;i++)
       {
          sprintf(&path[0], "$.servers[%d]", i);
@@ -196,7 +195,6 @@ static error_t parseNTP (char *data, size_t len, jsmn_parser* jSMNparser, jsmnto
          {
             servers++;
          }
-
       }
    }
    if (servers>0)
@@ -208,8 +206,6 @@ static error_t parseNTP (char *data, size_t len, jsmn_parser* jSMNparser, jsmnto
          servers++;
       }
    }
-
-
 
    strLen = jsmn_get_string(data, jSMNtokens, resultCode, "$.period", str, MAXLEN);
 
@@ -225,11 +221,10 @@ static error_t parseNTP (char *data, size_t len, jsmn_parser* jSMNparser, jsmnto
       }
    }
 
+   jsmn_get_bool(data, jSMNtokens, resultCode, "$.needSave", &ntpContext.needSave);
 
-   ntpContext.needSave = jsmn_get_bool(data, jSMNtokens, resultCode, "$.needSave");
 
-
-   ntpContext.enabled = jsmn_get_bool(data, jSMNtokens, resultCode, "$.enabled");
+   jsmn_get_bool(data, jSMNtokens, resultCode, "$.enabled", &ntpContext.enabled);
 
    return NO_ERROR;
 }

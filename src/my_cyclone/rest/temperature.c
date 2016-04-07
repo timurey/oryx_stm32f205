@@ -12,7 +12,7 @@
 
 #include <math.h>
 int temperature_snprintf(char * bufer, size_t max_len, int sens_num, int restVersion);
-register_sens_function(temperature, "/temperature", S_TEMP, &initTemperature, &deinitTemperature, &temperature_snprintf, NULL, NULL, NULL);
+register_sens_function(temperature, "/temperature", S_TEMP, &initTemperature, &deinitTemperature, &temperature_snprintf, NULL, NULL, NULL, FLOAT);
 
 #if (OW_DS1820_SUPPORT == ENABLE)
 
@@ -86,6 +86,7 @@ error_t initTemperature (const char * data, jsmntok_t *jSMNtokens, sensor_t ** p
          currentSensor->id=i;
          currentSensor->type = S_TEMP;
          currentSensor->driver = D_ONEWIRE;
+         currentSensor->valueType = FLOAT;
          flag=0;
          currentSensor++;
          (*pos)++;

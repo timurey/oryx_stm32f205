@@ -142,13 +142,21 @@ typedef enum {
    D_HTTP
 } mysensor_driver_t;
 
+typedef enum
+{
+   FLOAT,
+   UINT16,
+   CHAR,
+   PCHAR
+} sensValueType_t;
+
 typedef union
 {
    float fVal;
    uint16_t   uVal;
    char  cVal;
    char  *pVal;
-} sensValue;
+} sensValue_t;
 
 typedef  struct
 {
@@ -162,9 +170,10 @@ typedef struct
    uint8_t serial[MAX_LEN_SERIAL];
    mysensor_sensor_t type;
    mysensor_driver_t driver;
+   sensValueType_t valueType;
    char* place;
    char* name;
-   sensValue value;
+   sensValue_t value;
    uint8_t status;
    health_t health;
    OsMutex mutex;
@@ -193,6 +202,7 @@ void sensorsHealthDecValue(sensor_t * sensor);
 void sensorsHealthSetValue(sensor_t * sensor, int value);
 void sensorsSetValueFloat(sensor_t * sensor, float value);
 void sensorsSetValueUint16(sensor_t * sensor, uint16_t value);
+error_t sensorsGetValue(char *name, double * value);
 uint16_t sensorsGetValueUint16(sensor_t * sensor);
 float sensorsGetValueFloat(sensor_t * sensor);
 

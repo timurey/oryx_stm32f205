@@ -97,7 +97,7 @@ static error_t parseClock (char *data, size_t len, jsmn_parser* jSMNparser, jsmn
          error = NO_ERROR;
       }
 
-      clockContext.needSave = jsmn_get_bool(data, jSMNtokens, resultCode, "$.needSave");
+       jsmn_get_bool(data, jSMNtokens, resultCode, "$.needSave", &clockContext.needSave);
 
    }
    return error;

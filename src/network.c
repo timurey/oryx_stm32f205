@@ -182,7 +182,7 @@ static uint8_t parseIpv4Config(char *data, jsmntok_t *jSMNtokens, jsmnerr_t resu
    int length;
 #if (IPV4_SUPPORT == ENABLED)
 
-   networkContext.useDhcp = jsmn_get_bool(data, jSMNtokens, resultCode, "$.ipv4.usedhcp");
+   jsmn_get_bool(data, jSMNtokens, resultCode, "$.ipv4.usedhcp", &networkContext.useDhcp);
 
 
    length = jsmn_get_string(data, jSMNtokens, resultCode, "$.ipv4.address", &ipAddr[0], 15);
@@ -256,12 +256,11 @@ static error_t parseNetwork(char *data, size_t len, jsmn_parser* jSMNparser, jsm
 {
    jsmnerr_t resultCode;
    int strLen;
-   error_t error;
    jsmn_init(jSMNparser);
    networkContext.needSave = FALSE;
-   networkContext.useIpV4 = FALSE;
-   networkContext.useIpV6 = FALSE;
-   networkContext.useDhcp = FALSE;
+   //   networkContext.useIpV4 = FALSE;
+   //   networkContext.useIpV6 = FALSE;
+   //   networkContext.useDhcp = FALSE;
    resultCode = jsmn_parse(jSMNparser, data, len, jSMNtokens, CONFIG_JSMN_NUM_TOKENS);
 
    strLen = jsmn_get_string(data, jSMNtokens, resultCode, "$.mac", &networkContext.sMacAddr[0], APP_MAC_ADDR_LEN);
@@ -276,7 +275,7 @@ static error_t parseNetwork(char *data, size_t len, jsmn_parser* jSMNparser, jsm
       useDefaultHostName();
    }
 
-   networkContext.useIpV4 = jsmn_get_bool(data, jSMNtokens, resultCode, "$.ipv4.useipv4");
+   jsmn_get_bool(data, jSMNtokens, resultCode, "$.ipv4.useipv4", &networkContext.useIpV4);
    if (networkContext.useIpV4 == TRUE)
    {
       parseIpv4Config(data, jSMNtokens, resultCode);
@@ -299,7 +298,7 @@ static error_t parseNetwork(char *data, size_t len, jsmn_parser* jSMNparser, jsm
    }
 #endif
 
-   networkContext.needSave = jsmn_get_bool(data, jSMNtokens, resultCode, "$.needSave");
+   jsmn_get_bool(data, jSMNtokens, resultCode, "$.needSave", &networkContext.needSave);
 
    return NO_ERROR;
 }
@@ -528,7 +527,7 @@ void networkServices(void *pvParametrs)
 
    networkStart();
    ntpdStart();
-   //   logicStart();
+   logicStart();
 #if (FTP_SERVER_SUPPORT == ENABLED)
    ftpdStart();
 #endif

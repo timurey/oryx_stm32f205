@@ -33,7 +33,7 @@ static error_t initInputs (const char * data, jsmntok_t *jSMNtokens, sensor_t **
 
 int input_snprintf(char * bufer, size_t max_len, int sensnum, int restVersion);
 
-register_sens_function(inputs, "/inputs", S_BINARY, &initInputs, NULL, &input_snprintf, NULL, NULL, NULL);
+register_sens_function(inputs, "/inputs", S_BINARY, &initInputs, NULL, &input_snprintf, NULL, NULL, NULL, UINT16);
 
 extern sensor_t sensors[MAX_NUM_SENSORS];
 
@@ -118,7 +118,7 @@ static void initInput(sensor_t * sensor)
 
       break;
    }
-
+   sensor->status  |= ONLINE;
 }
 static void MX_ADC1_Init(void)
 {
@@ -270,7 +270,6 @@ static void inputTask(void * pvParameters)
                   if (inputContex[inputNum].bt_time>debounce)
                   {
                      sensorsSetValueUint16(&sensors[i], 0x01);
-                     sensors[i].status  |= ONLINE;
                      inputContex[inputNum].bt_release_time=0;
                   }
                }
@@ -283,7 +282,6 @@ static void inputTask(void * pvParameters)
                   if (inputContex[inputNum].bt_release_time>debounce)
                   {
                      sensorsSetValueUint16(&sensors[i], 0x00);
-                     sensors[i].status  |= ONLINE;
                      inputContex[inputNum].bt_time=0;
                   }
                }
@@ -329,7 +327,6 @@ static void inputTask(void * pvParameters)
                         inputContex[inputNum].direction = tempvalue;
                      }
                      sensorsSetValueUint16(&sensors[i], currentVal);
-                     sensors[i].status  |= ONLINE;
                      if (inputContex[inputNum].direction != PlatoValue && currentVal == 0 )
                      {
                         inputContex[inputNum].direction =PlatoValue;
@@ -356,19 +353,16 @@ static void inputTask(void * pvParameters)
                         //Сохраняем значение и выключаем
                         inputContex[inputNum].bt_result = sensorsGetValueUint16(&sensors[i]);
                         sensorsSetValueUint16(&sensors[i], 0);
-                        sensors[i].status  |= ONLINE;
                      }
                      else if(sensorsGetValueUint16(&sensors[i]) == 0 && (inputContex[inputNum].bt_result > 0))
                      {
                         //Если есть сохраненное значение, то восстанавливаем
                         sensorsSetValueUint16(&sensors[i], inputContex[inputNum].bt_result);
-                        sensors[i].status  |= ONLINE;
                      }
                      else
                      {
                         // Иначе включаем на всю
                         sensorsSetValueUint16(&sensors[i], dimmer_max_value);
-                        sensors[i].status  |= ONLINE;
                      }
                      inputContex[inputNum].bt_cnt = 0;
                      inputContex[inputNum].bt_time = 0;
@@ -426,7 +420,6 @@ static void inputTask(void * pvParameters)
                   if (tempvalue)
                   {
                      sensorsSetValueUint16(&sensors[i],tempvalue);
-                     sensors[i].status  |= ONLINE;
                   }
                   inputContex[inputNum].bt_time=0;
                   inputContex[inputNum].bt_cnt=0;
@@ -449,7 +442,6 @@ static void inputTask(void * pvParameters)
             {
 
                sensorsSetValueUint16(&sensors[i], GetADCValue(adcChannel[HexToDec(sensors[i].serial[7])], 5));
-               sensors[i].status  |= ONLINE;
             }
             inputNum++;
          }

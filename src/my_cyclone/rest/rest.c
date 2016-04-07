@@ -26,11 +26,7 @@ char restBuffer[SIZE_OF_REST_BUFFER];
 static int printfRestClassMethods (char * bufer, int maxLen, restFunctions * cur_rest)
 {
    int p=0;
-   p+=snprintf(bufer+p, maxLen-p, "{\r\n\"type\": \"restapi\",\"id\":%u,\r\n\"attributes\":{\r\n\"links\": {\"self\": \"%s/v1%s\"},\r\n\"type\":\"%s\",\r\n",  (cur_rest-&__start_rest_functions)+1,&restPrefix[0], cur_rest->restClassPath, cur_rest->restClassName);
-   p+=snprintf(bufer+p, maxLen-p, "\"read\":%s,\r\n",cur_rest->restGetClassHadler?"true":"false");
-   p+=snprintf(bufer+p, maxLen-p, "\"create\":%s,\r\n",cur_rest->restPostClassHadler?"true":"false");
-   p+=snprintf(bufer+p, maxLen-p, "\"update\":%s,\r\n",cur_rest->restPutClassHadler?"true":"false");
-   p+=snprintf(bufer+p, maxLen-p, "\"delete\":%s\r\n}\r\n}",cur_rest->restDeleteClassHadler?"true":"false");
+   p+=snprintf(bufer+p, maxLen-p, "\"%s\": {\"links\": {\"related\": \"%s/v2%s\"}}",cur_rest->restClassName, &restPrefix[0], cur_rest->restClassPath);
 
    return p;
 }
@@ -38,7 +34,7 @@ static int printfRestClassMethods (char * bufer, int maxLen, restFunctions * cur
 static int printfRestClasses (char * bufer, int maxLen)
 {
    int p=0;
-   p+=snprintf(bufer+p, maxLen-p, "{\"data\":[\r\n");
+   p+=snprintf(bufer+p, maxLen-p, "{\"data\": {\"type\": \"restapi\",\"id\": 0,\"relationships\": {");
    for (restFunctions *cur_rest = &__start_rest_functions; cur_rest < &__stop_rest_functions; cur_rest++)
    {
       p+=printfRestClassMethods(bufer+p, maxLen - p, cur_rest);
@@ -47,7 +43,7 @@ static int printfRestClasses (char * bufer, int maxLen)
          p+=snprintf(bufer+p, maxLen-p, ",\r\n");
       }
    }
-   p+=snprintf(bufer+p, maxLen-p, "\r\n]\r\n}\r\n");
+   p+=snprintf(bufer+p, maxLen-p, "\r\n}\r\n}\r\n");
    return p;
 }
 static error_t restGetRestApi(HttpConnection *connection, RestApi_t* RestApi)
@@ -68,9 +64,10 @@ static error_t restGetRestApi(HttpConnection *connection, RestApi_t* RestApi)
       cur_rest--;
       if ((cur_rest >= &__start_rest_functions) && (cur_rest < &__stop_rest_functions))
       {
-         p+=snprintf(restBuffer+p, max_len-p, "{\"data\":\r\n");
+         p+=snprintf(restBuffer+p, max_len-p, "{\"data\": {\"type\": \"restapi\",\"id\": 0,\"relationships\": {");
+
          p+=printfRestClassMethods(restBuffer+p, max_len - p, cur_rest);
-         p+=snprintf(restBuffer+p, max_len-p, "\r\n}\r\n");
+         p+=snprintf(restBuffer+p, max_len-p, "}\r\n}\r\n");
       }
    }
    //   p+=snprintf(restBuffer+p, max_len-p, "\r\n");

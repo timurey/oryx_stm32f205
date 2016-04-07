@@ -26,11 +26,12 @@ typedef struct
    const tPostSensHandler sensPostMethodHadler;
    const tPutSensHandler sensPutMethodHadler;
    const tDeleteSensHandler sensDeleteMethodHadler;
+   const sensValueType_t sensValueType;
 } sensFunctions;
 
 #define str(s) #s
 
-#define register_sens_function(name, path, type, init_f, deinit_f, get_f, post_f, put_f, delete_f) \
+#define register_sens_function(name, path, type, init_f, deinit_f, get_f, post_f, put_f, delete_f, valueType) \
    const sensFunctions handler_##name __attribute__ ((section ("sens_functions"))) = \
 { \
   .sensClassName = str(name), \
@@ -41,7 +42,8 @@ typedef struct
   .sensGetMethodHadler = get_f, \
   .sensPostMethodHadler = post_f, \
   .sensPutMethodHadler = put_f, \
-  .sensDeleteMethodHadler = delete_f \
+  .sensDeleteMethodHadler = delete_f, \
+  .sensValueType = valueType\
 }
 extern sensFunctions __start_sens_functions; //предоставленный линкером символ начала секции rest_functions
 extern sensFunctions __stop_sens_functions; //предоставленный линкером символ конца секции rest_functions
