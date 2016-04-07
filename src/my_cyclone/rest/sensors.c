@@ -10,13 +10,13 @@
 
 #include "rest/sensors.h"
 #include "rest/sensors_def.h"
-#include "rest/input.h"
+//#include "rest/input.h"
 #include "rest/temperature.h"
 #include "configs.h"
 #include <ctype.h>
 #include "debug.h"
 #include "macros.h"
-
+#include "../expression_parser/logic_def.h"
 char places[PLACES_CACHE_LENGTH];
 char names[NAMES_CACHE_LENGTH];
 
@@ -28,7 +28,7 @@ char *pNames = &names[0];
 sensor_t sensors[MAX_NUM_SENSORS];
 
 register_rest_function(sensors, "/sensors", &restInitSensors, &restDenitSensors, &restGetSensors, &restPostSensors, &restPutSensors, &restDeleteSensors);
-
+register_variables_functions(sensors, &sensorsGetValue);
 
 static int printfSensorMethods (char * bufer, int maxLen, sensFunctions * sensor, int restVersion)
 {
@@ -721,13 +721,12 @@ void sensorsSetValueFloat(sensor_t * sensor, float value)
    osReleaseMutex(&sensor->mutex);
 
 }
-static sensor_t * findSensorByName(char * name)
+static sensor_t * findSensorByName(const char * name)
 {
    int sens_num;
    int i;
-   int res;
    size_t len=0;
-   char * p = name;
+   char * p = (char *) name;
    sensFunctions * sensor =NULL;
    sensor_t * result = NULL;
    while (ISALPHA(*p))
@@ -735,36 +734,36 @@ static sensor_t * findSensorByName(char * name)
       p++;
       len++;
    }
-   sens_num = atoi(p);
-   for (sensFunctions *cur_sensor = &__start_sens_functions; cur_sensor < &__stop_sens_functions; cur_sensor++)
+   if (*p=='_')
    {
-            if (NAME_EQU(name, len, cur_sensor->sensClassName))
-//      if (len == strlen(cur_sensor->sensClassName))
-//      {
-//         res = strncmp(name, cur_sensor->sensClassName, len);
-//         if ( res == 0)
+      p++;
+      sens_num = atoi(p);
+      for (sensFunctions *cur_sensor = &__start_sens_functions; cur_sensor < &__stop_sens_functions; cur_sensor++)
+      {
+         if (NAME_EQU(name, len, cur_sensor->sensClassName))
+
          {
             sensor = cur_sensor;
             break;
-//         }
-      }
-   }
-   if (sensor)
-   {
-      for(i=0; i <= MAX_NUM_SENSORS; i++)
-      {
-         if (sensors[i].type == sensor->sensorType && sensors[i].id == sens_num)
-         {
-            result = &(sensors[i]);
-            break;
          }
+      }
+      if (sensor)
+      {
+         for(i=0; i <= MAX_NUM_SENSORS; i++)
+         {
+            if (sensors[i].type == sensor->sensorType && sensors[i].id == sens_num)
+            {
+               result = &(sensors[i]);
+               break;
+            }
 
+         }
       }
    }
    return result;
 }
 
-error_t sensorsGetValue(char *name, double * value)
+error_t sensorsGetValue(const char *name, double * value)
 {
    error_t error = ERROR_OBJECT_NOT_FOUND;
    sensor_t * sensor = findSensorByName(name);

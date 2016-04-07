@@ -18,7 +18,6 @@
 #include "os_port.h"
 #include "compiler_port.h"
 
-#define ISDIGIT(a) (((a)>='0') && ((a)<='9'))
 
 #define NAMES_CACHE_LENGTH 256
 #define PLACES_CACHE_LENGTH 256
@@ -202,7 +201,7 @@ void sensorsHealthDecValue(sensor_t * sensor);
 void sensorsHealthSetValue(sensor_t * sensor, int value);
 void sensorsSetValueFloat(sensor_t * sensor, float value);
 void sensorsSetValueUint16(sensor_t * sensor, uint16_t value);
-error_t sensorsGetValue(char *name, double * value);
+error_t sensorsGetValue(const char *name, double * value);
 uint16_t sensorsGetValueUint16(sensor_t * sensor);
 float sensorsGetValueFloat(sensor_t * sensor);
 

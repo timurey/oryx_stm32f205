@@ -11,10 +11,11 @@
 #include "rest.h"
 #include "os_port.h"
 #include "compiler_port.h"
+#include "../expression_parser/logic_def.h"
 
 #define NUM_VARIABLES 32
 
-error_t getVariable(char *name, double * value);
+error_t getVariable(const char *name, double * value);
 error_t createVariable(char *name, double value);
 error_t setVariable(char *name, double value);
 error_t deleteVariable(char *name);
@@ -34,7 +35,7 @@ typedef struct
    char * name;
    double value;
    OsMutex mutex;
-} variables;
+} variables_t;
 
 
 

@@ -102,7 +102,7 @@ error_t findRestHandler(RestApi_t* RestApi);
 #define str(s) #s
 
 #define register_rest_function(name, path, init_f, deinit_f, get_f, post_f, put_f, delete_f) \
-   const restFunctions handler_##name __attribute__ ((section ("rest_functions"))) = \
+   const restFunctions handler_rest_##name __attribute__ ((section ("rest_functions"))) = \
 { \
   .restClassName = str(name), \
   .restClassPath = path, \
