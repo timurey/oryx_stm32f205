@@ -21,6 +21,8 @@ static error_t restDeleteExecutors(HttpConnection *connection, RestApi_t* RestAp
 
 register_rest_function(executors, "/executors", &restInitExecutors, &restDenitExecutors, &restGetExecutors, &restPostExecutors, &restPutExecutors, &restDeleteExecutors);
 
+
+
 static error_t restInitExecutors(void)
 {
    error_t error = NO_ERROR;
@@ -48,18 +50,26 @@ static executorFunctions * restFindExecutors(RestApi_t* RestApi)
 
 error_t restGetExecutors(HttpConnection *connection, RestApi_t* RestApi)
 {
+   int p=0;
+   const size_t max_len = sizeof(restBuffer);
    error_t error = NO_ERROR;
    executorFunctions * wantedExecutor;
-   wantedExecutor = restFindExecutors(RestApi);
-   if (wantedExecutor != NULL)
+   if (RestApi->className!=NULL)
    {
-      if (wantedExecutor->executorGetClassHadler != NULL)
+      wantedExecutor = restFindExecutors(RestApi);
+      if (wantedExecutor != NULL)
       {
-         error = wantedExecutor->executorGetClassHadler(connection, RestApi);
-      }
-      else
-      {
-         error = ERROR_NOT_IMPLEMENTED;
+         if (wantedExecutor->executorGetClassHadler != NULL)
+         {
+            error = wantedExecutor->executorGetClassHadler(connection, RestApi);
+         }
+         else
+         {
+//            p = printfExecutors(restBuffer+p, max_len, wantedExecutor, RestApi->restVersion);
+            p+=snprintf(restBuffer+p, max_len-p, "\r\n");
+            rest_501_not_implemented(connection, &restBuffer[0]);
+            error = ERROR_NOT_IMPLEMENTED;
+         }
       }
    }
    else
@@ -167,6 +177,6 @@ void executorsConfigure(void)
    error_t error;
    memset (&executors[0],0,sizeof(executor_t)*MAX_NUM_EXECUTORS);
    error = read_config("/config/executors.json",&parseExecutors);
-//   osCreateTask("oneWireTask",oneWireTask, NULL, configMINIMAL_STACK_SIZE*4, 1);
+   //   osCreateTask("oneWireTask",oneWireTask, NULL, configMINIMAL_STACK_SIZE*4, 1);
    //   osCreateTask("input",inputTask, NULL, configMINIMAL_STACK_SIZE*4, 1);
 }

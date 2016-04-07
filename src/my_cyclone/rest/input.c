@@ -33,8 +33,7 @@ static error_t initInputs (const char * data, jsmntok_t *jSMNtokens, sensor_t **
 
 int input_snprintf(char * bufer, size_t max_len, int sensnum, int restVersion);
 
-register_sens_function(inputs, "/inputs", S_BINARY, &initInputs, NULL, &input_snprintf, NULL, NULL, NULL, UINT16);
-
+register_sens_function(inputs, "/inputs", S_INPUT, &initInputs, NULL, NULL, NULL, NULL, NULL, UINT16);
 extern sensor_t sensors[MAX_NUM_SENSORS];
 
 #define release_timeout   40 //Таймаут обработки кнопки после отпускания. Максимум 255 при использовании типа s08 для bt_release_time
@@ -94,10 +93,10 @@ typedef enum
 static void initInput(sensor_t * sensor)
 {
    GPIO_InitTypeDef GPIO_InitStruct;
-   switch ((sensor->type))
+   switch ((sensor->subType))
    {
    case S_BINARY:
-   case S_CUSTOM:
+   case S_MORZE:
    case S_DIMMER:
       GPIO_InitStruct.Pin = inputPin[HexToDec(sensor->serial[7])];
       GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
@@ -256,7 +255,7 @@ static void inputTask(void * pvParameters)
       inputNum=0;
       for (i=0; i<MAX_NUM_SENSORS; i++)
       {
-         if (sensors[i].type == S_BINARY)
+         if (sensors[i].type == S_INPUT && sensors[i].subType == S_BINARY)
          {
             if (IsLocal(sensors[i].serial))
             {
@@ -290,7 +289,7 @@ static void inputTask(void * pvParameters)
             inputNum++;
 
          }
-         if (sensors[i].type == S_DIMMER)
+         if (sensors[i].type == S_INPUT && sensors[i].subType == S_DIMMER)
          {
             if (IsLocal(sensors[i].serial))
             {
@@ -374,7 +373,7 @@ static void inputTask(void * pvParameters)
             inputNum++;
 
          }
-         else if (sensors[i].type == S_CUSTOM)
+         else if (sensors[i].type == S_INPUT && sensors[i].subType == S_MORZE)
          {
             if (IsLocal(sensors[i].serial))
             {
@@ -436,7 +435,7 @@ static void inputTask(void * pvParameters)
             }
             inputNum++;
          }
-         else if (sensors[i].type == S_MULTIMETER)
+         else if (sensors[i].type == S_INPUT && sensors[i].subType == S_MULTIMETER)
          {
             if (IsLocal(sensors[i].serial))
             {
@@ -450,13 +449,14 @@ static void inputTask(void * pvParameters)
       osDelayTask(scan_interval);
    }
 }
+#if 0
 int input_snprintf(char * bufer, size_t max_len, int sens_num, int restVersion)
 {
    int p=0;
    int i;
    for(i=0; i <= MAX_NUM_SENSORS; i++)
    {
-      if ((sensors[sens_num].type == S_BINARY || sensors[sens_num].type == S_CUSTOM || sensors[sens_num].type == S_DIMMER || sensors[sens_num].type == S_MULTIMETER) && sensors[i].id == sens_num)
+      if (sensors[i].type == S_INPUT && (sensors[sens_num].subType == S_BINARY || sensors[sens_num].subType == S_MORZE || sensors[sens_num].subType == S_DIMMER || sensors[sens_num].subType == S_MULTIMETER) && sensors[i].id == sens_num)
       {
          if (restVersion == 1)
 
@@ -465,17 +465,17 @@ int input_snprintf(char * bufer, size_t max_len, int sens_num, int restVersion)
          }
          else if (restVersion ==2)
          {
-            p+=snprintf(bufer+p, max_len-p, "{\"type\":\"inputs\",\"id\":%d,\"attributes\":{",sensors[i].id);
+            p+=snprintf(bufer+p, max_len-p, "{\"type\":\"input\",\"id\":%d,\"attributes\":{",sensors[i].id);
          }
          p+=snprintf(bufer+p, max_len-p, "\"name\":\"%s\",", sensors[i].name);
          p+=snprintf(bufer+p, max_len-p, "\"place\":\"%s\",", sensors[i].place);
-         switch (sensors[sens_num].type)
+         switch (sensors[sens_num].subType)
          {
          case S_BINARY:
             p+=snprintf(bufer+p, max_len-p, "\"type\":\"digital\",");
             p+=snprintf(bufer+p, max_len-p, "\"value\":%s,",(sensorsGetValueUint16(&sensors[i]) & 1?"true":"false"));
             break;
-         case S_CUSTOM:
+         case S_MORZE:
             p+=snprintf(bufer+p, max_len-p, "\"type\":\"sequential\",");
             p+=snprintf(bufer+p, max_len-p, "\"value\":\"0x%02x\",",sensorsGetValueUint16(&sensors[i]));
             break;
@@ -505,7 +505,7 @@ int input_snprintf(char * bufer, size_t max_len, int sens_num, int restVersion)
    return p;
 }
 
-#if 0
+
 static error_t getRestInputs(HttpConnection *connection, RestApi_t* RestApi)
 {
    int p=0;
@@ -634,7 +634,8 @@ static error_t initInputs (const char * data, jsmntok_t *jSMNtokens, sensor_t **
       if (flag >0)
       {
          currentSensor->id=j++;
-         currentSensor->type = S_BINARY;
+         currentSensor->type = S_INPUT;
+         currentSensor->subType =S_BINARY;
          flag=0;
          if (IsLocal(currentSensor->serial))
          {
@@ -696,7 +697,8 @@ static error_t initInputs (const char * data, jsmntok_t *jSMNtokens, sensor_t **
       if (flag >0)
       {
          currentSensor->id=j++;
-         currentSensor->type = S_CUSTOM;
+         currentSensor->type = S_INPUT;
+         currentSensor->subType = S_MORZE;
          flag=0;
          if (IsLocal(currentSensor->serial))
          {
@@ -757,7 +759,8 @@ static error_t initInputs (const char * data, jsmntok_t *jSMNtokens, sensor_t **
       if (flag >0)
       {
          currentSensor->id=j++;
-         currentSensor->type = S_DIMMER;
+         currentSensor->type = S_INPUT;
+         currentSensor->subType = S_DIMMER;
          flag=0;
          if (IsLocal(currentSensor->serial))
          {
@@ -818,7 +821,8 @@ static error_t initInputs (const char * data, jsmntok_t *jSMNtokens, sensor_t **
       if (flag >0)
       {
          currentSensor->id=j++;
-         currentSensor->type = S_MULTIMETER;
+         currentSensor->type = S_INPUT;
+         currentSensor->subType = S_MULTIMETER;
          if (adc_used == 0)
          {
             MX_ADC1_Init();

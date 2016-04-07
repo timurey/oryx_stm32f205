@@ -5,8 +5,8 @@
  *      Author: timurtaipov
  */
 
-#ifndef EXPRESSION_PARSER_LOGIC_DEF_H_
-#define EXPRESSION_PARSER_LOGIC_DEF_H_
+#ifndef EXPRESSION_PARSER_VARIABLES_DEF_H_
+#define EXPRESSION_PARSER_VARIABLES_DEF_H_
 
 #include "jsmn_extras.h"
 #include "error.h"
@@ -31,4 +31,4 @@ extern varFunctions __start_var_functions; //предоставленный ли
 extern varFunctions __stop_var_functions; //предоставленный линкером символ конца секции rest_functions
 
 
-#endif /* EXPRESSION_PARSER_LOGIC_DEF_H_ */
+#endif /* EXPRESSION_PARSER_VARIABLES_DEF_H_ */

@@ -12,16 +12,12 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
-//#include<stdio.h>
-#include<string.h>
 #include <math.h>
-#include "xprintf.h"
-#include "rest/variables.h"
-#include "rest/sensors.h"
+#include "debug.h"
 
 #include"expression_parser.h"
-#include "jsmn_extras.h"
 #include "configs.h"
+#include "variables_def.h"
 
 #define EXPRESSIONS_LENGHT 128
 #define EXPRESSION_MAX_COUNT 8
@@ -54,7 +50,7 @@ static error_t parseRules (char *data, size_t len, jsmn_parser* jSMNparser, jsmn
          if (strLen>0)
          {
             pExpression[i]=currExpr;
-            currExpr+=strlen(currExpr)+1;
+            currExpr+=strLen+1;
          }
          strLen=0;
          sprintf(&path[0],"$.rules[%d].result",i);
@@ -62,7 +58,7 @@ static error_t parseRules (char *data, size_t len, jsmn_parser* jSMNparser, jsmn
          if (strLen>0)
          {
             pRules[i]=currRule;
-            currRule+=strlen(currRule)+1;
+            currRule+=strLen+1;
          }
 
 

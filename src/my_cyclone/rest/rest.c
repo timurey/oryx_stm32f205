@@ -23,27 +23,78 @@ register_rest_function(test_rest, "/test", NULL, NULL, NULL, NULL, NULL, NULL);
 register_rest_function(restapi, "/restapi", NULL, NULL, &restGetRestApi, NULL, NULL, NULL);
 
 char restBuffer[SIZE_OF_REST_BUFFER];
-static int printfRestClassMethods (char * bufer, int maxLen, restFunctions * cur_rest)
+
+static int printfRestClassMethods (char * bufer, int maxLen, restFunctions * cur_rest, int restVersion)
 {
    int p=0;
-   p+=snprintf(bufer+p, maxLen-p, "\"%s\": {\"links\": {\"related\": \"%s/v2%s\"}}",cur_rest->restClassName, &restPrefix[0], cur_rest->restClassPath);
+   int flag=0;
+   if (restVersion == 1)
+   {
 
+      p+=snprintf(bufer+p, maxLen-p, "{\r\n\"path\": \"%s/v1%s\",\r\n\"method\" : [", &restPrefix[0], cur_rest->restClassPath);
+      if (cur_rest->restGetClassHadler != NULL)
+      {
+         p+=snprintf(bufer+p, maxLen-p, "\"GET\",");
+         flag++;
+      }
+      if (cur_rest->restPostClassHadler != NULL)
+      {
+         p+=snprintf(bufer+p, maxLen-p, "\"POST\",");
+         flag++;
+      }
+      if (cur_rest->restPutClassHadler != NULL)
+      {
+         p+=snprintf(bufer+p, maxLen-p, "\"PUT\",");
+         flag++;
+      }
+      if (cur_rest->restDeleteClassHadler != NULL)
+      {
+         p+=snprintf(bufer+p, maxLen-p, "\"DELETE\",");
+         flag++;
+      }
+      if (flag>0)
+      {
+         p--;
+      }
+      p+=snprintf(bufer+p, maxLen-p, "]\r\n}");
+   }
+   else if (restVersion == 2)
+   {
+      p+=snprintf(bufer+p, maxLen-p, "\"%s\": {\"links\": {\"related\": \"%s/v2%s\"}}",cur_rest->restClassName, &restPrefix[0], cur_rest->restClassPath);
+   }
    return p;
 }
 
-static int printfRestClasses (char * bufer, int maxLen)
+static int printfRestClasses (char * bufer, int maxLen, int restVersion)
 {
    int p=0;
-   p+=snprintf(bufer+p, maxLen-p, "{\"data\": {\"type\": \"restapi\",\"id\": 0,\"relationships\": {");
-   for (restFunctions *cur_rest = &__start_rest_functions; cur_rest < &__stop_rest_functions; cur_rest++)
+   if (restVersion == 1)
    {
-      p+=printfRestClassMethods(bufer+p, maxLen - p, cur_rest);
-      if ( cur_rest != &__stop_rest_functions-1)
+      p+=snprintf(bufer+p, maxLen-p, "{\"data\": {\"type\": \"restapi\",\"id\": 0,\"relationships\": {");
+      for (restFunctions *cur_rest = &__start_rest_functions; cur_rest < &__stop_rest_functions; cur_rest++)
       {
-         p+=snprintf(bufer+p, maxLen-p, ",\r\n");
+         p+=printfRestClassMethods(bufer+p, maxLen - p, cur_rest, restVersion);
+         if ( cur_rest != &__stop_rest_functions-1)
+         {
+            p+=snprintf(bufer+p, maxLen-p, ",\r\n");
+         }
       }
+      p+=snprintf(bufer+p, maxLen-p, "\r\n}\r\n}\r\n");
    }
-   p+=snprintf(bufer+p, maxLen-p, "\r\n}\r\n}\r\n");
+   else if (restVersion == 2)
+   {
+      p+=snprintf(bufer+p, maxLen-p, "{\"data\": {\"type\": \"restapi\",\"id\": 0,\"relationships\": {");
+      for (restFunctions *cur_rest = &__start_rest_functions; cur_rest < &__stop_rest_functions; cur_rest++)
+      {
+         p+=printfRestClassMethods(bufer+p, maxLen - p, cur_rest, restVersion);
+         if ( cur_rest != &__stop_rest_functions-1)
+         {
+            p+=snprintf(bufer+p, maxLen-p, ",\r\n");
+         }
+      }
+      p+=snprintf(bufer+p, maxLen-p, "\r\n}\r\n}\r\n");
+   }
+
    return p;
 }
 static error_t restGetRestApi(HttpConnection *connection, RestApi_t* RestApi)
@@ -55,7 +106,7 @@ static error_t restGetRestApi(HttpConnection *connection, RestApi_t* RestApi)
    const size_t max_len = sizeof(restBuffer);
    if (RestApi->className == NULL)
    {
-      p = printfRestClasses(restBuffer+p, max_len);
+      p = printfRestClasses(restBuffer+p, max_len, RestApi->restVersion);
    }
    else if (ISDIGIT(*(RestApi->className+1)))
    {
@@ -66,7 +117,7 @@ static error_t restGetRestApi(HttpConnection *connection, RestApi_t* RestApi)
       {
          p+=snprintf(restBuffer+p, max_len-p, "{\"data\": {\"type\": \"restapi\",\"id\": 0,\"relationships\": {");
 
-         p+=printfRestClassMethods(restBuffer+p, max_len - p, cur_rest);
+         p+=printfRestClassMethods(restBuffer+p, max_len - p, cur_rest, RestApi->restVersion);
          p+=snprintf(restBuffer+p, max_len-p, "}\r\n}\r\n");
       }
    }
@@ -80,10 +131,10 @@ error_t restTry (HttpConnection *connection, const char_t *uri)
    int p=0;
    const size_t max_len = sizeof(restBuffer);
 
-   RestApi_t restAPI;
+   RestApi_t RestApi;
    volatile error_t error;
 
-   error = restParsePath(connection, &restAPI);
+   error = restParsePath(connection, &RestApi);
    //Not implemented
    switch (error)
    {
@@ -92,22 +143,22 @@ error_t restTry (HttpConnection *connection, const char_t *uri)
    case ERROR_UNEXPECTED_MESSAGE:
       return ERROR_NOT_FOUND;
    case ERROR_INVALID_CLASS:
-      p = printfRestClasses(restBuffer+p, max_len);
+      p = printfRestClasses(restBuffer+p, max_len, RestApi.restVersion);
       p+=snprintf(restBuffer+p, max_len-p, "\r\n");
       rest_300_multiple_choices(connection, &restBuffer[0]);
       return NO_ERROR;
       break;
    default:
-      p = printfRestClasses(restBuffer+p, max_len);
+      p = printfRestClasses(restBuffer+p, max_len, RestApi.restVersion);
       p+=snprintf(restBuffer+p, max_len-p, "\r\n");
       rest_404_not_found(connection, &restBuffer[0]);
       return NO_ERROR;
    }
 
-   error = findRestHandler(&restAPI);
+   error = findRestHandler(&RestApi);
    if (error == ERROR_NOT_FOUND)
    {
-      printfRestClasses(&restBuffer[0], max_len);
+      printfRestClasses(&restBuffer[0], max_len, RestApi.restVersion);
       rest_404_not_found(connection, &restBuffer[0]);
       return error;
    }
@@ -115,29 +166,29 @@ error_t restTry (HttpConnection *connection, const char_t *uri)
 
    //Enter critical section
    osAcquireMutex(&restMutex);
-   switch (restAPI.method)
+   switch (RestApi.method)
    {
    case METHOD_GET:
-      if (restAPI.restClassHadlers->restGetClassHadler)
+      if (RestApi.restClassHadlers->restGetClassHadler)
       {
-         error = restAPI.restClassHadlers->restGetClassHadler(connection, &restAPI);
+         error = RestApi.restClassHadlers->restGetClassHadler(connection, &RestApi);
       }
       else
       {  //Если нет обработчика метода GET печатаем все доступные методы
-         p = printfRestClassMethods(restBuffer+p, max_len, restAPI.restClassHadlers);
+         p = printfRestClassMethods(restBuffer+p, max_len, RestApi.restClassHadlers, RestApi.restVersion);
          p+=snprintf(restBuffer+p, max_len-p, "\r\n");
          rest_501_not_implemented(connection, &restBuffer[0]);
          error = ERROR_NOT_IMPLEMENTED;
       }
       break;
    case METHOD_POST:
-      if (restAPI.restClassHadlers->restPostClassHadler)
+      if (RestApi.restClassHadlers->restPostClassHadler)
       {
-         error = restAPI.restClassHadlers->restPostClassHadler(connection, &restAPI);
+         error = RestApi.restClassHadlers->restPostClassHadler(connection, &RestApi);
       }
       else
       {  //Если нет обработчика метода POST печатаем все доступные методы
-         p = printfRestClassMethods(restBuffer+p, max_len, restAPI.restClassHadlers);
+         p = printfRestClassMethods(restBuffer+p, max_len, RestApi.restClassHadlers, RestApi.restVersion);
          p+=snprintf(restBuffer+p, max_len-p, "\r\n");
          rest_501_not_implemented(connection, &restBuffer[0]);
          error = ERROR_NOT_IMPLEMENTED;
@@ -145,26 +196,26 @@ error_t restTry (HttpConnection *connection, const char_t *uri)
       break;
    case METHOD_PUT:
    case METHOD_PATCH:
-      if (restAPI.restClassHadlers->restPutClassHadler)
+      if (RestApi.restClassHadlers->restPutClassHadler)
       {
-         error = restAPI.restClassHadlers->restPutClassHadler(connection, &restAPI);
+         error = RestApi.restClassHadlers->restPutClassHadler(connection, &RestApi);
       }
       else
       {  //Если нет обработчика метода PUT печатаем все доступные методы
-         p = printfRestClassMethods(restBuffer+p, max_len, restAPI.restClassHadlers);
+         p = printfRestClassMethods(restBuffer+p, max_len, RestApi.restClassHadlers, RestApi.restVersion);
          p+=snprintf(restBuffer+p, max_len-p, "\r\n");
          rest_501_not_implemented(connection, &restBuffer[0]);
          error = ERROR_NOT_IMPLEMENTED;
       }
       break;
    case METHOD_DELETE:
-      if (restAPI.restClassHadlers->restDeleteClassHadler)
+      if (RestApi.restClassHadlers->restDeleteClassHadler)
       {
-         error = restAPI.restClassHadlers->restDeleteClassHadler(connection, &restAPI);
+         error = RestApi.restClassHadlers->restDeleteClassHadler(connection, &RestApi);
       }
       else
       {  //Если нет обработчика метода DELETE печатаем все доступные методы
-         p = printfRestClassMethods(restBuffer+p, max_len, restAPI.restClassHadlers);
+         p = printfRestClassMethods(restBuffer+p, max_len, RestApi.restClassHadlers, RestApi.restVersion);
          p+=snprintf(restBuffer+p, max_len-p, "\r\n");
          rest_501_not_implemented(connection, &restBuffer[0]);
          error = ERROR_NOT_IMPLEMENTED;
@@ -172,8 +223,7 @@ error_t restTry (HttpConnection *connection, const char_t *uri)
       break;
 
    default:
-      p = printfRestClassMethods
-      (restBuffer+p, max_len, restAPI.restClassHadlers);
+      p = printfRestClassMethods(restBuffer+p, max_len, RestApi.restClassHadlers, RestApi.restVersion);
       p+=snprintf(restBuffer+p, max_len-p, "\r\n");
       rest_501_not_implemented(connection, &restBuffer[0]);
       error = ERROR_NOT_IMPLEMENTED;

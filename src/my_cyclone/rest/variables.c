@@ -7,7 +7,7 @@
 
 
 #include "variables.h"
-#include "../expression_parser/logic_def.h"
+#include "../expression_parser/variables_def.h"
 #include <math.h>
 
 register_rest_function(variables_t, "/variables", &restInitVariables, NULL, &restGetVariable, &restPostVariable, &restPutVariable, &restDeleteVariable);

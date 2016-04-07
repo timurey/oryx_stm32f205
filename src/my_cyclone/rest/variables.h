@@ -8,10 +8,10 @@
 #ifndef MY_CYCLONE_REST_VARIABLES_H_
 #define MY_CYCLONE_REST_VARIABLES_H_
 
+#include "../../expression_parser/variables_def.h"
 #include "rest.h"
 #include "os_port.h"
 #include "compiler_port.h"
-#include "../expression_parser/logic_def.h"
 
 #define NUM_VARIABLES 32
 
