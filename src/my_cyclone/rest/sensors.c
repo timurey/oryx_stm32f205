@@ -87,11 +87,11 @@ static int sprintfSensor (char * bufer, int maxLen, sensFunctions * sensor, int 
    {
       p+=snprintf(bufer+p, maxLen-p, "{\"name\":\"%s\",\"path\":\"%s/v1/sensors%s\",\"method\":[", sensor->sensClassName, &restPrefix[0], sensor->sensClassPath);
 
-      if (sensor->sensGetMethodHadler != NULL)
-      {
+//      if (sensor->sensGetMethodHadler != NULL)
+//      {
          p+=snprintf(bufer+p, maxLen-p, "\"GET\",");
          flag++;
-      }
+//      }
       if (sensor->sensPostMethodHadler != NULL)
       {
          p+=snprintf(bufer+p, maxLen-p, "\"POST\",");
@@ -158,12 +158,14 @@ static error_t sprintfListSensors (HttpConnection *connection, RestApi_t* RestAp
    if (RestApi->restVersion == 1)
    {
       connection->response.contentType = mimeGetType(".json");
+      error = rest_300_multiple_choices(connection, &restBuffer[0]);
    }
    else if (RestApi->restVersion == 2)
    {
       connection->response.contentType = mimeGetType(".apijson");
+      error = rest_200_ok(connection, &restBuffer[0]);
    }
-   error = rest_200_ok(connection, &restBuffer[0]);
+
    return error;
 }
 

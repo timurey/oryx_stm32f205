@@ -31,7 +31,7 @@ static int printfRestClassMethods (char * bufer, int maxLen, restFunctions * cur
    if (restVersion == 1)
    {
 
-      p+=snprintf(bufer+p, maxLen-p, "{\r\n\"path\": \"%s/v1%s\",\r\n\"method\" : [", &restPrefix[0], cur_rest->restClassPath);
+      p+=snprintf(bufer+p, maxLen-p, "{\r\n\"path\": \"%s/v1%s\",\r\n\"name\":\"%s\",\r\n\"method\" : [", &restPrefix[0],cur_rest->restClassPath,cur_rest->restClassName);
       if (cur_rest->restGetClassHadler != NULL)
       {
          p+=snprintf(bufer+p, maxLen-p, "\"GET\",");
@@ -70,7 +70,8 @@ static int printfRestClasses (char * bufer, int maxLen, int restVersion)
    int p=0;
    if (restVersion == 1)
    {
-      p+=snprintf(bufer+p, maxLen-p, "{\"data\": {\"type\": \"restapi\",\"id\": 0,\"relationships\": {");
+      p+=snprintf(bufer+p, maxLen-p, "{\"classes\":[\r\n");
+
       for (restFunctions *cur_rest = &__start_rest_functions; cur_rest < &__stop_rest_functions; cur_rest++)
       {
          p+=printfRestClassMethods(bufer+p, maxLen - p, cur_rest, restVersion);
@@ -79,7 +80,7 @@ static int printfRestClasses (char * bufer, int maxLen, int restVersion)
             p+=snprintf(bufer+p, maxLen-p, ",\r\n");
          }
       }
-      p+=snprintf(bufer+p, maxLen-p, "\r\n}\r\n}\r\n");
+      p+=snprintf(bufer+p, maxLen-p, "\r\n]\r\n}\r\n");
    }
    else if (restVersion == 2)
    {
@@ -122,7 +123,14 @@ static error_t restGetRestApi(HttpConnection *connection, RestApi_t* RestApi)
       }
    }
    //   p+=snprintf(restBuffer+p, max_len-p, "\r\n");
-   connection->response.contentType = mimeGetType(".apijson");
+   if (RestApi->restVersion == 1)
+   {
+      connection->response.contentType = mimeGetType(".json");
+   }
+   else if (RestApi->restVersion == 2)
+   {
+      connection->response.contentType = mimeGetType(".apijson");
+   }
    error = rest_200_ok(connection, &restBuffer[0]);
    return error;
 }
