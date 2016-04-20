@@ -84,7 +84,6 @@ error_t extIntInit(void)
 void extIntEnableIrq(void)
 {
 	//Enable interrupts
-	HAL_NVIC_SetPriority(EXTI1_IRQn, 0x0f, 0x0f);
 	HAL_NVIC_EnableIRQ(EXTI1_IRQn);
 }
 
@@ -95,7 +94,7 @@ void extIntEnableIrq(void)
 
 void extIntDisableIrq(void)
 {
-	//Disable EXTI15_10 interrupt
+	//Disable EXTI1_IRQn interrupt
 	HAL_NVIC_DisableIRQ(EXTI1_IRQn);
 }
 

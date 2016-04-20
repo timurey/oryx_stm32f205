@@ -25,6 +25,7 @@
 int main(void)
 
 {
+   HAL_Init();
    //   OsTask *task;
    RTC_Init();
    /* Configure the system clock to 120 MHz */
