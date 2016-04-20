@@ -8,13 +8,14 @@
 #ifndef MY_CYCLONE_REST_VARIABLES_H_
 #define MY_CYCLONE_REST_VARIABLES_H_
 
+#include "../../expression_parser/variables_def.h"
 #include "rest.h"
 #include "os_port.h"
 #include "compiler_port.h"
 
 #define NUM_VARIABLES 32
 
-error_t getVariable(char *name, double * value);
+error_t getVariable(const char *name, double * value);
 error_t createVariable(char *name, double value);
 error_t setVariable(char *name, double value);
 error_t deleteVariable(char *name);
@@ -34,7 +35,7 @@ typedef struct
    char * name;
    double value;
    OsMutex mutex;
-} variables;
+} variables_t;
 
 
 

@@ -10,45 +10,88 @@
 
 #include "rest/sensors.h"
 #include "rest/sensors_def.h"
-#include "rest/input.h"
+//#include "rest/input.h"
 #include "rest/temperature.h"
 #include "configs.h"
 #include <ctype.h>
 #include "debug.h"
 #include "macros.h"
-
+#include "../../expression_parser/variables_def.h"
 char places[PLACES_CACHE_LENGTH];
 char names[NAMES_CACHE_LENGTH];
 
 char *pPlaces = &places[0];
 char *pNames = &names[0];
 
+
+
+// Type of sensor (used when presenting sensors)
+ const mysensorSensorList_t sensorList[] =
+ {
+    {S_INPUT, "input"},
+    {S_DOOR, ""}, // Door sensor, V_TRIPPED, V_ARMED
+    {S_MOTION,  ""}, // Motion sensor, V_TRIPPED, V_ARMED
+    {S_SMOKE,  ""}, // Smoke sensor, V_TRIPPED, V_ARMED
+    {S_LIGHT, ""}, // Binary light or relay, V_STATUS (or V_LIGHT), V_WATT
+    {S_BINARY, "digital"}, // Binary light or relay, V_STATUS (or V_LIGHT), V_WATT (same as S_LIGHT)
+    {S_DIMMER, "dimmer"}, // Dimmable light or fan device, V_STATUS (on/off), V_DIMMER (dimmer level 0-100), V_WATT
+    {S_COVER, ""}, // Blinds or window cover, V_UP, V_DOWN, V_STOP, V_DIMMER (open/close to a percentage)
+    {S_TEMP, "temperature"}, // Temperature sensor, V_TEMP
+    {S_HUM, ""}, // Humidity sensor, V_HUM
+    {S_BARO, ""}, // Barometer sensor, V_PRESSURE, V_FORECAST
+    {S_WIND, ""}, // Wind sensor, V_WIND, V_GUST
+    {S_RAIN, ""}, // Rain sensor, V_RAIN, V_RAINRATE
+    {S_UV, ""}, // Uv sensor, V_UV
+    {S_WEIGHT, ""}, // Personal scale sensor, V_WEIGHT, V_IMPEDANCE
+    {S_POWER, ""}, // Power meter, V_WATT, V_KWH
+    {S_HEATER, ""}, // Header device, V_HVAC_SETPOINT_HEAT, V_HVAC_FLOW_STATE, V_TEMP
+    {S_DISTANCE, ""}, // Distance sensor, V_DISTANCE
+    {S_LIGHT_LEVEL, ""}, // Light level sensor, V_LIGHT_LEVEL (uncalibrated in percentage),  V_LEVEL (light level in lux)
+    {S_ARDUINO_NODE, ""}, // Used (internally) for presenting a non-repeating Arduino node
+    {S_ARDUINO_REPEATER_NODE, ""}, // Used (internally) for presenting a repeating Arduino node
+    {S_LOCK, ""}, // Lock device, V_LOCK_STATUS
+    {S_IR, ""}, // Ir device, V_IR_SEND, V_IR_RECEIVE
+    {S_WATER, ""}, // Water meter, V_FLOW, V_VOLUME
+    {S_AIR_QUALITY, ""}, // Air quality sensor, V_LEVEL
+    {S_CUSTOM, ""}, // Custom sensor
+    {S_MORZE, "sequential"},
+    {S_DUST, ""}, // Dust sensor, V_LEVEL
+    {S_SCENE_CONTROLLER, ""}, // Scene controller device, V_SCENE_ON, V_SCENE_OFF.
+    {S_RGB_LIGHT, ""}, // RGB light. Send color component data using V_RGB. Also supports V_WATT
+    {S_RGBW_LIGHT, ""}, // RGB light with an additional White component. Send data using V_RGBW. Also supports V_WATT
+    {S_COLOR_SENSOR,  ""}, // Color sensor, send color information using V_RGB
+    {S_HVAC, ""}, // Thermostat/HVAC device. V_HVAC_SETPOINT_HEAT, V_HVAC_SETPOINT_COLD, V_HVAC_FLOW_STATE, V_HVAC_FLOW_MODE, V_TEMP
+    {S_MULTIMETER, "analog"}, // Multimeter device, V_VOLTAGE, V_CURRENT, V_IMPEDANCE
+    {S_SPRINKLER,  ""}, // Sprinkler, V_STATUS (turn on/off), V_TRIPPED (if fire detecting device)
+    {S_WATER_LEAK, ""}, // Water leak sensor, V_TRIPPED, V_ARMED
+    {S_SOUND, ""}, // Sound sensor, V_TRIPPED, V_ARMED, V_LEVEL (sound level in dB)
+    {S_VIBRATION, ""}, // Vibration sensor, V_TRIPPED, V_ARMED, V_LEVEL (vibration in Hz)
+    {S_MOISTURE, ""}, // Moisture sensor, V_TRIPPED, V_ARMED, V_LEVEL (water content or moisture in percentage?)
+    {S_ERROR, ""}, //Wrong sensor
+ };
+
+static char buf[]="00:00:00:00:00:00:00:00/0";
+
 #define CURRELOFARRAY(element, array) (element > &array)?(element-&array):0
 
 sensor_t sensors[MAX_NUM_SENSORS];
 
 register_rest_function(sensors, "/sensors", &restInitSensors, &restDenitSensors, &restGetSensors, &restPostSensors, &restPutSensors, &restDeleteSensors);
+register_variables_functions(sensors, &sensorsGetValue);
 
-
-static int printfSensorMethods (char * bufer, int maxLen, sensFunctions * sensor, int restVersion)
+static int sprintfSensor (char * bufer, int maxLen, sensFunctions * sensor, int restVersion)
 {
    int p=0;
    int flag=0;
    if (restVersion == 1)
    {
-      p+=snprintf(bufer+p, maxLen-p, "{\r\n\"name\": \"%s\",\r\n\"path\": \"%s/v1/sensors%s\",\r\n\"method\" : [",sensor->sensClassName, &restPrefix[0], sensor->sensClassPath);
-   }
-   else if(restVersion ==2 )
-   {
-      p+=snprintf(bufer+p, maxLen-p, "\"%s\":{\"links\":{\"related\": \"%s/v2/sensors%s\"}}",sensor->sensClassName, &restPrefix[0], sensor->sensClassPath);
-   }
-   if (restVersion == 1)
-   {
-      if (sensor->sensGetMethodHadler != NULL)
-      {
+      p+=snprintf(bufer+p, maxLen-p, "{\"name\":\"%s\",\"path\":\"%s/v1/sensors%s\",\"method\":[", sensor->sensClassName, &restPrefix[0], sensor->sensClassPath);
+
+//      if (sensor->sensGetMethodHadler != NULL)
+//      {
          p+=snprintf(bufer+p, maxLen-p, "\"GET\",");
          flag++;
-      }
+//      }
       if (sensor->sensPostMethodHadler != NULL)
       {
          p+=snprintf(bufer+p, maxLen-p, "\"POST\",");
@@ -58,7 +101,6 @@ static int printfSensorMethods (char * bufer, int maxLen, sensFunctions * sensor
       {
          p+=snprintf(bufer+p, maxLen-p, "\"PUT\",");
          flag++;
-
       }
       if (sensor->sensDeleteMethodHadler != NULL)
       {
@@ -71,42 +113,65 @@ static int printfSensorMethods (char * bufer, int maxLen, sensFunctions * sensor
          p--;
       }
 
-      p+=snprintf(bufer+p, maxLen-p, "]\r\n}");
+      p+=snprintf(bufer+p, maxLen-p, "]}");
+   }
+   else if(restVersion ==2 )
+   {
+      p+=snprintf(bufer+p, maxLen-p, "\"%s\":{\"links\":{\"related\": \"%s/v2/sensors%s\"}}",sensor->sensClassName, &restPrefix[0], sensor->sensClassPath);
    }
    return p;
 }
 
-static int printfSensor (char * bufer, int maxLen, int restVersion)
+
+
+static error_t sprintfListSensors (HttpConnection *connection, RestApi_t* RestApi)
 {
-   int p=0;
-   if (restVersion == 1)
+   int p =0;
+   const size_t maxLen = sizeof(restBuffer);
+   error_t error = NO_ERROR;
+   if (RestApi->restVersion == 1)
    {
-      p+=snprintf(bufer+p, maxLen-p, "{\"sensors\":[\r\n");
+      p+=snprintf(&restBuffer[p], maxLen-p, "{\"sensors\":[\r\n");
    }
-   else if (restVersion ==2 )
+   else if (RestApi->restVersion ==2 )
    {
-      p+=snprintf(bufer+p, maxLen-p, "{\"data\":\r\n{\r\n\"type\": \"sensors\",\"id\":0,\"attributes\":{\"id\": 0,\"name\":\"sensors\"},\"relationships\": {");
+      p+=snprintf(&restBuffer[p], maxLen-p, "{\"data\":{\"type\":\"sensors\",\"id\":0,\r\n\"relationships\":{\r\n");
    }
+
    for (sensFunctions *cur_sensor = &__start_sens_functions; cur_sensor < &__stop_sens_functions; cur_sensor++)
    {
-      p+=printfSensorMethods(bufer+p, maxLen - p, cur_sensor, restVersion);
+      p+=sprintfSensor(restBuffer+p, maxLen - p, cur_sensor, RestApi->restVersion);
       if ( cur_sensor != &__stop_sens_functions-1)
       {
-         p+=snprintf(bufer+p, maxLen-p, ",\r\n");
+         p+=snprintf(&restBuffer[p], maxLen-p, ",\r\n");
       }
    }
-   if (restVersion ==2 )
+
+   if (RestApi->restVersion == 1)
    {
-      p+=snprintf(bufer+p, maxLen-p, "}}\r\n");
+      p+=snprintf(&restBuffer[p], maxLen-p, "\r\n]}\r\n");
    }
-   p+=snprintf(bufer+p, maxLen-p, "\r\n}\r\n");
-   return p;
+   else if (RestApi->restVersion ==2 )
+   {
+      p+=snprintf(&restBuffer[p], maxLen-p, "\r\n}}}\r\n");
+   }
+   if (RestApi->restVersion == 1)
+   {
+      connection->response.contentType = mimeGetType(".json");
+      error = rest_300_multiple_choices(connection, &restBuffer[0]);
+   }
+   else if (RestApi->restVersion == 2)
+   {
+      connection->response.contentType = mimeGetType(".apijson");
+      error = rest_200_ok(connection, &restBuffer[0]);
+   }
+
+   return error;
 }
 
 error_t restInitSensors(void)
 {
    error_t error = NO_ERROR;
-
    return error;
 }
 
@@ -128,26 +193,83 @@ static sensFunctions * restFindSensor(RestApi_t* RestApi)
    return NULL;
 }
 
-static error_t sensGetHandler(HttpConnection *connection, RestApi_t* RestApi, sensFunctions * sensor)
+
+static int snprintfSensor(char * bufer, size_t maxLen, int sens_num, sensFunctions * sensor, int restVersion)
+{
+   int p=0;
+   int d1, d2;
+   float f2, f_val;
+   int i;
+
+   for(i=0; i <= MAX_NUM_SENSORS; i++)
+   {
+      if (sensors[i].type == sensor->sensorType && sensors[i].id == sens_num)
+      {
+         if (restVersion == 1)
+         {
+            p+=snprintf(bufer+p, maxLen-p, "{\"id\":%d,",sensors[i].id);
+         }
+         else if (restVersion ==2)
+         {
+            p+=snprintf(bufer+p, maxLen-p, "{\"type\":\"%s\",\"id\":%d,\"attributes\":{",sensorList[sensors[i].type].string, sensors[i].id);
+         }
+         p+=snprintf(bufer+p, maxLen-p, "\"type\":\"%s\",", sensorList[sensors[i].subType].string);
+         p+=snprintf(bufer+p, maxLen-p, "\"name\":\"%s\",", sensors[i].name);
+         p+=snprintf(bufer+p, maxLen-p, "\"place\":\"%s\",", sensors[i].place);
+
+         switch (sensors[i].valueType)
+         {
+         case FLOAT:
+            f_val = sensorsGetValueFloat(&sensors[i]);
+            d1 = f_val;            // Get the integer part (678).
+            f2 = f_val - d1;     // Get fractional part (678.0123 - 678 = 0.0123).
+            d2 = abs(trunc(f2 * 10));   // Turn into integer (123).
+            p+=snprintf(bufer+p, maxLen-p, "\"value\":\"%d.%01d\",", d1, d2);
+            break;
+         case UINT16:
+            p+=snprintf(bufer+p, maxLen-p, "\"value\":\"%u\",",sensorsGetValueUint16(&sensors[i]));
+            break;
+         case CHAR://Not supported yet
+         case PCHAR:
+         default:
+            break;
+         }
+         p+=snprintf(bufer+p, maxLen-p, "\"serial\":\"%s\",",serialHexToString(sensors[i].serial, &buf[0], ONEWIRE_SERIAL_LENGTH));
+         p+=snprintf(bufer+p, maxLen-p, "\"health\":%d,", sensorsHealthGetValue(&sensors[i]));
+         if (restVersion == 1)
+         {
+            p+=snprintf(bufer+p, maxLen-p, "\"online\":%s},", ((sensors[i].status & ONLINE)?"true":"false"));
+         }
+         else if (restVersion == 2)
+         {
+            p+=snprintf(bufer+p, maxLen-p, "\"online\":%s}},", ((sensors[i].status & ONLINE)?"true":"false"));
+         }
+         break;
+      }
+   }
+   return p;
+}
+
+static error_t sensCommonGetHandler(HttpConnection *connection, RestApi_t* RestApi, sensFunctions * sensor)
 {
    int p=0;
    int i=0,j=0;
    error_t error = ERROR_NOT_FOUND;
-   const size_t max_len = sizeof(restBuffer);
+   const size_t maxLen = sizeof(restBuffer);
    if (RestApi->restVersion == 1)
    {
-      p=sprintf(restBuffer,"{\"%s\":[ ", sensor->sensClassPath+1);
+      p=sprintf(restBuffer,"{\"%s\":[\r\n", sensor->sensClassName);
    }
    else if (RestApi->restVersion ==2)
    {
-      p=sprintf(restBuffer,"{\"data\":[");
+      p=sprintf(restBuffer,"{\"data\":[\r\n");
    }
    if (RestApi->objectId != NULL)
    {
       if (ISDIGIT(*(RestApi->objectId+1)))
       {
          j=atoi(RestApi->objectId+1);
-         p+=sensor->sensGetMethodHadler(&restBuffer[p], max_len-p, j, RestApi->restVersion);
+         p+=snprintfSensor(&restBuffer[p], maxLen-p, j, sensor, RestApi->restVersion);
          error = NO_ERROR;
       }
       else
@@ -159,13 +281,13 @@ static error_t sensGetHandler(HttpConnection *connection, RestApi_t* RestApi, se
    {
       for (i=0; i<= MAX_NUM_SENSORS; i++)
       {
-         p+=sensor->sensGetMethodHadler(&restBuffer[p], max_len-p, i, RestApi->restVersion);
+         p+=snprintfSensor(&restBuffer[p], maxLen-p, i, sensor, RestApi->restVersion);
          error = NO_ERROR;
       }
    }
    p--;
 
-   p+=snprintf(restBuffer+p, max_len-p,"]}\r\n");
+   p+=snprintf(restBuffer+p, maxLen-p,"]}\r\n");
    if (RestApi->restVersion == 1)
    {
       connection->response.contentType = mimeGetType(".json");
@@ -174,7 +296,6 @@ static error_t sensGetHandler(HttpConnection *connection, RestApi_t* RestApi, se
    {
       connection->response.contentType = mimeGetType(".apijson");
    }
-
 
    switch (error)
    {
@@ -188,15 +309,14 @@ static error_t sensGetHandler(HttpConnection *connection, RestApi_t* RestApi, se
    default:
       return rest_404_not_found(connection, "404 Not Found.\r\n");
       break;
-
    }
    return error;
 }
 
+
 error_t restGetSensors(HttpConnection *connection, RestApi_t* RestApi)
 {
-   int p=0;
-   const size_t max_len = sizeof(restBuffer);
+
    error_t error = NO_ERROR;
    sensFunctions * wantedSensor;
    if (RestApi->className!=NULL)
@@ -205,37 +325,23 @@ error_t restGetSensors(HttpConnection *connection, RestApi_t* RestApi)
       if (wantedSensor != NULL)
       {//Если сенсор найден
          if (wantedSensor->sensGetMethodHadler != NULL)
-         {//Если есть обработчик метода GET
-
-            error = sensGetHandler(connection, RestApi, wantedSensor);
+         {//Если есть обработчик метода GET, используем специальный
+            error = wantedSensor->sensGetMethodHadler(connection, RestApi);
          }
          else
-         {  //Если нет обработчика метода GET печатаем все доступные методы
-            p = printfSensorMethods(restBuffer+p, max_len, wantedSensor, RestApi->restVersion);
-            p+=snprintf(restBuffer+p, max_len-p, "\r\n");
-            rest_501_not_implemented(connection, &restBuffer[0]);
-            error = ERROR_NOT_IMPLEMENTED;
+         {  //Если нет обработчика метода GET используем общий
+            error = sensCommonGetHandler(connection, RestApi, wantedSensor);
          }
       }
-      else//Если сенсор возвращяем ошибку
+      else//Если сенсор не найден возвращяем ошибку
       {
          rest_404_not_found(connection, "sensor not found\r\n");
       }
-
-
    }
    else
-   {
-      printfSensor(&restBuffer[0], max_len, RestApi->restVersion);
-      if (RestApi->restVersion == 1)
-      {
-         connection->response.contentType = mimeGetType(".json");
-      }
-      else if (RestApi->restVersion ==2)
-      {
-         connection->response.contentType = mimeGetType(".apijson");
-      }
-      rest_200_ok(connection, &restBuffer[0]);
+   { //
+      sprintfListSensors(connection, RestApi);
+
       error = ERROR_NOT_FOUND;
    }
    return error;
@@ -244,7 +350,7 @@ error_t restGetSensors(HttpConnection *connection, RestApi_t* RestApi)
 error_t restPostSensors(HttpConnection *connection, RestApi_t* RestApi)
 {
    int p=0;
-   const size_t max_len = sizeof(restBuffer);
+   const size_t maxLen = sizeof(restBuffer);
    error_t error = NO_ERROR;
    sensFunctions * wantedSensor;
    wantedSensor = restFindSensor(RestApi);
@@ -256,16 +362,15 @@ error_t restPostSensors(HttpConnection *connection, RestApi_t* RestApi)
       }
       else
       {  //Если нет обработчика метода POST печатаем все доступные методы
-         p = printfSensorMethods(restBuffer+p, max_len, wantedSensor, RestApi->restVersion);
-         p+=snprintf(restBuffer+p, max_len-p, "\r\n");
+         p = sprintfSensor(restBuffer+p, maxLen, wantedSensor, RestApi->restVersion);
+         p+=snprintf(restBuffer+p, maxLen-p, "\r\n");
          rest_501_not_implemented(connection, &restBuffer[0]);
          error = ERROR_NOT_IMPLEMENTED;
       }
    }
    else
-   {//Если сенсор не найден отдаем все сенсоры с методами
-      printfSensor(&restBuffer[0], max_len, RestApi->restVersion);
-      rest_404_not_found(connection, &restBuffer[0]);
+   {//Если сенсор не найден
+      rest_404_not_found(connection, "Not found\r\n");
       error = ERROR_NOT_FOUND;
    }
    return error;
@@ -274,7 +379,7 @@ error_t restPostSensors(HttpConnection *connection, RestApi_t* RestApi)
 error_t restPutSensors(HttpConnection *connection, RestApi_t* RestApi)
 {
    int p=0;
-   const size_t max_len = sizeof(restBuffer);
+   const size_t maxLen = sizeof(restBuffer);
    error_t error = NO_ERROR;
    sensFunctions * wantedSensor;
    wantedSensor = restFindSensor(RestApi);
@@ -286,16 +391,15 @@ error_t restPutSensors(HttpConnection *connection, RestApi_t* RestApi)
       }
       else
       {  //Если нет обработчика метода PUT печатаем все доступные методы
-         p = printfSensorMethods(restBuffer+p, max_len, wantedSensor, RestApi->restVersion);
-         p+=snprintf(restBuffer+p, max_len-p, "\r\n");
+         p = sprintfSensor(restBuffer+p, maxLen, wantedSensor, RestApi->restVersion);
+         p+=snprintf(restBuffer+p, maxLen-p, "\r\n");
          rest_501_not_implemented(connection, &restBuffer[0]);
          error = ERROR_NOT_IMPLEMENTED;
       }
    }
    else
-   {//Если сенсор не найден отдаем все сенсоры с методами
-      printfSensor(&restBuffer[0], max_len, RestApi->restVersion);
-      rest_404_not_found(connection, &restBuffer[0]);
+   {//Если сенсор не найден
+      rest_404_not_found(connection, "Not found\r\n");
       error = ERROR_NOT_FOUND;
    }
    return error;
@@ -304,7 +408,7 @@ error_t restPutSensors(HttpConnection *connection, RestApi_t* RestApi)
 error_t restDeleteSensors(HttpConnection *connection, RestApi_t* RestApi)
 {
    int p=0;
-   const size_t max_len = sizeof(restBuffer);
+   const size_t maxLen = sizeof(restBuffer);
    error_t error = NO_ERROR;
    sensFunctions * wantedSensor;
    wantedSensor = restFindSensor(RestApi);
@@ -316,16 +420,15 @@ error_t restDeleteSensors(HttpConnection *connection, RestApi_t* RestApi)
       }
       else
       {  //Если нет обработчика метода DELETE печатаем все доступные методы
-         p = printfSensorMethods(restBuffer+p, max_len, wantedSensor, RestApi->restVersion);
-         p+=snprintf(restBuffer+p, max_len-p, "\r\n");
+         p = sprintfSensor(restBuffer+p, maxLen, wantedSensor, RestApi->restVersion);
+         p+=snprintf(restBuffer+p, maxLen-p, "\r\n");
          rest_501_not_implemented(connection, &restBuffer[0]);
          error = ERROR_NOT_IMPLEMENTED;
       }
    }
    else
-   {//Если сенсор не найден отдаем все сенсоры с методами
-      printfSensor(&restBuffer[0], max_len, RestApi->restVersion);
-      rest_404_not_found(connection, &restBuffer[0]);
+   {//Если сенсор не найден
+      rest_404_not_found(connection, "Not found\r\n");
       error = ERROR_NOT_FOUND;
    }
    return error;
@@ -721,13 +824,12 @@ void sensorsSetValueFloat(sensor_t * sensor, float value)
    osReleaseMutex(&sensor->mutex);
 
 }
-static sensor_t * findSensorByName(char * name)
+static sensor_t * findSensorByName(const char * name)
 {
    int sens_num;
    int i;
-   int res;
    size_t len=0;
-   char * p = name;
+   char * p = (char *) name;
    sensFunctions * sensor =NULL;
    sensor_t * result = NULL;
    while (ISALPHA(*p))
@@ -735,36 +837,36 @@ static sensor_t * findSensorByName(char * name)
       p++;
       len++;
    }
-   sens_num = atoi(p);
-   for (sensFunctions *cur_sensor = &__start_sens_functions; cur_sensor < &__stop_sens_functions; cur_sensor++)
+   if (*p=='_')
    {
-            if (NAME_EQU(name, len, cur_sensor->sensClassName))
-//      if (len == strlen(cur_sensor->sensClassName))
-//      {
-//         res = strncmp(name, cur_sensor->sensClassName, len);
-//         if ( res == 0)
+      p++;
+      sens_num = atoi(p);
+      for (sensFunctions *cur_sensor = &__start_sens_functions; cur_sensor < &__stop_sens_functions; cur_sensor++)
+      {
+         if (NAME_EQU(name, len, cur_sensor->sensClassName))
+
          {
             sensor = cur_sensor;
             break;
-//         }
-      }
-   }
-   if (sensor)
-   {
-      for(i=0; i <= MAX_NUM_SENSORS; i++)
-      {
-         if (sensors[i].type == sensor->sensorType && sensors[i].id == sens_num)
-         {
-            result = &(sensors[i]);
-            break;
          }
+      }
+      if (sensor)
+      {
+         for(i=0; i <= MAX_NUM_SENSORS; i++)
+         {
+            if (sensors[i].type == sensor->sensorType && sensors[i].id == sens_num)
+            {
+               result = &(sensors[i]);
+               break;
+            }
 
+         }
       }
    }
    return result;
 }
 
-error_t sensorsGetValue(char *name, double * value)
+error_t sensorsGetValue(const char *name, double * value)
 {
    error_t error = ERROR_OBJECT_NOT_FOUND;
    sensor_t * sensor = findSensorByName(name);
@@ -782,7 +884,7 @@ error_t sensorsGetValue(char *name, double * value)
             *value = sensorsGetValueUint16(sensor);
             error = NO_ERROR;
             break;
-         case CHAR://Not supported yet by parser
+         case CHAR://Not supported yet
          case PCHAR:
          default:
             break;

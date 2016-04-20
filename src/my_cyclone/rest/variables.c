@@ -7,11 +7,15 @@
 
 
 #include "variables.h"
+#include "../expression_parser/variables_def.h"
 #include <math.h>
 
-register_rest_function(variables, "/variables", &restInitVariables, NULL, &restGetVariable, &restPostVariable, &restPutVariable, &restDeleteVariable);
+register_rest_function(variables_t, "/variables", &restInitVariables, NULL, &restGetVariable, &restPostVariable, &restPutVariable, &restDeleteVariable);
+
+register_variables_functions(variables, &getVariable);
+
 //register_executor_function();
-variables pVariables[NUM_VARIABLES];
+variables_t pVariables[NUM_VARIABLES];
 
 #define ISDIGIT(a) (((a)>='0') && ((a)<='9'))
 
@@ -34,10 +38,10 @@ error_t restInitVariables(void)
    return error;
 }
 
-static variables * findFreeVariable (void)
+static variables_t * findFreeVariable (void)
 {
    int i;
-   variables * pVariable = NULL;
+   variables_t * pVariable = NULL;
 
    for (i=0; i< NUM_VARIABLES; i++)
    {
@@ -51,10 +55,10 @@ static variables * findFreeVariable (void)
    return pVariable;
 }
 
-static variables * findVariable (char * name)
+static variables_t * findVariable (const char * name)
 {
    int i;
-   variables * pVariable = NULL;
+   variables_t * pVariable = NULL;
 
    for (i=0; i< NUM_VARIABLES; i++)
    {
@@ -69,10 +73,10 @@ static variables * findVariable (char * name)
    return pVariable;
 }
 
-error_t getVariable(char *name, double * value)
+error_t getVariable(const char *name, double * value)
 {
    error_t error = NO_ERROR;
-   variables * pVariable;
+   variables_t * pVariable;
 
    pVariable = findVariable(name);
 
@@ -102,7 +106,7 @@ error_t getVariable(char *name, double * value)
 error_t createVariable(char *name, double value)
 {
    error_t error = NO_ERROR;
-   variables * pVariable;
+   variables_t * pVariable;
    size_t len = strlen(name);
 
    pVariable = findVariable(name);
@@ -153,7 +157,7 @@ error_t createVariable(char *name, double value)
 error_t setVariable(char *name, double value)
 {
    error_t error = NO_ERROR;
-   variables * pVariable;
+   variables_t * pVariable;
 
    pVariable = findVariable(name);
 
@@ -177,7 +181,7 @@ error_t setVariable(char *name, double value)
 error_t deleteVariable(char *name)
 {
    error_t error = NO_ERROR;
-   variables * pVariable = NULL;
+   variables_t * pVariable = NULL;
 
    pVariable = findVariable(name);
 
@@ -197,7 +201,7 @@ error_t deleteVariable(char *name)
    return error;
 }
 
-static size_t snprintfVariable(char * pChar, size_t maxSize, variables * pVariable)
+static size_t snprintfVariable(char * pChar, size_t maxSize, variables_t * pVariable)
 {
    size_t len;
    int d1, d2;

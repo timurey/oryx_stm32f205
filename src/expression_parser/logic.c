@@ -12,16 +12,21 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
-//#include<stdio.h>
-#include<string.h>
 #include <math.h>
-#include "xprintf.h"
-#include "rest/variables.h"
-#include "rest/sensors.h"
+#include "debug.h"
 
 #include"expression_parser.h"
-#include "jsmn_extras.h"
 #include "configs.h"
+#include "variables_def.h"
+
+#define EXPRESSIONS_LENGHT 128
+#define EXPRESSION_MAX_COUNT 8
+#define RESULT_LENGHT 64
+char expressions[EXPRESSIONS_LENGHT];
+char * pExpression[EXPRESSION_MAX_COUNT];
+
+char rules[RESULT_LENGHT];
+char * pRules[EXPRESSION_MAX_COUNT];
 
 static error_t parseRules (char *data, size_t len, jsmn_parser* jSMNparser, jsmntok_t *jSMNtokens)
 {
@@ -45,7 +50,7 @@ static error_t parseRules (char *data, size_t len, jsmn_parser* jSMNparser, jsmn
          if (strLen>0)
          {
             pExpression[i]=currExpr;
-            currExpr+=strlen(currExpr)+1;
+            currExpr+=strLen+1;
          }
          strLen=0;
          sprintf(&path[0],"$.rules[%d].result",i);
@@ -53,7 +58,7 @@ static error_t parseRules (char *data, size_t len, jsmn_parser* jSMNparser, jsmn
          if (strLen>0)
          {
             pRules[i]=currRule;
-            currRule+=strlen(currRule)+1;
+            currRule+=strLen+1;
          }
 
 
@@ -66,37 +71,31 @@ static error_t parseRules (char *data, size_t len, jsmn_parser* jSMNparser, jsmn
 /**
  @brief implementation of a user-defined function for testing
  */
-double user_func_0(){
+static double user_func_0(void){
    return 10.0;
 }
 
 /**
  @brief implementation of a user-defined function for testing
  */
-double user_func_1( double x ){
+static double user_func_1( double x ){
    return fabs(x);
 }
 
 /**
  @brief implementation of a user-defined funtion for testing
  */
-double user_func_2( double x, double y ){
+static double user_func_2( double x, double y ){
    return sqrt( x*x + y*y );
 }
 
 /**
  @brief implementation of a user-defined function for testing
  */
-double _user_func_3( double x, double y, double z ){
+static double _user_func_3( double x, double y, double z ){
    return sqrt( x*x + y*y + z*z );
 }
 
-/**
- @brief implementation of a user-defined function for testing
- */
-double user_func_4( double x, double y, double z, double q ){
-   return sqrt( x*x + y*y + z*z + q*q );
-}
 
 /**
  @brief user-function callback for the parser. reads name of function to be called and checks the number of arguments before calling the appropriate function. returns true if function was called successfully, false otherwise.
@@ -130,13 +129,16 @@ int user_fnc_cb( void *user_data, const char *name, const int num_args, const do
  @param[out] value output argument that should contain the variable value on return, if the evaluation is successful.
  @return true if the variable exists and the return argument was successfully set, false otherwise
  */
-int user_var_cb( void *user_data, char *name, double *value ){
-   error_t error;
-
-   error = getVariable(name, value); //Try to get variable
-   if (error)//Try to get sensors value
+static int user_var_cb( void *user_data, const char *name, double *value ){
+   error_t error = ERROR_OBJECT_NOT_FOUND;
+   (void) user_data;
+   for (varFunctions *cur_varHandler = &__start_var_functions; cur_varHandler < &__stop_var_functions; cur_varHandler++)
    {
-      error = sensorsGetValue(name, value);
+      error = cur_varHandler->varGetMethodHadler(name, value);
+      if (!error)
+      {
+         break;
+      }
    }
 
    if (error)
@@ -151,7 +153,8 @@ int user_var_cb( void *user_data, char *name, double *value ){
 
 
 
-static void parse_rules(){
+static void parse_rules(void)
+{
    double result;
    int d1, d2;
    float f2;
@@ -169,24 +172,15 @@ static void parse_rules(){
 
 }
 
-void parser_task (void *pvParameters)
+static void parser_task (void *pvParameters)
 {
    (void) pvParameters;
    while (1)
    {
       vTaskDelay(1000);
       xprintf("Parser is starting...\r\n");
-      //      my_test();
-      //      run_bad_input_tests();
-      //
-      //      run_boolean_not_tests();
-      //      run_boolean_comparison_tests();
-      //      run_boolean_logical_tests();
-      //      run_boolean_compound_tests();
-      //      test_user_functions_and_variables();
       parse_rules();
    }
-
 
    vTaskDelete(NULL);
 }

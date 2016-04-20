@@ -11,13 +11,14 @@
 #include "os_port.h"
 
 #include <math.h>
+#if 0
 int temperature_snprintf(char * bufer, size_t max_len, int sens_num, int restVersion);
-register_sens_function(temperature, "/temperature", S_TEMP, &initTemperature, &deinitTemperature, &temperature_snprintf, NULL, NULL, NULL, FLOAT);
+#endif
+register_sens_function(temperature, "/temperature", S_TEMP, &initTemperature, &deinitTemperature, NULL, NULL, NULL, NULL, FLOAT);
 
 #if (OW_DS1820_SUPPORT == ENABLE)
 
-static char buf[]="00:00:00:00:00:00:00:00/0";
-extern sensor_t sensors[MAX_ONEWIRE_COUNT];
+
 
 error_t deinitTemperature (void)
 {
@@ -85,6 +86,7 @@ error_t initTemperature (const char * data, jsmntok_t *jSMNtokens, sensor_t ** p
       {
          currentSensor->id=i;
          currentSensor->type = S_TEMP;
+         currentSensor->subType = S_TEMP;
          currentSensor->driver = D_ONEWIRE;
          currentSensor->valueType = FLOAT;
          flag=0;
@@ -96,7 +98,9 @@ error_t initTemperature (const char * data, jsmntok_t *jSMNtokens, sensor_t ** p
    *pCurrentSensor=currentSensor;
    return NO_ERROR;
 }
-
+#if 0
+static char buf[]="00:00:00:00:00:00:00:00/0";
+extern sensor_t sensors[MAX_ONEWIRE_COUNT];
 int temperature_snprintf(char * bufer, size_t max_len, int sens_num, int restVersion)
 {
    int p=0;
@@ -106,7 +110,7 @@ int temperature_snprintf(char * bufer, size_t max_len, int sens_num, int restVer
 
    for(i=0; i <= MAX_NUM_SENSORS; i++)
    {
-      if (sensors[i].type == S_TEMP && sensors[i].id == sens_num)
+      if (sensors[i].type == S_TEMP && sensors[i].subType == S_TEMP && sensors[i].id == sens_num)
       {
          while ((!(sensors[i].status & READEBLE) ) & (sensors[i].status & MANAGED))
          {
@@ -146,7 +150,7 @@ int temperature_snprintf(char * bufer, size_t max_len, int sens_num, int restVer
    }
    return p;
 }
-
+#endif
 
 #endif
 #if 0

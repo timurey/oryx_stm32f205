@@ -23,7 +23,10 @@ typedef enum {
    O_DIGITAL,
    O_ANALOG,
    O_PWM,
-   O_HTTP
+   O_HTTP_GET,
+   O_HTTP_POST,
+   O_HTTP_PUT,
+   O_HTTP_DELETE
 } my_executor_type;
 
 typedef union
