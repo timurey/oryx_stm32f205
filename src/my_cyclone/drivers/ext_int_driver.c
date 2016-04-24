@@ -67,7 +67,7 @@ error_t extIntInit(void)
 	HAL_GPIO_Init(GPIOA, &GPIO_InitStructure);
 
 	/* Enable and set EXTI Line0 Interrupt to the medium priority */
-	HAL_NVIC_SetPriority(EXTI1_IRQn, 0x0f, 0x0f);
+	HAL_NVIC_SetPriority(EXTI1_IRQn, 12, 0x00);
 	HAL_NVIC_EnableIRQ(EXTI1_IRQn);
 
 

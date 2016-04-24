@@ -172,7 +172,7 @@ static error_t useDefaultHostName(void)
 static uint8_t parseIpv4Config(char *data, jsmntok_t *jSMNtokens, jsmnerr_t resultCode)
 {
    error_t error;
-
+#define IP_MAX_LEN 16 //Includeing '\0' at end
    char ipAddr[] = {"xxx.xxx.xxx.xxx\0"};
    char ipMask[] = {"xxx.xxx.xxx.xxx\0"};
    char ipGateway[] = {"xxx.xxx.xxx.xxx\0"};
@@ -185,32 +185,32 @@ static uint8_t parseIpv4Config(char *data, jsmntok_t *jSMNtokens, jsmnerr_t resu
    jsmn_get_bool(data, jSMNtokens, resultCode, "$.ipv4.usedhcp", &networkContext.useDhcp);
 
 
-   length = jsmn_get_string(data, jSMNtokens, resultCode, "$.ipv4.address", &ipAddr[0], 15);
-   if (length ==0 || length > 15)
+   length = jsmn_get_string(data, jSMNtokens, resultCode, "$.ipv4.address", &ipAddr[0], IP_MAX_LEN);
+   if (length ==0 || length > IP_MAX_LEN)
    {
       xprintf("Warning: wrong ip address in config file \"/config/lan.json\" ");
    }
-   length = jsmn_get_string(data, jSMNtokens, resultCode, "$.ipv4.netmask", &ipMask[0], 15);
-   if (length ==0 || length > 15)
+   length = jsmn_get_string(data, jSMNtokens, resultCode, "$.ipv4.netmask", &ipMask[0], IP_MAX_LEN);
+   if (length ==0 || length > IP_MAX_LEN)
    {
       xprintf("Warning: wrong subnet mask in config file \"/lan.json\" ");
    }
 
-   length = jsmn_get_string(data, jSMNtokens, resultCode, "$.ipv4.gateway", &ipGateway[0], 15);
-   if (length ==0 || length > 15)
+   length = jsmn_get_string(data, jSMNtokens, resultCode, "$.ipv4.gateway", &ipGateway[0], IP_MAX_LEN);
+   if (length ==0 || length > IP_MAX_LEN)
    {
       xprintf("Warning: wrong default gateway in config file \"/config/lan.json\" ");
    }
 
-   length = jsmn_get_string(data, jSMNtokens, resultCode, "$.ipv4.primarydns", &ipDns1[0], 15);
-   if (length ==0 || length > 15)
+   length = jsmn_get_string(data, jSMNtokens, resultCode, "$.ipv4.primarydns", &ipDns1[0], IP_MAX_LEN);
+   if (length ==0 || length > IP_MAX_LEN)
    {
       xprintf("Warning: wrong primary dns in config file \"/config/lan.json\" ");
    }
 
-   length = jsmn_get_string(data, jSMNtokens, resultCode, "$.ipv4.secondarydns", &ipDns2[0], 15);
+   length = jsmn_get_string(data, jSMNtokens, resultCode, "$.ipv4.secondarydns", &ipDns2[0], IP_MAX_LEN);
 
-   if (length ==0 || length > 15)
+   if (length ==0 || length > IP_MAX_LEN)
    {
       xprintf("Warning: wrong primary dns in config file \"/config/lan.json\" ");
    }
