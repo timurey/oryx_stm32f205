@@ -66,6 +66,7 @@
 									<listOptionValue builtIn="false" value="&quot;../system/include&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;../system/include/CMSIS&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;../system/include/stm32f2-hal&quot;"/>
+									<listOptionValue builtIn="false" value="../src/driver/include"/>
 								</option>
 								<option id="ilg.gnuarmeclipse.managedbuild.cross.option.assembler.defs.282998406" name="Defined symbols (-D)" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.assembler.defs" valueType="definedSymbols">
 									<listOptionValue builtIn="false" value="DEBUG"/>
@@ -82,6 +83,7 @@
 								<option id="ilg.gnuarmeclipse.managedbuild.cross.option.c.compiler.include.paths.499699687" name="Include paths (-I)" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.c.compiler.include.paths" useByScannerDiscovery="false" valueType="includePath">
 									<listOptionValue builtIn="false" value="&quot;../include&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;../src/common&quot;"/>
+									<listOptionValue builtIn="false" value="../src/driver/include"/>
 									<listOptionValue builtIn="false" value="&quot;../src/my_cyclone&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;../src/my_cyclone/common&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;../src/fatfs&quot;"/>
@@ -118,6 +120,7 @@
 									<listOptionValue builtIn="false" value="&quot;../system/include&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;../system/include/CMSIS&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;../system/include/stm32f2-hal&quot;"/>
+									<listOptionValue builtIn="false" value="../src/driver/include"/>
 								</option>
 								<option id="ilg.gnuarmeclipse.managedbuild.cross.option.cpp.compiler.noexceptions.644150277" name="Do not use exceptions (-fno-exceptions)" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.cpp.compiler.noexceptions" useByScannerDiscovery="true" value="true" valueType="boolean"/>
 								<option id="ilg.gnuarmeclipse.managedbuild.cross.option.cpp.compiler.nortti.1452453899" name="Do not use RTTI (-fno-rtti)" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.cpp.compiler.nortti" useByScannerDiscovery="true" value="true" valueType="boolean"/>
@@ -373,6 +376,7 @@
 									<listOptionValue builtIn="false" value="&quot;../system/include&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;../system/include/CMSIS&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;../system/include/stm32f2-hal&quot;"/>
+									<listOptionValue builtIn="false" value="../src/driver/include"/>
 								</option>
 								<option id="ilg.gnuarmeclipse.managedbuild.cross.option.assembler.defs.1055226608" name="Defined symbols (-D)" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.assembler.defs" valueType="definedSymbols">
 									<listOptionValue builtIn="false" value="DEBUG"/>
@@ -406,6 +410,7 @@
 									<listOptionValue builtIn="false" value="../src/jsmn"/>
 									<listOptionValue builtIn="false" value="../src/onewire"/>
 									<listOptionValue builtIn="false" value="&quot;../src/cyclone_crypto&quot;"/>
+									<listOptionValue builtIn="false" value="../src/driver/include"/>
 								</option>
 								<option id="ilg.gnuarmeclipse.managedbuild.cross.option.c.compiler.warning.missingprototypes.981446534" name="Warn if a global function has no prototype (-Wmissing-prototypes)" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.c.compiler.warning.missingprototypes" useByScannerDiscovery="true" value="true" valueType="boolean"/>
 								<option id="ilg.gnuarmeclipse.managedbuild.cross.option.c.compiler.warning.strictprototypes.337381502" name="Warn if a function has no arg type (-Wstrict-prototypes)" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.c.compiler.warning.strictprototypes" useByScannerDiscovery="true" value="true" valueType="boolean"/>
@@ -424,6 +429,7 @@
 									<listOptionValue builtIn="false" value="&quot;../system/include&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;../system/include/CMSIS&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;../system/include/stm32f2-hal&quot;"/>
+									<listOptionValue builtIn="false" value="../src/driver/include"/>
 								</option>
 								<option id="ilg.gnuarmeclipse.managedbuild.cross.option.cpp.compiler.noexceptions.357532234" name="Do not use exceptions (-fno-exceptions)" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.cpp.compiler.noexceptions" useByScannerDiscovery="true" value="true" valueType="boolean"/>
 								<option id="ilg.gnuarmeclipse.managedbuild.cross.option.cpp.compiler.nortti.36194830" name="Do not use RTTI (-fno-rtti)" superClass="ilg.gnuarmeclipse.managedbuild.cross.option.cpp.compiler.nortti" useByScannerDiscovery="true" value="true" valueType="boolean"/>
