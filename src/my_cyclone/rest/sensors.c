@@ -26,49 +26,49 @@ char *pNames = &names[0];
 
 
 // Type of sensor (used when presenting sensors)
- const mysensorSensorList_t sensorList[] =
- {
-    {S_INPUT, "input"},
-    {S_DOOR, ""}, // Door sensor, V_TRIPPED, V_ARMED
-    {S_MOTION,  ""}, // Motion sensor, V_TRIPPED, V_ARMED
-    {S_SMOKE,  ""}, // Smoke sensor, V_TRIPPED, V_ARMED
-    {S_LIGHT, ""}, // Binary light or relay, V_STATUS (or V_LIGHT), V_WATT
-    {S_BINARY, "digital"}, // Binary light or relay, V_STATUS (or V_LIGHT), V_WATT (same as S_LIGHT)
-    {S_DIMMER, "dimmer"}, // Dimmable light or fan device, V_STATUS (on/off), V_DIMMER (dimmer level 0-100), V_WATT
-    {S_COVER, ""}, // Blinds or window cover, V_UP, V_DOWN, V_STOP, V_DIMMER (open/close to a percentage)
-    {S_TEMP, "temperature"}, // Temperature sensor, V_TEMP
-    {S_HUM, ""}, // Humidity sensor, V_HUM
-    {S_BARO, ""}, // Barometer sensor, V_PRESSURE, V_FORECAST
-    {S_WIND, ""}, // Wind sensor, V_WIND, V_GUST
-    {S_RAIN, ""}, // Rain sensor, V_RAIN, V_RAINRATE
-    {S_UV, ""}, // Uv sensor, V_UV
-    {S_WEIGHT, ""}, // Personal scale sensor, V_WEIGHT, V_IMPEDANCE
-    {S_POWER, ""}, // Power meter, V_WATT, V_KWH
-    {S_HEATER, ""}, // Header device, V_HVAC_SETPOINT_HEAT, V_HVAC_FLOW_STATE, V_TEMP
-    {S_DISTANCE, ""}, // Distance sensor, V_DISTANCE
-    {S_LIGHT_LEVEL, ""}, // Light level sensor, V_LIGHT_LEVEL (uncalibrated in percentage),  V_LEVEL (light level in lux)
-    {S_ARDUINO_NODE, ""}, // Used (internally) for presenting a non-repeating Arduino node
-    {S_ARDUINO_REPEATER_NODE, ""}, // Used (internally) for presenting a repeating Arduino node
-    {S_LOCK, ""}, // Lock device, V_LOCK_STATUS
-    {S_IR, ""}, // Ir device, V_IR_SEND, V_IR_RECEIVE
-    {S_WATER, ""}, // Water meter, V_FLOW, V_VOLUME
-    {S_AIR_QUALITY, ""}, // Air quality sensor, V_LEVEL
-    {S_CUSTOM, ""}, // Custom sensor
-    {S_MORZE, "sequential"},
-    {S_DUST, ""}, // Dust sensor, V_LEVEL
-    {S_SCENE_CONTROLLER, ""}, // Scene controller device, V_SCENE_ON, V_SCENE_OFF.
-    {S_RGB_LIGHT, ""}, // RGB light. Send color component data using V_RGB. Also supports V_WATT
-    {S_RGBW_LIGHT, ""}, // RGB light with an additional White component. Send data using V_RGBW. Also supports V_WATT
-    {S_COLOR_SENSOR,  ""}, // Color sensor, send color information using V_RGB
-    {S_HVAC, ""}, // Thermostat/HVAC device. V_HVAC_SETPOINT_HEAT, V_HVAC_SETPOINT_COLD, V_HVAC_FLOW_STATE, V_HVAC_FLOW_MODE, V_TEMP
-    {S_MULTIMETER, "analog"}, // Multimeter device, V_VOLTAGE, V_CURRENT, V_IMPEDANCE
-    {S_SPRINKLER,  ""}, // Sprinkler, V_STATUS (turn on/off), V_TRIPPED (if fire detecting device)
-    {S_WATER_LEAK, ""}, // Water leak sensor, V_TRIPPED, V_ARMED
-    {S_SOUND, ""}, // Sound sensor, V_TRIPPED, V_ARMED, V_LEVEL (sound level in dB)
-    {S_VIBRATION, ""}, // Vibration sensor, V_TRIPPED, V_ARMED, V_LEVEL (vibration in Hz)
-    {S_MOISTURE, ""}, // Moisture sensor, V_TRIPPED, V_ARMED, V_LEVEL (water content or moisture in percentage?)
-    {S_ERROR, ""}, //Wrong sensor
- };
+const mysensorSensorList_t sensorList[] =
+{
+   {S_INPUT, "input"},
+   {S_DOOR, ""}, // Door sensor, V_TRIPPED, V_ARMED
+   {S_MOTION,  ""}, // Motion sensor, V_TRIPPED, V_ARMED
+   {S_SMOKE,  ""}, // Smoke sensor, V_TRIPPED, V_ARMED
+   {S_LIGHT, ""}, // Binary light or relay, V_STATUS (or V_LIGHT), V_WATT
+   {S_BINARY, "digital"}, // Binary light or relay, V_STATUS (or V_LIGHT), V_WATT (same as S_LIGHT)
+   {S_DIMMER, "dimmer"}, // Dimmable light or fan device, V_STATUS (on/off), V_DIMMER (dimmer level 0-100), V_WATT
+   {S_COVER, ""}, // Blinds or window cover, V_UP, V_DOWN, V_STOP, V_DIMMER (open/close to a percentage)
+   {S_TEMP, "temperature"}, // Temperature sensor, V_TEMP
+   {S_HUM, ""}, // Humidity sensor, V_HUM
+   {S_BARO, ""}, // Barometer sensor, V_PRESSURE, V_FORECAST
+   {S_WIND, ""}, // Wind sensor, V_WIND, V_GUST
+   {S_RAIN, ""}, // Rain sensor, V_RAIN, V_RAINRATE
+   {S_UV, ""}, // Uv sensor, V_UV
+   {S_WEIGHT, ""}, // Personal scale sensor, V_WEIGHT, V_IMPEDANCE
+   {S_POWER, ""}, // Power meter, V_WATT, V_KWH
+   {S_HEATER, ""}, // Header device, V_HVAC_SETPOINT_HEAT, V_HVAC_FLOW_STATE, V_TEMP
+   {S_DISTANCE, ""}, // Distance sensor, V_DISTANCE
+   {S_LIGHT_LEVEL, ""}, // Light level sensor, V_LIGHT_LEVEL (uncalibrated in percentage),  V_LEVEL (light level in lux)
+   {S_ARDUINO_NODE, ""}, // Used (internally) for presenting a non-repeating Arduino node
+   {S_ARDUINO_REPEATER_NODE, ""}, // Used (internally) for presenting a repeating Arduino node
+   {S_LOCK, ""}, // Lock device, V_LOCK_STATUS
+   {S_IR, ""}, // Ir device, V_IR_SEND, V_IR_RECEIVE
+   {S_WATER, ""}, // Water meter, V_FLOW, V_VOLUME
+   {S_AIR_QUALITY, ""}, // Air quality sensor, V_LEVEL
+   {S_CUSTOM, ""}, // Custom sensor
+   {S_MORZE, "sequential"},
+   {S_DUST, ""}, // Dust sensor, V_LEVEL
+   {S_SCENE_CONTROLLER, ""}, // Scene controller device, V_SCENE_ON, V_SCENE_OFF.
+   {S_RGB_LIGHT, ""}, // RGB light. Send color component data using V_RGB. Also supports V_WATT
+   {S_RGBW_LIGHT, ""}, // RGB light with an additional White component. Send data using V_RGBW. Also supports V_WATT
+   {S_COLOR_SENSOR,  ""}, // Color sensor, send color information using V_RGB
+   {S_HVAC, ""}, // Thermostat/HVAC device. V_HVAC_SETPOINT_HEAT, V_HVAC_SETPOINT_COLD, V_HVAC_FLOW_STATE, V_HVAC_FLOW_MODE, V_TEMP
+   {S_MULTIMETER, "analog"}, // Multimeter device, V_VOLTAGE, V_CURRENT, V_IMPEDANCE
+   {S_SPRINKLER,  ""}, // Sprinkler, V_STATUS (turn on/off), V_TRIPPED (if fire detecting device)
+   {S_WATER_LEAK, ""}, // Water leak sensor, V_TRIPPED, V_ARMED
+   {S_SOUND, ""}, // Sound sensor, V_TRIPPED, V_ARMED, V_LEVEL (sound level in dB)
+   {S_VIBRATION, ""}, // Vibration sensor, V_TRIPPED, V_ARMED, V_LEVEL (vibration in Hz)
+   {S_MOISTURE, ""}, // Moisture sensor, V_TRIPPED, V_ARMED, V_LEVEL (water content or moisture in percentage?)
+   {S_ERROR, ""}, //Wrong sensor
+};
 
 static char buf[]="00:00:00:00:00:00:00:00/0";
 
@@ -87,11 +87,11 @@ static int sprintfSensor (char * bufer, int maxLen, sensFunctions * sensor, int 
    {
       p+=snprintf(bufer+p, maxLen-p, "{\"name\":\"%s\",\"path\":\"%s/v1/sensors%s\",\"method\":[", sensor->sensClassName, &restPrefix[0], sensor->sensClassPath);
 
-//      if (sensor->sensGetMethodHadler != NULL)
-//      {
-         p+=snprintf(bufer+p, maxLen-p, "\"GET\",");
-         flag++;
-//      }
+      //      if (sensor->sensGetMethodHadler != NULL)
+      //      {
+      p+=snprintf(bufer+p, maxLen-p, "\"GET\",");
+      flag++;
+      //      }
       if (sensor->sensPostMethodHadler != NULL)
       {
          p+=snprintf(bufer+p, maxLen-p, "\"POST\",");
@@ -497,21 +497,76 @@ char* sensorsAddPlace(const char * place, size_t length)
 
 static error_t parseSensors (char *data, size_t len, jsmn_parser* jSMNparser, jsmntok_t *jSMNtokens)
 {
-   jsmnerr_t resultCode;
+   int32_t resultCode = 0;
    jsmn_init(jSMNparser);
-   uint8_t pos;
    sensor_t * currentSensor = &sensors[0];
+
+   char path[64];
+   char device[64];
+
+   char parameter[128];
+   char * pcParameter;
+   char value[64];
+   int result = 1;
+   int parameters;
+
+   uint32_t input_num;
+   uint32_t parameter_num;
 
    resultCode = jsmn_parse(jSMNparser, data, len, jSMNtokens, CONFIG_JSMN_NUM_TOKENS);
 
+   input_num = 0;
    if(resultCode)
    {
-      for (sensFunctions *cur_sensor = &__start_sens_functions; cur_sensor < &__stop_sens_functions; cur_sensor++)
+      while (result)
       {
-         if (cur_sensor->sensInitClassHadler != NULL)
+         snprintf(&path[0], sizeof(path)/sizeof(char), "$.inputs[%"PRIu32"].device", input_num);
+         result = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], &device[0], sizeof(device)/sizeof(char));
+         if (result)
          {
-            cur_sensor->sensInitClassHadler(data, jSMNtokens, &currentSensor, &resultCode, &pos);
+            parameters = 1;
+            parameter_num = 0;
+            currentSensor->fp = driver_open(&device[0], 0);
+            if (currentSensor->fp)
+            {
+               /*Setting up parameters*/
+               while (parameters)
+               {
+                  /* Damn!!! We can't find name of the odject by XJOSNPATH
+                   * try to get it manually.
+                   * It's not clean, but it should work */
+                  snprintf(&path[0], sizeof(path)/sizeof(char), "$.inputs[%"PRIu32"].parameters[%"PRIu32"]", input_num, parameter_num);
+                  parameters = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], &parameter[0], arraysize(parameter));
+                  if (parameters)
+                  {
+                     pcParameter = strchr(parameter, ' \" '); /*Find opening quote */
+
+                     if (pcParameter)
+                     {
+                        pcParameter++;
+                        strtok(pcParameter, "\"");  /*Truncate string by closing quote*/
+                     }
+
+                     snprintf(&path[0], sizeof(path)/sizeof(char), "$.inputs[%"PRIu32"].parameters[%"PRIu32"]%s", input_num, parameter_num, pcParameter);
+                     parameters = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], &value[0], arraysize(value));
+                     if (parameters)
+                     {
+                        driver_ioctl(currentSensor->fp, pcParameter, &value[0]);
+                     }
+                     parameter_num++;
+                  }
+               }
+               /*Setting up name and place*/
+
+               /*Setting up type*/
+            }
+            /*If device configured and we don't reach end of devices*/
+            if (currentSensor->fp && currentSensor <= &sensors[MAX_NUM_SENSORS])
+            {
+               currentSensor++;
+            }
          }
+         input_num++;
       }
    }
    else
@@ -544,14 +599,14 @@ void sensorsConfigure(void)
    volatile error_t error = NO_ERROR;
    int i;
 
-   memset (&sensors[0],0,sizeof(sensor_t)*MAX_NUM_SENSORS);
+   memset (&sensors[0], 0, sizeof(sensor_t)*MAX_NUM_SENSORS);
    for (i=0;i<MAX_NUM_SENSORS; i++)
    {
       initSensor(&sensors[i]);
    }
    if (!error)
    {
-      error = read_config("/config/sensors.json",&parseSensors);
+      error = read_config("/config/sensors_draft.json", &parseSensors);
    }
    /*
     * todo: move this code to init section.

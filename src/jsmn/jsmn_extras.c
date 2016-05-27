@@ -12,7 +12,7 @@
 #define ISUPPER(a) (a>='A' && a<= 'Z')
 #define ISALPHA(a) ((a>='a' && a<='z')||(a>='A' && a<= 'Z'))
 #define ISALNUM(a) (ISDIGIT(a)||ISALPHA(a))
-#define ISSPACE(a) (a==' ' || a=='\t' || a== '\n')
+#define ISSPACE(a) (a==' ' || a=='\t' || a== '\n' || a == '_')
 #define ISDOT(a) (a=='.')
 
 #ifndef FALSE

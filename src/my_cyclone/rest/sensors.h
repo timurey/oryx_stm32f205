@@ -17,7 +17,7 @@
 #include "onewire_conf.h"
 #include "os_port.h"
 #include "compiler_port.h"
-
+#include "../../driver/include/DriverInterface.h"
 
 #define NAMES_CACHE_LENGTH 256
 #define PLACES_CACHE_LENGTH 256
@@ -119,6 +119,7 @@ typedef struct
    mysensor_sensor_t type;
    mysensor_sensor_t subType;
    mysensor_driver_t driver;
+   Peripheral_Descriptor_t * fp;
    sensValueType_t valueType;
    char* place;
    char* name;

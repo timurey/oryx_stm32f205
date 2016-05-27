@@ -17,7 +17,7 @@ Peripheral_Descriptor_t * driver_open(const char * path, const uint16_t flags){
 
    size_t len;// Lenght of registerd path
    uint32_t numOfPeripherals;
-
+   size_t result;
    /*First, allocate memory for perepheral descriptor*/
    peripheral = osAllocMem( sizeof( peripheral_t ) );
 
@@ -25,8 +25,16 @@ Peripheral_Descriptor_t * driver_open(const char * path, const uint16_t flags){
    {
       return NULL;
    }
+   memset(peripheral, 0 , sizeof( peripheral_t ));
+   /*Second, create mutex for peripheral access*/
+   if(!osCreateMutex(&peripheral->mutex))
+   {
+      osFreeMem(peripheral);
+      peripheral = NULL;
+      return NULL;
+   }
 
-   /*Second, search driver by device name*/
+   /*Third, search driver by device name*/
    for (driver_t *curr_driver = &__start_drivers; curr_driver < &__stop_drivers; curr_driver++)
    {
       len = strlen(curr_driver->path);
@@ -64,7 +72,20 @@ Peripheral_Descriptor_t * driver_open(const char * path, const uint16_t flags){
    }
 
    /*If driver not found for current path, free memory and return*/
-   if (peripheral->driver == NULL)
+   if (peripheral->driver)
+   {
+      /*Initialize peripheral specific part*/
+      if (peripheral->driver->open != NULL)
+      {
+         result = peripheral->driver->open(peripheral);
+         if (!result) //Check result of
+         {
+            peripheral->driver = NULL; //Error
+         }
+      }
+   }
+
+   if (!peripheral->driver)
    {
       osFreeMem(peripheral);
       peripheral = NULL;
@@ -83,7 +104,11 @@ size_t driver_read(Peripheral_Descriptor_t * const pxPeripheral, void * const pv
       && (peripheral->driver->read != NULL)
    )
    {
+      osAcquireMutex(&peripheral->mutex);
+
       result = peripheral->driver->read(pxPeripheral, pvBuffer, xBytes);
+
+      osReleaseMutex(&peripheral->mutex);
    }
    else
    {
@@ -102,7 +127,11 @@ size_t driver_write(Peripheral_Descriptor_t * const pxPeripheral, const void * p
       && (peripheral->driver->write != NULL)
    )
    {
+      osAcquireMutex(&peripheral->mutex);
+
       result =  peripheral->driver->write(pxPeripheral, pvBuffer, xBytes);
+
+      osReleaseMutex(&peripheral->mutex);
    }
    else
    {
@@ -148,6 +177,8 @@ void driver_close(Peripheral_Descriptor_t  * pxPeripheral)
 
    if (peripheral != NULL)
    {
+      osDeleteMutex(&peripheral->mutex);
+
       peripheral->driver = NULL;
 
       osFreeMem(peripheral);
