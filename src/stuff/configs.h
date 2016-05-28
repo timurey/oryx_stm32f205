@@ -9,7 +9,7 @@
 #define STUFF_CONFIGS_H_
 #include "error.h"
 #include "../jsmn/jsmn_extras.h"
-#define CONFIG_JSMN_NUM_TOKENS 512
+#define CONFIG_JSMN_NUM_TOKENS 256
 typedef error_t (*tConfigParser)(char * data, size_t len, jsmn_parser *jSMNparser, jsmntok_t *jSMNtokens);
 
 error_t configInit(void);

@@ -216,7 +216,7 @@ static int findTokenByParentAndName(const char *pJSON, jsmntok_t * pTok, int par
 }
 
 
-int jsmn_get_value(const char *js, jsmntok_t *tokens, unsigned int num_tokens,  char * pPath)
+int jsmn_get_value(const char *js, jsmntok_t *tokens,  int num_tokens,  char * pPath)
 {
    char *path = pPath;
    int token =-1;
@@ -252,7 +252,7 @@ int jsmn_get_value(const char *js, jsmntok_t *tokens, unsigned int num_tokens,  
 
 }
 
-int jsmn_get_string(const char *js, jsmntok_t *tokens, unsigned int num_tokens,  char * pPath, char * string, int maxlen)
+int jsmn_get_string(const char *js, jsmntok_t *tokens,  int num_tokens,  char * pPath, char * string, int maxlen)
 {
    int tokNum;
    int length =0;
@@ -275,9 +275,8 @@ int jsmn_get_string(const char *js, jsmntok_t *tokens, unsigned int num_tokens, 
 
    return length;
 }
-int jsmn_get_bool(const char *js, jsmntok_t *tokens, unsigned int num_tokens,  char * pPath, int* pointer)
+int jsmn_get_bool(const char *js, jsmntok_t *tokens,  int num_tokens,  char * pPath, int* pointer)
 {
-   int result = FALSE;
    int tokNum;
 
    tokNum = jsmn_get_value(js, tokens, num_tokens, pPath);

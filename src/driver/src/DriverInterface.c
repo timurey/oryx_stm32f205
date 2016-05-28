@@ -43,14 +43,14 @@ Peripheral_Descriptor_t * driver_open(const char * path, const uint16_t flags){
       {
 
          /*Third, find number of peripheral*/
-         if ((*(path+len) >= '0') && (*(path+len) <= '9'))
+         if ((*(path+len) == '_') && (*(path+len+1) >= '0') && (*(path+len+1) <= '9'))
          {
             /*Next charcter in requered path is a numeric,
              *  convert it from srting to int */
 
             /*It can't be a nigative, and must be less,
              * than count of peripherals, defined by driver */
-            numOfPeripherals = (uint32_t) atoi (path+len);
+            numOfPeripherals = (uint32_t) atoi (path+len+1);
             if (numOfPeripherals>=curr_driver->countOfPerepherals)
             {
                break;

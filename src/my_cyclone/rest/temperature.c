@@ -25,7 +25,7 @@ error_t deinitTemperature (void)
    return NO_ERROR;
 }
 
-error_t initTemperature (const char * data, jsmntok_t *jSMNtokens, sensor_t ** pCurrentSensor, jsmnerr_t * resultCode, uint8_t * pos)
+error_t initTemperature (const char * data, jsmntok_t *jSMNtokens, sensor_t ** pCurrentSensor, int resultCode, uint8_t * pos)
 {
 #define MAXLEN 64
    char tmp_str[MAXLEN];
@@ -41,7 +41,7 @@ error_t initTemperature (const char * data, jsmntok_t *jSMNtokens, sensor_t ** p
    {
 
       sprintf(&path[0],"$.sensors.temperature.onewire[%d].serial",i);
-      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      len = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], str, MAXLEN);
       if(len>0)
       {
          error = serialStringToHex( str, len, &currentSensor->serial[0], ONEWIRE_SERIAL_LENGTH);
@@ -51,7 +51,7 @@ error_t initTemperature (const char * data, jsmntok_t *jSMNtokens, sensor_t ** p
          }
       }
       sprintf(&path[0],"$.sensors.temperature.onewire[%d].name",i);
-      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      len = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], str, MAXLEN);
       if(len>0)
       {
          currentSensor->name = sensorsFindName(str, len);
@@ -67,7 +67,7 @@ error_t initTemperature (const char * data, jsmntok_t *jSMNtokens, sensor_t ** p
          }
       }
       sprintf(&path[0],"$.sensors.temperature.onewire[%d].place",i);
-      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      len = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], str, MAXLEN);
       if(len>0)
       {
          currentSensor->place = sensorsFindPlace(str, len);

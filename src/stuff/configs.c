@@ -18,7 +18,7 @@ error_t configInit(void)
 {
 
    jSMNparser = osAllocMem(sizeof(jsmn_parser));
-   jSMNtokens = osAllocMem(sizeof(jsmntok_t) * CONFIG_JSMN_NUM_TOKENS); // a number >= total number of tokens
+   jSMNtokens = osAllocMem(sizeof(jsmntok_t) * (CONFIG_JSMN_NUM_TOKENS+1)); // a number >= total number of tokens
 
    if (!jSMNparser)
       return ERROR_OUT_OF_MEMORY;
@@ -58,7 +58,7 @@ error_t read_config(char * path, tConfigParser parser)
    if (!fsize)
       return ERROR_INVALID_FILE_RECORD_SIZE;
 
-   data = osAllocMem(fsize);
+   data = osAllocMem(fsize+1);
 
    if (!data) return ERROR_OUT_OF_MEMORY;
 

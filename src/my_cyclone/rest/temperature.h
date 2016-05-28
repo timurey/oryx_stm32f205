@@ -19,7 +19,7 @@ error_t putRestTemperature(HttpConnection *connection, RestApi_t* RestApi);
 error_t deleteRestTemperature(HttpConnection *connection, RestApi_t* RestApi);
 //error_t initTemperature (const char * data, jsmntok_t *jSMNtokens, sensor_t ** currentSensor, jsmnerr_t *  resultCode, uint8_t * pos);
 error_t deinitTemperature (void);
-error_t initTemperature (const char * data, jsmntok_t *jSMNtokens, sensor_t ** pCurrentSensor, jsmnerr_t * resultCode, uint8_t * pos);
+error_t initTemperature (const char * data, jsmntok_t *jSMNtokens, sensor_t ** pCurrentSensor, int resultCode, uint8_t * pos);
 
 
 #endif /* MY_CYCLONE_REST_SENSORS_TEMPERATURE_H_ */

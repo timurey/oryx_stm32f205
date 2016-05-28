@@ -14,7 +14,7 @@
 
 static OsTask *pOutputTask;
 
-error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCurrentExecutor, jsmnerr_t * resultCode, uint8_t * pos);
+error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCurrentExecutor, int resultCode, uint8_t * pos);
 error_t restDenitOutput(void);
 error_t restGetOutput(HttpConnection *connection, RestApi_t * rest);
 error_t restPostOutput(HttpConnection *connection, RestApi_t * rest);
@@ -33,7 +33,7 @@ static void initOutput(executor_t * currentExecutor)
    (void) currentExecutor;
 
 }
-error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCurrentExecutor, jsmnerr_t * resultCode, uint8_t * pos)
+error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCurrentExecutor, int resultCode, uint8_t * pos)
 {
 #define MAXLEN 64
    char tmp_str[MAXLEN];
@@ -52,7 +52,7 @@ error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCur
        * Code for digital outputs
        */
       sprintf(&path[0],"$.executors.output.digital[%d].serial",i);
-      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      len = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], str, MAXLEN);
       if(len>0)
       {
          error = serialStringToHex(str, len, &currentExecutor->serial[0], OUTPUT_SERIAL_LENGTH);
@@ -62,7 +62,7 @@ error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCur
          }
       }
       sprintf(&path[0],"$.executors.output.digital[%d].name",i);
-      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      len = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], str, MAXLEN);
       if(len>0)
       {
          currentExecutor->name = sensorsFindName(str, len);
@@ -78,7 +78,7 @@ error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCur
          }
       }
       sprintf(&path[0],"$.executors.output.digital[%d].place",i);
-      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      len = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], str, MAXLEN);
       if(len>0)
       {
 
@@ -115,7 +115,7 @@ error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCur
        * Code for analog outnputs
        */
       sprintf(&path[0],"$.executors.output.analog[%d].serial",i);
-      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      len = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], str, MAXLEN);
       if(len>0)
       {
 
@@ -126,7 +126,7 @@ error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCur
          }
       }
       sprintf(&path[0],"$.executors.output.analog[%d].name",i);
-      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      len = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], str, MAXLEN);
       if(len>0)
       {
 
@@ -144,7 +144,7 @@ error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCur
          }
       }
       sprintf(&path[0],"$.executors.output.analog[%d].place",i);
-      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      len = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], str, MAXLEN);
       if(len>0)
       {
 
@@ -181,7 +181,7 @@ error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCur
        * Code for dimmers outputs
        */
       sprintf(&path[0],"$.executors.output.dimmer[%d].serial",i);
-      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      len = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], str, MAXLEN);
       if(len>0)
       {
 
@@ -192,7 +192,7 @@ error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCur
          }
       }
       sprintf(&path[0],"$.executors.output.dimmer[%d].name",i);
-      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      len = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], str, MAXLEN);
       if(len>0)
       {
 
@@ -210,7 +210,7 @@ error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCur
          }
       }
       sprintf(&path[0],"$.executors.output.dimmer[%d].place",i);
-      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      len = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], str, MAXLEN);
       if(len>0)
       {
 
@@ -247,7 +247,7 @@ error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCur
        * Code for HTTP commands
        */
       sprintf(&path[0],"$.executors.output.http[%d].serial",i);
-      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      len = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], str, MAXLEN);
       if(len>0)
       {
 
@@ -258,7 +258,7 @@ error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCur
          }
       }
       sprintf(&path[0],"$.executors.output.http[%d].name",i);
-      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      len = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], str, MAXLEN);
       if(len>0)
       {
 
@@ -276,7 +276,7 @@ error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCur
          }
       }
       sprintf(&path[0],"$.executors.output.http[%d].place",i);
-      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      len = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], str, MAXLEN);
       if(len>0)
       {
 

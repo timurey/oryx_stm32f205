@@ -62,7 +62,7 @@
 <listEntry value="org.eclipse.debug.ui.launchGroup.debug"/>
 <listEntry value="org.eclipse.debug.ui.launchGroup.run"/>
 </listAttribute>
-<stringAttribute key="org.eclipse.dsf.launch.MEMORY_BLOCKS" value="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot; standalone=&quot;no&quot;?&gt;&#10;&lt;memoryBlockExpressionList context=&quot;Context string&quot;&gt;&#10;&lt;memoryBlockExpression address=&quot;536836624&quot; label=&quot;0x1fff7a10&quot;/&gt;&#10;&lt;memoryBlockExpression address=&quot;536868840&quot; label=&quot;0x1FFFF7E8&quot;/&gt;&#10;&lt;/memoryBlockExpressionList&gt;&#10;"/>
+<stringAttribute key="org.eclipse.dsf.launch.MEMORY_BLOCKS" value="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot; standalone=&quot;no&quot;?&gt;&#10;&lt;memoryBlockExpressionList context=&quot;Context string&quot;&gt;&#10;&lt;memoryBlockExpression address=&quot;536890724&quot; label=&quot;&amp;amp;(count)&quot;/&gt;&#10;&lt;memoryBlockExpression address=&quot;536890712&quot; label=&quot;0x20004d58&quot;/&gt;&#10;&lt;memoryBlockExpression address=&quot;536890796&quot; label=&quot;&amp;amp;(resultCode1)&quot;/&gt;&#10;&lt;memoryBlockExpression address=&quot;536890732&quot; label=&quot;&amp;amp;(count)&quot;/&gt;&#10;&lt;/memoryBlockExpressionList&gt;&#10;"/>
 <stringAttribute key="process_factory_id" value="org.eclipse.cdt.dsf.gdb.GdbProcessFactory"/>
 <stringAttribute key="saved_expressions&lt;seperator&gt;Unknown" value="0x61682d32,0x1FFF7A10"/>
 </launchConfiguration>

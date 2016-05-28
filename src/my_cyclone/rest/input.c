@@ -29,7 +29,7 @@ static ADC_HandleTypeDef hadc1;
 static error_t getRestInputs(HttpConnection *connection, RestApi_t* RestApi);
 #endif
 static void inputTask(void * pvParameters);
-static error_t initInputs (const char * data, jsmntok_t *jSMNtokens, sensor_t ** pCurrentSensor, jsmnerr_t * resultCode, uint8_t * pos);
+static error_t initInputs (const char * data, jsmntok_t *jSMNtokens, sensor_t ** pCurrentSensor, int resultCode, uint8_t * pos);
 
 int input_snprintf(char * bufer, size_t max_len, int sensnum, int restVersion);
 
@@ -568,7 +568,7 @@ static error_t getRestInputs(HttpConnection *connection, RestApi_t* RestApi)
 }
 #endif
 
-static error_t initInputs (const char * data, jsmntok_t *jSMNtokens, sensor_t ** pCurrentSensor, jsmnerr_t * resultCode, uint8_t *pos)
+static error_t initInputs (const char * data, jsmntok_t *jSMNtokens, sensor_t ** pCurrentSensor, int resultCode, uint8_t *pos)
 {
 #define MAXLEN 64
    int len;
@@ -588,7 +588,7 @@ static error_t initInputs (const char * data, jsmntok_t *jSMNtokens, sensor_t **
        * Code for digital inputs
        */
       sprintf(&path[0],"$.sensors.inputs.digital[%d].serial",i);
-      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      len = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], str, MAXLEN);
       if(len>0)
       {
 
@@ -599,7 +599,7 @@ static error_t initInputs (const char * data, jsmntok_t *jSMNtokens, sensor_t **
          }
       }
       sprintf(&path[0],"$.sensors.inputs.digital[%d].name",i);
-      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      len = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], str, MAXLEN);
       if(len>0)
       {
          currentSensor->name = sensorsFindName(str, len);
@@ -615,7 +615,7 @@ static error_t initInputs (const char * data, jsmntok_t *jSMNtokens, sensor_t **
          }
       }
       sprintf(&path[0],"$.sensors.inputs.digital[%d].place",i);
-      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      len = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], str, MAXLEN);
       if(len>0)
       {
          currentSensor->place = sensorsFindPlace(str, len);
@@ -652,7 +652,7 @@ static error_t initInputs (const char * data, jsmntok_t *jSMNtokens, sensor_t **
        * Code for sequential inputs
        */
       sprintf(&path[0],"$.sensors.inputs.sequential[%d].serial",i);
-      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      len = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], str, MAXLEN);
       if(len>0)
       {
          error = serialStringToHex(str, len, &currentSensor->serial[0], INPUT_SERIAL_LENGTH);
@@ -662,7 +662,7 @@ static error_t initInputs (const char * data, jsmntok_t *jSMNtokens, sensor_t **
          }
       }
       sprintf(&path[0],"$.sensors.inputs.sequential[%d].name",i);
-      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      len = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], str, MAXLEN);
       if(len>0)
       {
          currentSensor->name = sensorsFindName(str, len);
@@ -678,7 +678,7 @@ static error_t initInputs (const char * data, jsmntok_t *jSMNtokens, sensor_t **
          }
       }
       sprintf(&path[0],"$.sensors.inputs.sequential[%d].place",i);
-      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      len = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], str, MAXLEN);
       if(len>0)
       {
          currentSensor->place = sensorsFindPlace(str, len);
@@ -714,7 +714,7 @@ static error_t initInputs (const char * data, jsmntok_t *jSMNtokens, sensor_t **
        * Code for dimmers inputs
        */
       sprintf(&path[0],"$.sensors.inputs.dimmer[%d].serial",i);
-      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      len = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], str, MAXLEN);
       if(len>0)
       {
          error = serialStringToHex(str, len, &currentSensor->serial[0], INPUT_SERIAL_LENGTH);
@@ -724,7 +724,7 @@ static error_t initInputs (const char * data, jsmntok_t *jSMNtokens, sensor_t **
          }
       }
       sprintf(&path[0],"$.sensors.inputs.dimmer[%d].name",i);
-      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      len = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], str, MAXLEN);
       if(len>0)
       {
          currentSensor->name = sensorsFindName(str, len);
@@ -740,7 +740,7 @@ static error_t initInputs (const char * data, jsmntok_t *jSMNtokens, sensor_t **
          }
       }
       sprintf(&path[0],"$.sensors.inputs.dimmer[%d].place",i);
-      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      len = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], str, MAXLEN);
       if(len>0)
       {
          currentSensor->place = sensorsFindPlace(str, len);
@@ -776,7 +776,7 @@ static error_t initInputs (const char * data, jsmntok_t *jSMNtokens, sensor_t **
        * Code for analog inputs
        */
       sprintf(&path[0],"$.sensors.inputs.analog[%d].serial",i);
-      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      len = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], str, MAXLEN);
       if(len>0)
       {
          error = serialStringToHex(str, len, &currentSensor->serial[0], INPUT_SERIAL_LENGTH);
@@ -786,7 +786,7 @@ static error_t initInputs (const char * data, jsmntok_t *jSMNtokens, sensor_t **
          }
       }
       sprintf(&path[0],"$.sensors.inputs.analog[%d].name",i);
-      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      len = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], str, MAXLEN);
       if(len>0)
       {
          currentSensor->name = sensorsFindName(str, len);
@@ -802,7 +802,7 @@ static error_t initInputs (const char * data, jsmntok_t *jSMNtokens, sensor_t **
          }
       }
       sprintf(&path[0],"$.sensors.inputs.analog[%d].place",i);
-      len = jsmn_get_string(data, jSMNtokens, *resultCode, &path[0], str, MAXLEN);
+      len = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], str, MAXLEN);
       if(len>0)
       {
          currentSensor->place = sensorsFindPlace(str, len);

@@ -150,7 +150,7 @@ error_t restDeleteExecutors(HttpConnection *connection, RestApi_t* RestApi)
 
 static error_t parseExecutors (char *data, size_t len, jsmn_parser* jSMNparser, jsmntok_t *jSMNtokens)
 {
-   jsmnerr_t resultCode;
+   int resultCode;
    jsmn_init(jSMNparser);
    volatile int strLen;
    uint8_t pos;

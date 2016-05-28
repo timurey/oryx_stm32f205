@@ -11,7 +11,7 @@
 #include "rest.h"
 #include "executor.h"
 
-typedef error_t (*tInitExecutorHandler)(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCurrentExecutor, jsmnerr_t * resultCode, uint8_t * pos);
+typedef error_t (*tInitExecutorHandler)(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCurrentExecutor, int resultCode, uint8_t * pos);
 typedef error_t (*tDeinitExecutorHandler)(void);
 typedef error_t (*tGetExecutorHandler)(HttpConnection *connection, RestApi_t * rest);
 typedef error_t (*tPostExecutorHandler)(HttpConnection *connection, RestApi_t * rest);

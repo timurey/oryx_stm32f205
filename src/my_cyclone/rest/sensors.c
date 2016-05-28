@@ -14,6 +14,7 @@
 #include "rest/temperature.h"
 #include "configs.h"
 #include <ctype.h>
+#include <math.h>
 #include "debug.h"
 #include "macros.h"
 #include "../../expression_parser/variables_def.h"
@@ -52,11 +53,12 @@ const mysensorSensorList_t sensorList[] =
    {S_LOCK, ""}, // Lock device, V_LOCK_STATUS
    {S_IR, ""}, // Ir device, V_IR_SEND, V_IR_RECEIVE
    {S_WATER, ""}, // Water meter, V_FLOW, V_VOLUME
+   {S_WATER_LEVEL, "water level"}, // Water meter, V_FLOW, V_VOLUME
    {S_AIR_QUALITY, ""}, // Air quality sensor, V_LEVEL
    {S_CUSTOM, ""}, // Custom sensor
    {S_MORZE, "sequential"},
    {S_DUST, ""}, // Dust sensor, V_LEVEL
-   {S_SCENE_CONTROLLER, ""}, // Scene controller device, V_SCENE_ON, V_SCENE_OFF.
+   {S_SCENE_CONTROLLER, "scene"}, // Scene controller device, V_SCENE_ON, V_SCENE_OFF.
    {S_RGB_LIGHT, ""}, // RGB light. Send color component data using V_RGB. Also supports V_WATT
    {S_RGBW_LIGHT, ""}, // RGB light with an additional White component. Send data using V_RGBW. Also supports V_WATT
    {S_COLOR_SENSOR,  ""}, // Color sensor, send color information using V_RGB
@@ -78,6 +80,8 @@ sensor_t sensors[MAX_NUM_SENSORS];
 
 register_rest_function(sensors, "/sensors", &restInitSensors, &restDenitSensors, &restGetSensors, &restPostSensors, &restPutSensors, &restDeleteSensors);
 register_variables_functions(sensors, &sensorsGetValue);
+
+static mysensor_sensor_t findTypeByName(const char * type);
 
 static int sprintfSensor (char * bufer, int maxLen, sensFunctions * sensor, int restVersion)
 {
@@ -198,7 +202,7 @@ static int snprintfSensor(char * bufer, size_t maxLen, int sens_num, sensFunctio
 {
    int p=0;
    int d1, d2;
-   float f2, f_val;
+   double f2, f_val;
    int i;
 
    for(i=0; i <= MAX_NUM_SENSORS; i++)
@@ -494,34 +498,44 @@ char* sensorsAddPlace(const char * place, size_t length)
    return NULL;
 }
 
+char jsonPATH[64]; //
 
-static error_t parseSensors (char *data, size_t len, jsmn_parser* jSMNparser, jsmntok_t *jSMNtokens)
+char device[64];
+
+char parameter[64];
+
+static error_t parseSensors (char *data, size_t length, jsmn_parser* jSMNparser, jsmntok_t *jSMNtokens)
 {
-   int32_t resultCode = 0;
-   jsmn_init(jSMNparser);
    sensor_t * currentSensor = &sensors[0];
 
-   char path[64];
-   char device[64];
 
-   char parameter[128];
    char * pcParameter;
+
+   char * name = &parameter[0];   /* Use bufer for copying name. */
+   char * place = &parameter[0];  /* And place too. */
+   char * type = &parameter[0];  /* And type %-) */
+
    char value[64];
+
    int result = 1;
    int parameters;
 
    uint32_t input_num;
    uint32_t parameter_num;
+   size_t len;
+   volatile int resultCode = 0;
+   jsmn_init(jSMNparser);
 
-   resultCode = jsmn_parse(jSMNparser, data, len, jSMNtokens, CONFIG_JSMN_NUM_TOKENS);
+   resultCode = jsmn_parse(jSMNparser, data, strlen(data), jSMNtokens, CONFIG_JSMN_NUM_TOKENS);
 
    input_num = 0;
-   if(resultCode)
+   if(resultCode > 0)
    {
       while (result)
       {
-         snprintf(&path[0], sizeof(path)/sizeof(char), "$.inputs[%"PRIu32"].device", input_num);
-         result = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], &device[0], sizeof(device)/sizeof(char));
+         snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.inputs[%"PRIu32"].device", input_num);
+         result = jsmn_get_string(data, jSMNtokens, resultCode, &jsonPATH[0], &device[0], arraysize(device));
+
          if (result)
          {
             parameters = 1;
@@ -535,11 +549,11 @@ static error_t parseSensors (char *data, size_t len, jsmn_parser* jSMNparser, js
                   /* Damn!!! We can't find name of the odject by XJOSNPATH
                    * try to get it manually.
                    * It's not clean, but it should work */
-                  snprintf(&path[0], sizeof(path)/sizeof(char), "$.inputs[%"PRIu32"].parameters[%"PRIu32"]", input_num, parameter_num);
-                  parameters = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], &parameter[0], arraysize(parameter));
+                  snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.inputs[%"PRIu32"].parameters[%"PRIu32"]", input_num, parameter_num);
+                  parameters = jsmn_get_string(data, jSMNtokens, resultCode, &jsonPATH[0], &parameter[0], arraysize(parameter));
                   if (parameters)
                   {
-                     pcParameter = strchr(parameter, ' \" '); /*Find opening quote */
+                     pcParameter = strchr(parameter, '\"'); /*Find opening quote */
 
                      if (pcParameter)
                      {
@@ -547,8 +561,8 @@ static error_t parseSensors (char *data, size_t len, jsmn_parser* jSMNparser, js
                         strtok(pcParameter, "\"");  /*Truncate string by closing quote*/
                      }
 
-                     snprintf(&path[0], sizeof(path)/sizeof(char), "$.inputs[%"PRIu32"].parameters[%"PRIu32"]%s", input_num, parameter_num, pcParameter);
-                     parameters = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], &value[0], arraysize(value));
+                     snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.inputs[%"PRIu32"].parameters[%"PRIu32"]%s", input_num, parameter_num, pcParameter);
+                     parameters = jsmn_get_string(data, jSMNtokens, resultCode, &jsonPATH[0], &value[0], arraysize(value));
                      if (parameters)
                      {
                         driver_ioctl(currentSensor->fp, pcParameter, &value[0]);
@@ -557,11 +571,54 @@ static error_t parseSensors (char *data, size_t len, jsmn_parser* jSMNparser, js
                   }
                }
                /*Setting up name and place*/
+               snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.inputs[%"PRIu32"].name", input_num);
 
-               /*Setting up type*/
+               len = jsmn_get_string(data, jSMNtokens, resultCode, &jsonPATH[0], name, arraysize(parameter));
+               if(len>0)
+               {
+                  currentSensor->name = sensorsFindName(name, len);
+
+                  if (currentSensor->name == 0)
+                  {
+                     currentSensor->name = sensorsAddName(name, len);
+
+                     if (currentSensor->name == 0)
+                     {
+                        xprintf("error parsing input name: no avalible memory for saving name");
+                     }
+                  }
+               }
+
+               snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.inputs[%"PRIu32"].place", input_num);
+
+               len = jsmn_get_string(data, jSMNtokens, resultCode, &jsonPATH[0], place, arraysize(parameter));
+               if(len>0)
+               {
+                  currentSensor->place = sensorsFindPlace(place, len);
+
+                  if (currentSensor->place == 0)
+                  {
+                     currentSensor->place = sensorsAddPlace(place, len);
+
+                     if (currentSensor->place == 0)
+                     {
+                        xprintf("error parsing input place: no avalible memory for saving place");
+                     }
+                  }
+               }
+               /* Setting up type */
+               snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.inputs[%"PRIu32"].type", input_num);
+
+               len = jsmn_get_string(data, jSMNtokens, resultCode, &jsonPATH[0], type, arraysize(parameter));
+
+               if(len>0)
+               {
+                  currentSensor->type = findTypeByName(type);
+                  /*todo: check for undefined type*/
+               }
             }
             /*If device configured and we don't reach end of devices*/
-            if (currentSensor->fp && currentSensor <= &sensors[MAX_NUM_SENSORS])
+            if (currentSensor->fp && currentSensor <= &sensors[MAX_NUM_SENSORS-1])
             {
                currentSensor++;
             }
@@ -879,6 +936,23 @@ void sensorsSetValueFloat(sensor_t * sensor, float value)
    osReleaseMutex(&sensor->mutex);
 
 }
+
+static mysensor_sensor_t findTypeByName(const char * type)
+{
+   mysensor_sensor_t result = S_INPUT; /* Default value */
+   mysensor_sensor_t num =0;
+   while (num++ <= MYSENSOR_ENUM_LEN)
+   {
+      if (strcmp(sensorList[num].string, type) == 0)
+      {
+         result = num;
+         break;
+      }
+   }
+
+   return result;
+}
+
 static sensor_t * findSensorByName(const char * name)
 {
    int sens_num;
@@ -948,6 +1022,7 @@ error_t sensorsGetValue(const char *name, double * value)
    }
    return error;
 }
+
 uint16_t sensorsGetValueUint16(sensor_t * sensor)
 {
    uint16_t value;

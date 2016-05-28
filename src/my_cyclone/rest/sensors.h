@@ -57,6 +57,7 @@ typedef enum {
    S_LOCK, // Lock device, V_LOCK_STATUS
    S_IR, // Ir device, V_IR_SEND, V_IR_RECEIVE
    S_WATER, // Water meter, V_FLOW, V_VOLUME
+   S_WATER_LEVEL, // Water level, V_FLOW, V_VOLUME
    S_AIR_QUALITY, // Air quality sensor, V_LEVEL
    S_CUSTOM, // Custom sensor
    S_MORZE, //Secuential sensor, like Morze
@@ -73,12 +74,13 @@ typedef enum {
    S_VIBRATION, // Vibration sensor, V_TRIPPED, V_ARMED, V_LEVEL (vibration in Hz)
    S_MOISTURE, // Moisture sensor, V_TRIPPED, V_ARMED, V_LEVEL (water content or moisture in percentage?)
    S_ERROR, //Wrong sensor
+   MYSENSOR_ENUM_LEN // Contain length of enum
 } mysensor_sensor_t;
 
 typedef struct
 {
    const  mysensor_sensor_t type;
-   const char *string;
+   const char * string;
 } mysensorSensorList_t;
 
 

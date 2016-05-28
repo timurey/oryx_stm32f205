@@ -164,7 +164,7 @@ inline void ntpdRestart(void)
 
 static error_t parseNTP (char *data, size_t len, jsmn_parser* jSMNparser, jsmntok_t *jSMNtokens)
 {
-   jsmnerr_t resultCode;
+   int resultCode;
 #define MAXLEN 12
    char tmp_str[MAXLEN];
    char * str = &tmp_str[0];

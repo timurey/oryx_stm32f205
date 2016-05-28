@@ -47,7 +47,7 @@ static error_t parseHttpdConfig (char *data, size_t len, jsmn_parser* jSMNparser
    char tmp_str[MAXLEN];
    char * str = &tmp_str[0];
    uint8_t httpEnable = 0;
-   jsmnerr_t resultCode;
+   int resultCode;
    int strLen;
    int length;
    jsmn_init(jSMNparser);

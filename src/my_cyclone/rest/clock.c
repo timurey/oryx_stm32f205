@@ -70,7 +70,7 @@ error_t restPostClock(HttpConnection *connection, RestApi_t* RestApi)
 
 static error_t parseClock (char *data, size_t len, jsmn_parser* jSMNparser, jsmntok_t *jSMNtokens)
 {
-   jsmnerr_t resultCode;
+   int resultCode;
    int strLen = 0;
    char str[12];
    error_t error = ERROR_UNSUPPORTED_REQUEST;

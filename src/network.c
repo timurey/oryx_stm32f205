@@ -169,7 +169,7 @@ static error_t useDefaultHostName(void)
 }
 
 
-static uint8_t parseIpv4Config(char *data, jsmntok_t *jSMNtokens, jsmnerr_t resultCode)
+static uint8_t parseIpv4Config(char *data, jsmntok_t *jSMNtokens, int resultCode)
 {
    error_t error;
 #define IP_MAX_LEN 16 //Includeing '\0' at end
@@ -254,7 +254,7 @@ inline void networkSaveConfig (char * bufer, size_t maxLen)
 
 static error_t parseNetwork(char *data, size_t len, jsmn_parser* jSMNparser, jsmntok_t *jSMNtokens)
 {
-   jsmnerr_t resultCode;
+   int resultCode;
    int strLen;
    jsmn_init(jSMNparser);
    networkContext.needSave = FALSE;
@@ -509,10 +509,10 @@ void networkServices(void *pvParametrs)
 {
    (void) pvParametrs;
    configInit();
-
+   sensorsConfigure();
 
    networkConfigure();
-   sensorsConfigure();
+
    executorsConfigure();
    ntpdConfigure();
    clockConfigure();
@@ -540,7 +540,7 @@ void networkServices(void *pvParametrs)
 
 #if (IPV6_SUPPORT == ENABLED)
 
-static uint8_t parseIpv6Config(char *data, jsmntok_t *jSMNtokens, jsmnerr_t resultCode)
+static uint8_t parseIpv6Config(char *data, jsmntok_t *jSMNtokens, int resultCode)
 {
    error_t error;
    int tokNum;
