@@ -20,9 +20,11 @@
 #include "../../expression_parser/variables_def.h"
 char places[PLACES_CACHE_LENGTH];
 char names[NAMES_CACHE_LENGTH];
+char devices[DEVICES_CACHE_LENGTH];
 
 char *pPlaces = &places[0];
 char *pNames = &names[0];
+char *pDevices = &devices[0];
 
 
 
@@ -72,60 +74,31 @@ const mysensorSensorList_t sensorList[] =
    {S_ERROR, ""}, //Wrong sensor
 };
 
-static char buf[]="00:00:00:00:00:00:00:00/0";
+//static char buf[]="00:00:00:00:00:00:00:00/0";
 
 #define CURRELOFARRAY(element, array) (element > &array)?(element-&array):0
 
 sensor_t sensors[MAX_NUM_SENSORS];
 
-register_rest_function(sensors, "/sensors", &restInitSensors, &restDenitSensors, &restGetSensors, &restPostSensors, &restPutSensors, &restDeleteSensors);
+register_rest_function(sensors, "/sensors", &restInitSensors, &restDenitSensors, &restGetSensors,NULL,NULL,NULL);// &restPostSensors, &restPutSensors, &restDeleteSensors);
 register_variables_functions(sensors, &sensorsGetValue);
 
 static mysensor_sensor_t findTypeByName(const char * type);
 
-static int sprintfSensor (char * bufer, int maxLen, sensFunctions * sensor, int restVersion)
+static int sprintfSensor (char * bufer, int maxLen, mysensor_sensor_t curr_list_el, int restVersion)
 {
    int p=0;
-   int flag=0;
    if (restVersion == 1)
    {
-      p+=snprintf(bufer+p, maxLen-p, "{\"name\":\"%s\",\"path\":\"%s/v1/sensors%s\",\"method\":[", sensor->sensClassName, &restPrefix[0], sensor->sensClassPath);
+      p+=snprintf(bufer+p, maxLen-p, "{\"name\":\"%s\",\"path\":\"%s/v1/sensors/%s\"]},\r\n", sensorList[curr_list_el].string, &restPrefix[0], sensorList[curr_list_el].string);
 
-      //      if (sensor->sensGetMethodHadler != NULL)
-      //      {
-      p+=snprintf(bufer+p, maxLen-p, "\"GET\",");
-      flag++;
-      //      }
-      if (sensor->sensPostMethodHadler != NULL)
-      {
-         p+=snprintf(bufer+p, maxLen-p, "\"POST\",");
-         flag++;
-      }
-      if (sensor->sensPutMethodHadler != NULL)
-      {
-         p+=snprintf(bufer+p, maxLen-p, "\"PUT\",");
-         flag++;
-      }
-      if (sensor->sensDeleteMethodHadler != NULL)
-      {
-         p+=snprintf(bufer+p, maxLen-p, "\"DELETE\",");
-         flag++;
-      }
-
-      if (flag>0)
-      {
-         p--;
-      }
-
-      p+=snprintf(bufer+p, maxLen-p, "]}");
    }
    else if(restVersion ==2 )
    {
-      p+=snprintf(bufer+p, maxLen-p, "\"%s\":{\"links\":{\"related\": \"%s/v2/sensors%s\"}}",sensor->sensClassName, &restPrefix[0], sensor->sensClassPath);
+      p+=snprintf(bufer+p, maxLen-p, "\"%s\":{\"links\":{\"related\": \"%s/v2/sensors/%s\"}},\r\n",sensorList[curr_list_el].string, &restPrefix[0], sensorList[curr_list_el].string);
    }
    return p;
 }
-
 
 
 static error_t sprintfListSensors (HttpConnection *connection, RestApi_t* RestApi)
@@ -142,15 +115,17 @@ static error_t sprintfListSensors (HttpConnection *connection, RestApi_t* RestAp
       p+=snprintf(&restBuffer[p], maxLen-p, "{\"data\":{\"type\":\"sensors\",\"id\":0,\r\n\"relationships\":{\r\n");
    }
 
-   for (sensFunctions *cur_sensor = &__start_sens_functions; cur_sensor < &__stop_sens_functions; cur_sensor++)
+   for (mysensor_sensor_t cur_list_elem = 0; cur_list_elem < MYSENSOR_ENUM_LEN; cur_list_elem++)
    {
-      p+=sprintfSensor(restBuffer+p, maxLen - p, cur_sensor, RestApi->restVersion);
-      if ( cur_sensor != &__stop_sens_functions-1)
+      if (*sensorList[cur_list_elem].string != '\0')
       {
-         p+=snprintf(&restBuffer[p], maxLen-p, ",\r\n");
+         p+=sprintfSensor(restBuffer+p, maxLen - p, cur_list_elem, RestApi->restVersion);
+
       }
    }
-
+   p--;
+   p--;
+   p--;
    if (RestApi->restVersion == 1)
    {
       p+=snprintf(&restBuffer[p], maxLen-p, "\r\n]}\r\n");
@@ -185,108 +160,114 @@ error_t restDenitSensors(void)
    return error;
 }
 
-static sensFunctions * restFindSensor(RestApi_t* RestApi)
-{
-   for (sensFunctions *cur_sensor = &__start_sens_functions; cur_sensor < &__stop_sens_functions; cur_sensor++)
-   {
-      if (REST_CLASS_EQU(RestApi, cur_sensor->sensClassPath))
-      {
-         return cur_sensor;
-      }
-   }
-   return NULL;
-}
 
-
-static int snprintfSensor(char * bufer, size_t maxLen, int sens_num, sensFunctions * sensor, int restVersion)
+static int snprintfSensor(char * bufer, size_t maxLen, sensor_t * sensor, int restVersion)
 {
    int p=0;
    int d1, d2;
    double f2, f_val;
    int i;
 
-   for(i=0; i <= MAX_NUM_SENSORS; i++)
+   if (restVersion == 1)
    {
-      if (sensors[i].type == sensor->sensorType && sensors[i].id == sens_num)
-      {
-         if (restVersion == 1)
-         {
-            p+=snprintf(bufer+p, maxLen-p, "{\"id\":%d,",sensors[i].id);
-         }
-         else if (restVersion ==2)
-         {
-            p+=snprintf(bufer+p, maxLen-p, "{\"type\":\"%s\",\"id\":%d,\"attributes\":{",sensorList[sensors[i].type].string, sensors[i].id);
-         }
-         p+=snprintf(bufer+p, maxLen-p, "\"type\":\"%s\",", sensorList[sensors[i].subType].string);
-         p+=snprintf(bufer+p, maxLen-p, "\"name\":\"%s\",", sensors[i].name);
-         p+=snprintf(bufer+p, maxLen-p, "\"place\":\"%s\",", sensors[i].place);
-
-         switch (sensors[i].valueType)
-         {
-         case FLOAT:
-            f_val = sensorsGetValueFloat(&sensors[i]);
-            d1 = f_val;            // Get the integer part (678).
-            f2 = f_val - d1;     // Get fractional part (678.0123 - 678 = 0.0123).
-            d2 = abs(trunc(f2 * 10));   // Turn into integer (123).
-            p+=snprintf(bufer+p, maxLen-p, "\"value\":\"%d.%01d\",", d1, d2);
-            break;
-         case UINT16:
-            p+=snprintf(bufer+p, maxLen-p, "\"value\":\"%u\",",sensorsGetValueUint16(&sensors[i]));
-            break;
-         case CHAR://Not supported yet
-         case PCHAR:
-         default:
-            break;
-         }
-         p+=snprintf(bufer+p, maxLen-p, "\"serial\":\"%s\",",serialHexToString(sensors[i].serial, &buf[0], ONEWIRE_SERIAL_LENGTH));
-         p+=snprintf(bufer+p, maxLen-p, "\"health\":%d,", sensorsHealthGetValue(&sensors[i]));
-         if (restVersion == 1)
-         {
-            p+=snprintf(bufer+p, maxLen-p, "\"online\":%s},", ((sensors[i].status & ONLINE)?"true":"false"));
-         }
-         else if (restVersion == 2)
-         {
-            p+=snprintf(bufer+p, maxLen-p, "\"online\":%s}},", ((sensors[i].status & ONLINE)?"true":"false"));
-         }
-         break;
-      }
+      p+=snprintf(bufer+p, maxLen-p, "{\"id\":\"%s\",", sensor->device+1);
    }
+   else if (restVersion ==2)
+   {
+      p+=snprintf(bufer+p, maxLen-p, "{\"type\":\"%s\",\"id\":\"%s\",\"attributes\":{",sensorList[sensor->type].string, sensor->device+1);
+   }
+   //   p+=snprintf(bufer+p, maxLen-p, "\"type\":\"%s\",", sensorList[sensors[i].subType].string);
+   p+=snprintf(bufer+p, maxLen-p, "\"name\":\"%s\",", sensor->name);
+   p+=snprintf(bufer+p, maxLen-p, "\"place\":\"%s\",", sensor->place);
+   //
+   switch (sensor->fd.driver->dataType)
+   {
+   case FLOAT:
+      driver_read(&sensor->fd, &f_val, sizeof(f_val));
+      d1 = f_val;            // Get the integer part (678).
+      f2 = f_val - d1;     // Get fractional part (678.0123 - 678 = 0.0123).
+      d2 = abs(trunc(f2 * 10));   // Turn into integer (123).
+      p+=snprintf(bufer+p, maxLen-p, "\"value\":\"%d.%01d\",", d1, d2);
+      break;
+   case UINT16:
+      //      p+=snprintf(bufer+p, maxLen-p, "\"value\":\"%u\",",sensorsGetValueUint16(&sensors[i]));
+      break;
+   case CHAR://Not supported yet
+      break;
+   case PCHAR:
+      p+=snprintf(bufer+p, maxLen-p, "\"value\":\"");
+      p+=driver_read(&sensor->fd, bufer+p, maxLen-p);
+      p+=snprintf(bufer+p, maxLen-p, "\",");
+      break;
+   default:
+      break;
+   }
+   //   p+=snprintf(bufer+p, maxLen-p, "\"serial\":\"%s\",",serialHexToString(sensors[i].serial, &buf[0], ONEWIRE_SERIAL_LENGTH));
+   //   p+=snprintf(bufer+p, maxLen-p, "\"health\":%d,", sensorsHealthGetValue(&sensors[i]));
+   if (restVersion == 1)
+   {
+      p+=snprintf(bufer+p, maxLen-p, "\"online\":%s},", ((sensor->fd.status & DEV_STAT_ONLINE)?"true":"false"));
+   }
+   else if (restVersion == 2)
+   {
+      p+=snprintf(bufer+p, maxLen-p, "\"online\":%s}},", ((sensor->fd.status & DEV_STAT_ONLINE)?"true":"false"));
+   }
+
    return p;
 }
 
-static error_t sensCommonGetHandler(HttpConnection *connection, RestApi_t* RestApi, sensFunctions * sensor)
+static error_t sensCommonGetHandler(HttpConnection *connection, RestApi_t* RestApi, mysensor_sensor_t sens_type)
 {
    int p=0;
-   int i=0,j=0;
    error_t error = ERROR_NOT_FOUND;
    const size_t maxLen = sizeof(restBuffer);
+
    if (RestApi->restVersion == 1)
    {
-      p=sprintf(restBuffer,"{\"%s\":[\r\n", sensor->sensClassName);
+      p=sprintf(&restBuffer[0],"{\"%s\":[\r\n", sensorList[sens_type].string);
    }
+
    else if (RestApi->restVersion ==2)
    {
       p=sprintf(restBuffer,"{\"data\":[\r\n");
    }
+
+
    if (RestApi->objectId != NULL)
    {
-      if (ISDIGIT(*(RestApi->objectId+1)))
+      for (sensor_t * curr_sensor = &sensors[0]; curr_sensor < &sensors[arraysize(sensors)]; curr_sensor++)
       {
-         j=atoi(RestApi->objectId+1);
-         p+=snprintfSensor(&restBuffer[p], maxLen-p, j, sensor, RestApi->restVersion);
-         error = NO_ERROR;
-      }
-      else
-      {
-         error = ERROR_UNSUPPORTED_REQUEST;
+         if ((curr_sensor->type == sens_type) && (strncmp(curr_sensor->device, RestApi->objectId, RestApi->objectIdLen) == 0))
+         {
+
+            error = driver_open(&curr_sensor->fd, RestApi->objectId, 0);
+
+            if (error)
+               return error;
+
+            p+=snprintfSensor(&restBuffer[p], maxLen-p, curr_sensor, RestApi->restVersion);
+            error = NO_ERROR;
+            driver_close(&curr_sensor->fd);
+            break;
+         }
       }
    }
    else
    {
-      for (i=0; i<= MAX_NUM_SENSORS; i++)
+      for (sensor_t * curr_sensor = &sensors[0]; curr_sensor < &sensors[arraysize(sensors)]; curr_sensor++)
       {
-         p+=snprintfSensor(&restBuffer[p], maxLen-p, i, sensor, RestApi->restVersion);
-         error = NO_ERROR;
+         if (curr_sensor->type == sens_type)
+         {
+
+            error = driver_open(&curr_sensor->fd, curr_sensor->device, 0);
+
+            if (error)
+               return error;
+
+            p+=snprintfSensor(&restBuffer[p], maxLen-p, curr_sensor, RestApi->restVersion);
+            error = NO_ERROR;
+            driver_close(&curr_sensor->fd);
+         }
       }
    }
    p--;
@@ -314,6 +295,7 @@ static error_t sensCommonGetHandler(HttpConnection *connection, RestApi_t* RestA
       return rest_404_not_found(connection, "404 Not Found.\r\n");
       break;
    }
+
    return error;
 }
 
@@ -321,32 +303,25 @@ static error_t sensCommonGetHandler(HttpConnection *connection, RestApi_t* RestA
 error_t restGetSensors(HttpConnection *connection, RestApi_t* RestApi)
 {
 
-   error_t error = NO_ERROR;
-   sensFunctions * wantedSensor;
-   if (RestApi->className!=NULL)
+   error_t error = ERROR_FILE_NOT_FOUND;
+
+   /* Check, what sensor type is defined in request  */
+   if (RestApi->classNameLen > 0)
    {
-      wantedSensor = restFindSensor(RestApi);
-      if (wantedSensor != NULL)
-      {//Если сенсор найден
-         if (wantedSensor->sensGetMethodHadler != NULL)
-         {//Если есть обработчик метода GET, используем специальный
-            error = wantedSensor->sensGetMethodHadler(connection, RestApi);
-         }
-         else
-         {  //Если нет обработчика метода GET используем общий
-            error = sensCommonGetHandler(connection, RestApi, wantedSensor);
-         }
-      }
-      else//Если сенсор не найден возвращяем ошибку
+      /* Проверяем, соответствует ли тип датчиака в RestApi->className*/
+      for (mysensor_sensor_t i =0;i<MYSENSOR_ENUM_LEN; i++) // Contain length of enum
       {
-         rest_404_not_found(connection, "sensor not found\r\n");
+         if (strncmp(sensorList[i].string, (RestApi->className)+1, RestApi->classNameLen-1) ==0) // Exclude '/' in className
+         {
+            return sensCommonGetHandler(connection, RestApi, i);
+
+         }
       }
    }
    else
-   { //
+   {
+      /* Print all avalible sensors*/
       sprintfListSensors(connection, RestApi);
-
-      error = ERROR_NOT_FOUND;
    }
    return error;
 }
@@ -356,86 +331,113 @@ error_t restPostSensors(HttpConnection *connection, RestApi_t* RestApi)
    int p=0;
    const size_t maxLen = sizeof(restBuffer);
    error_t error = NO_ERROR;
-   sensFunctions * wantedSensor;
-   wantedSensor = restFindSensor(RestApi);
-   if (wantedSensor != NULL)
-   {//Если сенсор найден
-      if (wantedSensor->sensPostMethodHadler != NULL)
-      {//Если есть обработчик метода POST
-         error = wantedSensor->sensPostMethodHadler(connection, RestApi);
-      }
-      else
-      {  //Если нет обработчика метода POST печатаем все доступные методы
-         p = sprintfSensor(restBuffer+p, maxLen, wantedSensor, RestApi->restVersion);
-         p+=snprintf(restBuffer+p, maxLen-p, "\r\n");
-         rest_501_not_implemented(connection, &restBuffer[0]);
-         error = ERROR_NOT_IMPLEMENTED;
-      }
-   }
-   else
-   {//Если сенсор не найден
-      rest_404_not_found(connection, "Not found\r\n");
-      error = ERROR_NOT_FOUND;
-   }
+   //   sensFunctions * wantedSensor;
+   //   wantedSensor = openPeripheral(RestApi);
+   //   if (wantedSensor != NULL)
+   //   {//Если сенсор найден
+   //      if (wantedSensor->sensPostMethodHadler != NULL)
+   //      {//Если есть обработчик метода POST
+   //         error = wantedSensor->sensPostMethodHadler(connection, RestApi);
+   //      }
+   //      else
+   //      {  //Если нет обработчика метода POST печатаем все доступные методы
+   //         p = sprintfSensor(restBuffer+p, maxLen, wantedSensor, RestApi->restVersion);
+   //         p+=snprintf(restBuffer+p, maxLen-p, "\r\n");
+   //         rest_501_not_implemented(connection, &restBuffer[0]);
+   //         error = ERROR_NOT_IMPLEMENTED;
+   //      }
+   //   }
+   //   else
+   //   {//Если сенсор не найден
+   //      rest_404_not_found(connection, "Not found\r\n");
+   //      error = ERROR_NOT_FOUND;
+   //   }
    return error;
 }
 
 error_t restPutSensors(HttpConnection *connection, RestApi_t* RestApi)
 {
    int p=0;
-   const size_t maxLen = sizeof(restBuffer);
+   const size_t maxLen = arraysize(restBuffer);
    error_t error = NO_ERROR;
-   sensFunctions * wantedSensor;
-   wantedSensor = restFindSensor(RestApi);
-   if (wantedSensor != NULL)
-   {//Если сенсор найден
-      if (wantedSensor->sensPutMethodHadler != NULL)
-      {//Если есть обработчик метода PUT
-         error = wantedSensor->sensPutMethodHadler(connection, RestApi);
-      }
-      else
-      {  //Если нет обработчика метода PUT печатаем все доступные методы
-         p = sprintfSensor(restBuffer+p, maxLen, wantedSensor, RestApi->restVersion);
-         p+=snprintf(restBuffer+p, maxLen-p, "\r\n");
-         rest_501_not_implemented(connection, &restBuffer[0]);
-         error = ERROR_NOT_IMPLEMENTED;
-      }
-   }
-   else
-   {//Если сенсор не найден
-      rest_404_not_found(connection, "Not found\r\n");
-      error = ERROR_NOT_FOUND;
-   }
+   //   sensFunctions * wantedSensor;
+   //   wantedSensor = openPeripheral(RestApi);
+   //   if (wantedSensor != NULL)
+   //   {//Если сенсор найден
+   //      if (wantedSensor->sensPutMethodHadler != NULL)
+   //      {//Если есть обработчик метода PUT
+   //         error = wantedSensor->sensPutMethodHadler(connection, RestApi);
+   //      }
+   //      else
+   //      {  //Если нет обработчика метода PUT печатаем все доступные методы
+   //         p = sprintfSensor(restBuffer+p, maxLen, wantedSensor, RestApi->restVersion);
+   //         p+=snprintf(restBuffer+p, maxLen-p, "\r\n");
+   //         rest_501_not_implemented(connection, &restBuffer[0]);
+   //         error = ERROR_NOT_IMPLEMENTED;
+   //      }
+   //   }
+   //   else
+   //   {//Если сенсор не найден
+   //      rest_404_not_found(connection, "Not found\r\n");
+   //      error = ERROR_NOT_FOUND;
+   //   }
    return error;
 }
 
-error_t restDeleteSensors(HttpConnection *connection, RestApi_t* RestApi)
+//error_t restDeleteSensors(HttpConnection *connection, RestApi_t* RestApi)
+//{
+//   int p=0;
+//   const size_t maxLen = sizeof(restBuffer);
+//   error_t error = NO_ERROR;
+//   sensFunctions * wantedSensor;
+//   wantedSensor = restFindSensor(RestApi);
+//   if (wantedSensor != NULL)
+//   {//Если сенсор найден
+//      if (wantedSensor->sensDeleteMethodHadler != NULL)
+//      {//Если есть обработчик метода DELETE
+//         error = wantedSensor->sensDeleteMethodHadler(connection, RestApi);
+//      }
+//      else
+//      {  //Если нет обработчика метода DELETE печатаем все доступные методы
+//         p = sprintfSensor(restBuffer+p, maxLen, wantedSensor, RestApi->restVersion);
+//         p+=snprintf(restBuffer+p, maxLen-p, "\r\n");
+//         rest_501_not_implemented(connection, &restBuffer[0]);
+//         error = ERROR_NOT_IMPLEMENTED;
+//      }
+//   }
+//   else
+//   {//Если сенсор не найден
+//      rest_404_not_found(connection, "Not found\r\n");
+//      error = ERROR_NOT_FOUND;
+//   }
+//   return error;
+//}
+
+char* sensorsFindDevice(const char * device, size_t length)
 {
-   int p=0;
-   const size_t maxLen = sizeof(restBuffer);
-   error_t error = NO_ERROR;
-   sensFunctions * wantedSensor;
-   wantedSensor = restFindSensor(RestApi);
-   if (wantedSensor != NULL)
-   {//Если сенсор найден
-      if (wantedSensor->sensDeleteMethodHadler != NULL)
-      {//Если есть обработчик метода DELETE
-         error = wantedSensor->sensDeleteMethodHadler(connection, RestApi);
+   char * p = &devices[0];
+   while (p < &(devices[DEVICES_CACHE_LENGTH-1]))
+   {
+      if (strncmp(device, p, length)==0)
+      {
+         return p;
       }
-      else
-      {  //Если нет обработчика метода DELETE печатаем все доступные методы
-         p = sprintfSensor(restBuffer+p, maxLen, wantedSensor, RestApi->restVersion);
-         p+=snprintf(restBuffer+p, maxLen-p, "\r\n");
-         rest_501_not_implemented(connection, &restBuffer[0]);
-         error = ERROR_NOT_IMPLEMENTED;
-      }
+      p = strchr(++p,'\0');
    }
-   else
-   {//Если сенсор не найден
-      rest_404_not_found(connection, "Not found\r\n");
-      error = ERROR_NOT_FOUND;
+   return NULL;
+}
+
+char* sensorsAddDevice(const char * device, size_t length)
+{
+   if (length+pDevices<&(devices[DEVICES_CACHE_LENGTH-1]))
+   {
+      memcpy(pDevices, device, length);
+      pDevices+=length;
+      *pDevices = '\0';
+      pDevices++;
+      return pDevices-(length+1);
    }
-   return error;
+   return NULL;
 }
 
 char* sensorsFindName(const char * name, size_t length)
@@ -498,16 +500,16 @@ char* sensorsAddPlace(const char * place, size_t length)
    return NULL;
 }
 
-char jsonPATH[64]; //
 
-char device[64];
-
-char parameter[64];
 
 static error_t parseSensors (char *data, size_t length, jsmn_parser* jSMNparser, jsmntok_t *jSMNtokens)
 {
    sensor_t * currentSensor = &sensors[0];
+   char jsonPATH[64]; //
 
+   char device[64];
+
+   char parameter[64];
 
    char * pcParameter;
 
@@ -516,7 +518,7 @@ static error_t parseSensors (char *data, size_t length, jsmn_parser* jSMNparser,
    char * type = &parameter[0];  /* And type %-) */
 
    char value[64];
-
+   error_t error;
    int result = 1;
    int parameters;
 
@@ -524,9 +526,10 @@ static error_t parseSensors (char *data, size_t length, jsmn_parser* jSMNparser,
    uint32_t parameter_num;
    size_t len;
    volatile int resultCode = 0;
+
    jsmn_init(jSMNparser);
 
-   resultCode = jsmn_parse(jSMNparser, data, strlen(data), jSMNtokens, CONFIG_JSMN_NUM_TOKENS);
+   resultCode = jsmn_parse(jSMNparser, data, length, jSMNtokens, CONFIG_JSMN_NUM_TOKENS);
 
    input_num = 0;
    if(resultCode > 0)
@@ -540,8 +543,8 @@ static error_t parseSensors (char *data, size_t length, jsmn_parser* jSMNparser,
          {
             parameters = 1;
             parameter_num = 0;
-            currentSensor->fp = driver_open(&device[0], 0);
-            if (currentSensor->fp)
+            error = driver_open(&(currentSensor->fd), &device[0], 0);
+            if (!error)
             {
                /*Setting up parameters*/
                while (parameters)
@@ -565,11 +568,25 @@ static error_t parseSensors (char *data, size_t length, jsmn_parser* jSMNparser,
                      parameters = jsmn_get_string(data, jSMNtokens, resultCode, &jsonPATH[0], &value[0], arraysize(value));
                      if (parameters)
                      {
-                        driver_ioctl(currentSensor->fp, pcParameter, &value[0]);
+                        driver_ioctl(&(currentSensor->fd), pcParameter, &value[0]);
                      }
                      parameter_num++;
                   }
                }
+               /*Store device*/
+
+               currentSensor->device = sensorsFindDevice(&device[0], strlen(&device[0]));
+
+               if (currentSensor->device == 0)
+               {
+                  currentSensor->device = sensorsAddDevice(&device[0], strlen(&device[0]));
+
+                  if (currentSensor->device == 0)
+                  {
+                     xprintf("error saving device: no avalible memory for saving device");
+                  }
+               }
+
                /*Setting up name and place*/
                snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.inputs[%"PRIu32"].name", input_num);
 
@@ -616,12 +633,23 @@ static error_t parseSensors (char *data, size_t length, jsmn_parser* jSMNparser,
                   currentSensor->type = findTypeByName(type);
                   /*todo: check for undefined type*/
                }
+
+               driver_ioctl(&(currentSensor->fd), "start", "");
             }
             /*If device configured and we don't reach end of devices*/
-            if (currentSensor->fp && currentSensor <= &sensors[MAX_NUM_SENSORS-1])
+            if (&(currentSensor->fd) && currentSensor <= &sensors[MAX_NUM_SENSORS-1])
             {
+
+               driver_close(&(currentSensor->fd));
                currentSensor++;
+
             }
+            else
+            {
+               driver_close(&(currentSensor->fd));
+
+            }
+
          }
          input_num++;
       }
@@ -633,7 +661,7 @@ static error_t parseSensors (char *data, size_t length, jsmn_parser* jSMNparser,
 
    return NO_ERROR;
 }
-
+/*
 static error_t initSensor(sensor_t * cur_sensor)
 {
    error_t error = NO_ERROR;
@@ -641,38 +669,30 @@ static error_t initSensor(sensor_t * cur_sensor)
    if(!osCreateMutex(&cur_sensor->mutex))
    {
       //Failed to create mutex
-      xprintf("Sensors: Can't create sensor#%d mutex.\r\n", cur_sensor->id);
+      xprintf("Sensors: Can't create sensor#%s mutex.\r\n", cur_sensor->device);
       error= ERROR_OUT_OF_RESOURCES;
    }
    if (!error)
    {
-      error = sensorsHealthInit (cur_sensor);
+      //      error = sensorsHealthInit (cur_sensor);
    }
    return error;
 }
-
+*/
 void sensorsConfigure(void)
 {
    volatile error_t error = NO_ERROR;
    int i;
 
    memset (&sensors[0], 0, sizeof(sensor_t)*MAX_NUM_SENSORS);
-   for (i=0;i<MAX_NUM_SENSORS; i++)
-   {
-      initSensor(&sensors[i]);
-   }
+//   for (i=0;i<MAX_NUM_SENSORS; i++)
+//   {
+//      initSensor(&sensors[i]);
+//   }
    if (!error)
    {
       error = read_config("/config/sensors_draft.json", &parseSensors);
    }
-   /*
-    * todo: move this code to init section.
-    */
-   if (!error)
-   {
-      osCreateTask("oneWireTask",oneWireTask, NULL, configMINIMAL_STACK_SIZE*4, 1);
-   }
-   //   osCreateTask("input",inputTask, NULL, configMINIMAL_STACK_SIZE*4, 1);
 }
 
 /**
@@ -786,156 +806,124 @@ char *serialHexToString(const uint8_t *serial, char *str, int length)
    return str;
 }
 
-error_t sensorsHealthInit (sensor_t * sensor)
-{
-   //Enter critical section
-   //Debug message
-   TRACE_INFO("sensorsHealthInit: Enter critical section sensor#%d.", sensor->id);
-   osAcquireMutex(&sensor->mutex);
+//error_t sensorsHealthInit (sensor_t * sensor)
+//{
+//   //Enter critical section
+//   //Debug message
+//   TRACE_INFO("sensorsHealthInit: Enter critical section sensor#%s.", sensor->device);
+//   osAcquireMutex(&sensor->mutex);
+//
+//   sensor->health.value =SENSORS_HEALTH_MAX_VALUE;
+//   sensor->health.counter =SENSORS_HEALTH_MIN_VALUE;
+//
+//   //Leave critical section
+//   //Debug message
+//   TRACE_INFO("sensorsHealthInit: Leave critical section sensor#%s.\r\n", sensor->device);
+//   osReleaseMutex(&sensor->mutex);
+//
+//   return NO_ERROR;
+//}
+//
+//int sensorsHealthGetValue(sensor_t * sensor)
+//{
+//   int result;
+//
+//   //Enter critical section
+//   //Debug message
+//   TRACE_INFO("sensorsHealthGetValue: Enter critical section sensor#%s.", sensor->device);
+//   osAcquireMutex(&sensor->mutex);
+//
+//   result = sensor->health.value;
+//
+//   //Leave critical section
+//   //Debug message
+//   TRACE_INFO("sensorsHealthGetValue: Leave critical section sensor#%s.\r\n", sensor->device);
+//   osReleaseMutex(&sensor->mutex);
+//
+//   return result;
+//}
+//
+//
+//void sensorsHealthIncValue(sensor_t * sensor)
+//{
+//   //Enter critical section
+//   //Debug message
+//   TRACE_INFO("sensorsHealthIncValue: Enter critical section sensor#%s.", sensor->device);
+//   osAcquireMutex(&sensor->mutex);
+//
+//   if (sensor->health.value<SENSORS_HEALTH_MAX_VALUE)
+//   {
+//      sensor->health.value++;
+//   }
+//   if (sensor->health.counter<SENSORS_HEALTH_MAX_VALUE)
+//   {
+//      sensor->health.counter++;
+//   }
+//
+//   //Leave critical section
+//   //Debug message
+//   TRACE_INFO("sensorsHealthIncValue: Leave critical section sensor#%s.\r\n", sensor->device);
+//   osReleaseMutex(&sensor->mutex);
+//
+//}
+//
+//void sensorsHealthDecValue(sensor_t * sensor)
+//{
+//
+//   //Enter critical section
+//   //Debug message
+//   TRACE_INFO("sensorsHealthDecValue: Enter critical section sensor#%s.", sensor->device);
+//   osAcquireMutex(&sensor->mutex);
+//
+//
+//   if (sensor->health.value>SENSORS_HEALTH_MIN_VALUE)
+//   {
+//      sensor->health.value--;
+//   }
+//   if (sensor->health.counter<SENSORS_HEALTH_MAX_VALUE)
+//   {
+//      sensor->health.counter++;
+//   }
+//
+//   //Leave critical section
+//   //Debug message
+//   TRACE_INFO("sensorsHealthDecValue: Leave critical section sensor#%s.\r\n", sensor->device);
+//   osReleaseMutex(&sensor->mutex);
+//
+//}
+//
+//void sensorsHealthSetValue(sensor_t * sensor, int value)
+//{
+//
+//   //Enter critical section
+//   //Debug message
+//   TRACE_INFO("sensorsHealthSetValue: Enter critical section sensor#%s.", sensor->device);
+//   osAcquireMutex(&sensor->mutex);
+//
+//
+//   if (value>SENSORS_HEALTH_MAX_VALUE)
+//   {
+//      sensor->health.value=SENSORS_HEALTH_MAX_VALUE;
+//   }
+//   else if (value<SENSORS_HEALTH_MIN_VALUE)
+//   {
+//      sensor->health.value=SENSORS_HEALTH_MIN_VALUE;
+//   }
+//   else
+//   {
+//      sensor->health.value = value;
+//   }
+//
+//   //Leave critical section
+//   //Debug message
+//   TRACE_INFO("sensorsHealthSetValue: Leave critical section sensor#%s.\r\n", sensor->device);
+//   osReleaseMutex(&sensor->mutex);
+//
+//}
+//
+//
+//
 
-   sensor->health.value =SENSORS_HEALTH_MAX_VALUE;
-   sensor->health.counter =SENSORS_HEALTH_MIN_VALUE;
-
-   //Leave critical section
-   //Debug message
-   TRACE_INFO("sensorsHealthInit: Leave critical section sensor#%d.\r\n", sensor->id);
-   osReleaseMutex(&sensor->mutex);
-
-   return NO_ERROR;
-}
-
-int sensorsHealthGetValue(sensor_t * sensor)
-{
-   int result;
-
-   //Enter critical section
-   //Debug message
-   TRACE_INFO("sensorsHealthGetValue: Enter critical section sensor#%d.", sensor->id);
-   osAcquireMutex(&sensor->mutex);
-
-   result = sensor->health.value;
-
-   //Leave critical section
-   //Debug message
-   TRACE_INFO("sensorsHealthGetValue: Leave critical section sensor#%d.\r\n", sensor->id);
-   osReleaseMutex(&sensor->mutex);
-
-   return result;
-}
-
-
-void sensorsHealthIncValue(sensor_t * sensor)
-{
-   //Enter critical section
-   //Debug message
-   TRACE_INFO("sensorsHealthIncValue: Enter critical section sensor#%d.", sensor->id);
-   osAcquireMutex(&sensor->mutex);
-
-   if (sensor->health.value<SENSORS_HEALTH_MAX_VALUE)
-   {
-      sensor->health.value++;
-   }
-   if (sensor->health.counter<SENSORS_HEALTH_MAX_VALUE)
-   {
-      sensor->health.counter++;
-   }
-
-   //Leave critical section
-   //Debug message
-   TRACE_INFO("sensorsHealthIncValue: Leave critical section sensor#%d.\r\n", sensor->id);
-   osReleaseMutex(&sensor->mutex);
-
-}
-
-void sensorsHealthDecValue(sensor_t * sensor)
-{
-
-   //Enter critical section
-   //Debug message
-   TRACE_INFO("sensorsHealthDecValue: Enter critical section sensor#%d.", sensor->id);
-   osAcquireMutex(&sensor->mutex);
-
-
-   if (sensor->health.value>SENSORS_HEALTH_MIN_VALUE)
-   {
-      sensor->health.value--;
-   }
-   if (sensor->health.counter<SENSORS_HEALTH_MAX_VALUE)
-   {
-      sensor->health.counter++;
-   }
-
-   //Leave critical section
-   //Debug message
-   TRACE_INFO("sensorsHealthDecValue: Leave critical section sensor#%d.\r\n", sensor->id);
-   osReleaseMutex(&sensor->mutex);
-
-}
-
-void sensorsHealthSetValue(sensor_t * sensor, int value)
-{
-
-   //Enter critical section
-   //Debug message
-   TRACE_INFO("sensorsHealthSetValue: Enter critical section sensor#%d.", sensor->id);
-   osAcquireMutex(&sensor->mutex);
-
-
-   if (value>SENSORS_HEALTH_MAX_VALUE)
-   {
-      sensor->health.value=SENSORS_HEALTH_MAX_VALUE;
-   }
-   else if (value<SENSORS_HEALTH_MIN_VALUE)
-   {
-      sensor->health.value=SENSORS_HEALTH_MIN_VALUE;
-   }
-   else
-   {
-      sensor->health.value = value;
-   }
-
-   //Leave critical section
-   //Debug message
-   TRACE_INFO("sensorsHealthSetValue: Leave critical section sensor#%d.\r\n", sensor->id);
-   osReleaseMutex(&sensor->mutex);
-
-}
-
-
-
-void sensorsSetValueUint16(sensor_t * sensor, uint16_t value)
-{
-
-   //Enter critical section
-   //Debug message
-   TRACE_INFO("sensorsSetValueUint16: Enter critical section sensor#%d.", sensor->id);
-   osAcquireMutex(&sensor->mutex);
-
-   sensor->value.uVal = value;
-
-   //Leave critical section
-   //Debug message
-   TRACE_INFO("sensorsSetValueUint16: Leave critical section sensor#%d.\r\n", sensor->id);
-   osReleaseMutex(&sensor->mutex);
-
-}
-
-void sensorsSetValueFloat(sensor_t * sensor, float value)
-{
-
-   //Enter critical section
-   //Debug message
-   TRACE_INFO("sensorsSetValueFloat: Enter critical section sensor#%d.", sensor->id);
-   osAcquireMutex(&sensor->mutex);
-
-   sensor->value.fVal = value;
-
-   //Leave critical section
-   //Debug message
-   TRACE_INFO("sensorsSetValueFloat: Leave critical section sensor#%d.\r\n", sensor->id);
-   osReleaseMutex(&sensor->mutex);
-
-}
 
 static mysensor_sensor_t findTypeByName(const char * type)
 {
@@ -951,114 +939,4 @@ static mysensor_sensor_t findTypeByName(const char * type)
    }
 
    return result;
-}
-
-static sensor_t * findSensorByName(const char * name)
-{
-   int sens_num;
-   int i;
-   size_t len=0;
-   char * p = (char *) name;
-   sensFunctions * sensor =NULL;
-   sensor_t * result = NULL;
-   while (ISALPHA(*p))
-   {
-      p++;
-      len++;
-   }
-   if (*p=='_')
-   {
-      p++;
-      sens_num = atoi(p);
-      for (sensFunctions *cur_sensor = &__start_sens_functions; cur_sensor < &__stop_sens_functions; cur_sensor++)
-      {
-         if (NAME_EQU(name, len, cur_sensor->sensClassName))
-
-         {
-            sensor = cur_sensor;
-            break;
-         }
-      }
-      if (sensor)
-      {
-         for(i=0; i <= MAX_NUM_SENSORS; i++)
-         {
-            if (sensors[i].type == sensor->sensorType && sensors[i].id == sens_num)
-            {
-               result = &(sensors[i]);
-               break;
-            }
-
-         }
-      }
-   }
-   return result;
-}
-
-error_t sensorsGetValue(const char *name, double * value)
-{
-   error_t error = ERROR_OBJECT_NOT_FOUND;
-   sensor_t * sensor = findSensorByName(name);
-
-   if(sensor)
-   {
-      {
-         switch (sensor->valueType)
-         {
-         case FLOAT:
-            *value =  (double) sensorsGetValueFloat(sensor);
-            error = NO_ERROR;
-            break;
-         case UINT16:
-            *value = sensorsGetValueUint16(sensor);
-            error = NO_ERROR;
-            break;
-         case CHAR://Not supported yet
-         case PCHAR:
-         default:
-            break;
-         }
-      }
-   }
-   return error;
-}
-
-uint16_t sensorsGetValueUint16(sensor_t * sensor)
-{
-   uint16_t value;
-
-   //Enter critical section
-   //Debug message
-   TRACE_INFO("sensorsGetValueUint16: Enter critical section sensor#%d.", sensor->id);
-   osAcquireMutex(&sensor->mutex);
-
-   value = sensor->value.uVal;
-
-   //Leave critical section
-   //Debug message
-   TRACE_INFO("sensorsGetValueUint16: Leave critical section sensor#%d.\r\n", sensor->id);
-   osReleaseMutex(&sensor->mutex);
-
-   return value;
-
-}
-
-float sensorsGetValueFloat(sensor_t * sensor)
-{
-   float value;
-
-   //Enter critical section
-   //Debug message
-   TRACE_INFO("sensorsGetValueFloat: Enter critical section sensor#%d.", sensor->id);
-   osAcquireMutex(&sensor->mutex);
-
-   value = sensor->value.fVal;
-
-   //Leave critical section
-   //Debug message
-   TRACE_INFO("sensorsGetValueFloat: Leave critical section sensor#%d.\r\n", sensor->id);
-   osReleaseMutex(&sensor->mutex);
-
-   return value;
-
 }

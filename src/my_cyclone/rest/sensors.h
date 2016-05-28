@@ -21,11 +21,8 @@
 
 #define NAMES_CACHE_LENGTH 256
 #define PLACES_CACHE_LENGTH 256
+#define DEVICES_CACHE_LENGTH 256
 #define MAX_LEN_SERIAL ONEWIRE_SERIAL_LENGTH
-
-#define  ONLINE   0x01  /* sensor is online */
-#define  MANAGED  0x02  /* sensor is managed */
-#define  READEBLE 0x04  /* simple mutex for sensor */
 
 #define MAX_NUM_SENSORS (MAX_ONEWIRE_COUNT+MAX_INPUTS_COUNT)
 
@@ -92,13 +89,13 @@ typedef enum {
    D_HTTP
 } mysensor_driver_t;
 
-typedef enum
-{
-   FLOAT,
-   UINT16,
-   CHAR,
-   PCHAR
-} sensValueType_t;
+//typedef enum
+//{
+//   FLOAT,
+//   UINT16,
+//   CHAR,
+//   PCHAR
+//} sensValueType_t;
 
 typedef union
 {
@@ -116,19 +113,20 @@ typedef  struct
 
 typedef struct
 {
-   uint8_t id;
-   uint8_t serial[MAX_LEN_SERIAL];
+//   uint8_t id;
+//   uint8_t serial[MAX_LEN_SERIAL];
    mysensor_sensor_t type;
    mysensor_sensor_t subType;
-   mysensor_driver_t driver;
-   Peripheral_Descriptor_t * fp;
-   sensValueType_t valueType;
-   char* place;
-   char* name;
-   sensValue_t value;
-   uint8_t status;
+//   mysensor_driver_t driver;
+   peripheral_t fd; //file descriptor
+//   sensValueType_t valueType;
+   char* place;   //Place
+   char* name;    //Name
+   char* device;  //Path
+//   sensValue_t value;
+//   uint8_t status;
    health_t health;
-   OsMutex mutex;
+//   OsMutex mutex;
 }sensor_t;
 
 
@@ -158,6 +156,8 @@ error_t sensorsGetValue(const char *name, double * value);
 uint16_t sensorsGetValueUint16(sensor_t * sensor);
 float sensorsGetValueFloat(sensor_t * sensor);
 
+char* sensorsAddDevice(const char * device, size_t length);
+char* sensorsFindDevice(const char * device, size_t length);
 char* sensorsFindName(const char * name, size_t length);
 char* sensorsAddName(const char * name, size_t length);
 char* sensorsFindPlace(const char * place, size_t length);

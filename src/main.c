@@ -18,7 +18,7 @@
 #include "os_port.h"
 #include "network.h"
 #include "cli_hal.h"
-//void driverTask (void *pvParameters);
+void driverTask (void *pvParameters);
 
 // ----- main() ---------------------------------------------------------------
 
@@ -34,7 +34,7 @@ int main(void)
    osCreateTask("Blinker", vBlinker, NULL, 38, 4);
    osCreateTask("startup", startup_task, NULL, configMINIMAL_STACK_SIZE*2, 3);
    osCreateTask("Network_Services", networkServices, NULL, configMINIMAL_STACK_SIZE*4, 1);
-//   osCreateTask("driver_task", driverTask, NULL, configMINIMAL_STACK_SIZE, 1);
+   osCreateTask("driver_task", driverTask, NULL, configMINIMAL_STACK_SIZE, 1);
 
    //	task = osCreateTask("CLI\t", vCommandInterpreterTask, NULL, configMINIMAL_STACK_SIZE*4, 1);
    osStartKernel();

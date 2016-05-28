@@ -10,28 +10,40 @@
 #include <string.h>
 #include "os_port.h"
 
-Peripheral_Descriptor_t * driver_open(const char * path, const uint16_t flags){
+error_t driver_open(peripheral_t * const pxPeripheral, const char * path, const uint16_t flags){
 
-   peripheral_t * peripheral = NULL;
    (void) flags; //Unused variables.
-
    size_t len;// Lenght of registerd path
    uint32_t numOfPeripherals;
    size_t result;
-   /*First, allocate memory for perepheral descriptor*/
-   peripheral = osAllocMem( sizeof( peripheral_t ) );
 
-   if (peripheral == NULL)
+   peripheral_t * peripheral = (peripheral_t *) pxPeripheral;
+
+   /* Check fd*/
+   if (peripheral->driver != NULL)
    {
-      return NULL;
+      return ERROR_FILE_OPENING_FAILED;
    }
+   /* Check path*/
+   if (path == NULL || *path == '\0')
+   {
+      return ERROR_INVALID_PATH;
+   }
+//   /*First, allocate memory for perepheral descriptor*/
+//   peripheral = osAllocMem( sizeof( peripheral_t ) );
+//
+//   if (peripheral == NULL)
+//   {
+//      return NULL;
+//   }
    memset(peripheral, 0 , sizeof( peripheral_t ));
    /*Second, create mutex for peripheral access*/
+
    if(!osCreateMutex(&peripheral->mutex))
    {
-      osFreeMem(peripheral);
-      peripheral = NULL;
-      return NULL;
+//      osFreeMem(peripheral);
+//      peripheral = NULL;
+      return ERROR_OUT_OF_MEMORY;
    }
 
    /*Third, search driver by device name*/
@@ -53,12 +65,13 @@ Peripheral_Descriptor_t * driver_open(const char * path, const uint16_t flags){
             numOfPeripherals = (uint32_t) atoi (path+len+1);
             if (numOfPeripherals>=curr_driver->countOfPerepherals)
             {
-               break;
+               return ERROR_FILE_NOT_FOUND;
             }
             peripheral->peripheralNum = numOfPeripherals;
             peripheral->driver = curr_driver;
             break;
          }
+
          /*If number of perepheral is not defined in requred path,
           * use default value 0 */
          else if (*(path+len) == '/' || *(path+len) == '\0' )
@@ -67,34 +80,37 @@ Peripheral_Descriptor_t * driver_open(const char * path, const uint16_t flags){
             peripheral->peripheralNum = 0;
             break;
          }
+         else
+         {
+            return ERROR_FILE_NOT_FOUND;
+         }
 
       }
    }
 
-   /*If driver not found for current path, free memory and return*/
    if (peripheral->driver)
    {
       /*Initialize peripheral specific part*/
       if (peripheral->driver->open != NULL)
       {
-         result = peripheral->driver->open(peripheral);
-         if (!result) //Check result of
-         {
-            peripheral->driver = NULL; //Error
-         }
+//         result = peripheral->driver->open(peripheral);
+//         if (!result) //Check result of
+//         {
+//            peripheral->driver = NULL; //Error while opening device
+//         }
       }
    }
 
-   if (!peripheral->driver)
-   {
-      osFreeMem(peripheral);
-      peripheral = NULL;
-   }
+//   if (!peripheral->driver)
+//   {
+//      osFreeMem(peripheral);
+//      peripheral = NULL;
+//   }
 
-   return (Peripheral_Descriptor_t) peripheral;
+   return NO_ERROR;
 }
 
-size_t driver_read(Peripheral_Descriptor_t * const pxPeripheral, void * const pvBuffer, const size_t xBytes )
+size_t driver_read(peripheral_t * const pxPeripheral, void * const pvBuffer, const size_t xBytes )
 {
    peripheral_t * peripheral = (peripheral_t *) pxPeripheral;
    size_t result = 0;
@@ -117,7 +133,7 @@ size_t driver_read(Peripheral_Descriptor_t * const pxPeripheral, void * const pv
    return result;
 }
 
-size_t driver_write(Peripheral_Descriptor_t * const pxPeripheral, const void * pvBuffer, const size_t xBytes )
+size_t driver_write(peripheral_t * const pxPeripheral, const void * pvBuffer, const size_t xBytes )
 {
    peripheral_t * peripheral = (peripheral_t *) pxPeripheral;
    size_t result = 0;
@@ -140,7 +156,7 @@ size_t driver_write(Peripheral_Descriptor_t * const pxPeripheral, const void * p
    return result;
 }
 
-size_t driver_ioctl( Peripheral_Descriptor_t * const pxPeripheral, char * pcRequest, char *pcValue )
+size_t driver_ioctl( peripheral_t * const pxPeripheral, char * pcRequest, char *pcValue )
 {
    peripheral_t * peripheral = (peripheral_t *) pxPeripheral;
    size_t len;
@@ -151,6 +167,7 @@ size_t driver_ioctl( Peripheral_Descriptor_t * const pxPeripheral, char * pcRequ
    if (strncmp(pcRequest, "start", len) == 0)
    {
       /*Common comands*/
+      peripheral->status = DEV_STAT_ACTIVE;
       result = 1;
    }
    else
@@ -171,7 +188,7 @@ size_t driver_ioctl( Peripheral_Descriptor_t * const pxPeripheral, char * pcRequ
    return result;
 }
 
-void driver_close(Peripheral_Descriptor_t  * pxPeripheral)
+void driver_close(peripheral_t * const pxPeripheral)
 {
    peripheral_t * peripheral = (peripheral_t *) pxPeripheral;
 
@@ -181,7 +198,7 @@ void driver_close(Peripheral_Descriptor_t  * pxPeripheral)
 
       peripheral->driver = NULL;
 
-      osFreeMem(peripheral);
-      peripheral = NULL;
+//      osFreeMem(peripheral);
+//      peripheral = NULL;
    }
 }

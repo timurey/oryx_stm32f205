@@ -26,7 +26,7 @@ typedef struct
    const tPostSensHandler sensPostMethodHadler;
    const tPutSensHandler sensPutMethodHadler;
    const tDeleteSensHandler sensDeleteMethodHadler;
-   const sensValueType_t sensValueType;
+//   const sensValueType_t sensValueType;
 } sensFunctions;
 
 #define str(s) #s
@@ -43,7 +43,7 @@ typedef struct
   .sensPostMethodHadler = post_f, \
   .sensPutMethodHadler = put_f, \
   .sensDeleteMethodHadler = delete_f, \
-  .sensValueType = valueType\
+//  .sensValueType = valueType\
 }
 extern sensFunctions __start_sens_functions; //предоставленный линкером символ начала секции rest_functions
 extern sensFunctions __stop_sens_functions; //предоставленный линкером символ конца секции rest_functions

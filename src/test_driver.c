@@ -14,23 +14,23 @@ char input[128];
 char output[128];
 char bufer[128];
 
-static size_t test_read(Peripheral_Descriptor_t const pxPeripheral, void * const pvBuffer, const size_t xBytes)
+static size_t test_read(peripheral_t * const pxPeripheral, void * const pvBuffer, const size_t xBytes)
 {
 
    peripheral_t * peripheral = (peripheral_t *) pxPeripheral;
-   return snprintf(pvBuffer, xBytes, "Hello from driver #%"PRIu32"!", peripheral->peripheralNum);
+   return snprintf(pvBuffer, xBytes, "24", peripheral->peripheralNum);
 
 }
 
-static size_t test_read1(Peripheral_Descriptor_t const pxPeripheral, void * const pvBuffer, const size_t xBytes)
+static size_t test_read1(peripheral_t * const pxPeripheral, void * const pvBuffer, const size_t xBytes)
 {
 
    peripheral_t * peripheral = (peripheral_t *) pxPeripheral;
-   return snprintf(pvBuffer, xBytes, "Hello from driver #%s!", &bufer[0]);
+   return snprintf(pvBuffer, xBytes, "23", &bufer[0]);
 
 }
 
-static size_t test_write(Peripheral_Descriptor_t const pxPeripheral, const void * pvBuffer, const size_t xBytes)
+static size_t test_write(peripheral_t * const pxPeripheral, const void * pvBuffer, const size_t xBytes)
 {
 
    peripheral_t * peripheral = (peripheral_t *) pxPeripheral;
@@ -39,7 +39,7 @@ static size_t test_write(Peripheral_Descriptor_t const pxPeripheral, const void 
 
 }
 
-static size_t test_ioctl(Peripheral_Descriptor_t const pxPeripheral, char* pcParameter, char *pcValue)
+static size_t test_ioctl(peripheral_t * const pxPeripheral, char* pcParameter, char *pcValue)
 {
    size_t lenParameter;
    size_t lenValue;
@@ -52,30 +52,33 @@ static size_t test_ioctl(Peripheral_Descriptor_t const pxPeripheral, char* pcPar
    return lenValue;
 }
 
-register_driver(test_driver, "/test", NULL, test_write, test_read, test_ioctl, 12);
-register_driver(check_driver, "/check", NULL, NULL, test_read1, test_ioctl, 12);
+register_driver(test, "/test", NULL, test_write, test_read, test_ioctl, 12, PCHAR);
+register_driver(gpio, "/gpio", NULL, NULL, test_read1, test_ioctl, 12, PCHAR);
 
 
 void driverTask (void *pvParameters)
 {
 
-   Peripheral_Descriptor_t * fp;
+   peripheral_t fp;
    volatile size_t readed, writed, setted;
-   fp = driver_open("/test", 0);
-   readed = driver_read(fp, &input, arraysize(input) );
-   driver_close(fp);
+   volatile error_t error;
 
-   fp = driver_open("/test1", 0);
-   readed = driver_read(fp, &input, arraysize(input) );
-   writed = driver_write(fp, "Hello from application to driver", 33);
-   driver_close(fp);
-   fp = driver_open("/test10", 0);
-   readed = driver_read(fp, &input, arraysize(input) );
-   writed = driver_write(fp, "Hello from application to driver", 33);
-   driver_close(fp);
-   fp = driver_open("/check", 0);
-   setted = driver_ioctl(fp, "set_bufer", "Hello, aurora!");
-   readed = driver_read(fp, &input, arraysize(input) );
-   driver_close(fp);
+   error = driver_open(&fp, "/test", 0);
+   readed = driver_read(&fp, &input, arraysize(input) );
+   driver_close(&fp);
+   error = driver_open(&fp, "/test/1", 0);
+   readed = driver_read(&fp, &input, arraysize(input) );
+   writed = driver_write(&fp, "Hello from application to driver", 33);
+   driver_close(&fp);
+   error = driver_open(&fp, "/test/10", 0);
+   readed = driver_read(&fp, &input, arraysize(input) );
+   writed = driver_write(&fp, "Hello from application to driver", 33);
+   driver_close(&fp);
+   error = driver_open(&fp, "/check", 0);
+   setted = driver_ioctl(&fp, "set_bufer", "Hello, aurora!");
+   driver_close(&fp);
+   error = driver_open(&fp, "/check", 0);
+   readed = driver_read(&fp, &input, arraysize(input) );
+   driver_close(&fp);
    osDeleteTask(NULL);
 }
