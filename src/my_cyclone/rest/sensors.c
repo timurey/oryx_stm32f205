@@ -515,7 +515,7 @@ static sensor_t *findFreeSensor(void)
 }
 
 
-static error_t parseSensors (char *data, size_t length, jsmn_parser* jSMNparser, jsmntok_t *jSMNtokens)
+static error_t parseSensors (jsmnParserStruct * jsonParser)
 {
    sensor_t * currentSensor;
    char jsonPATH[64]; //
@@ -538,14 +538,14 @@ static error_t parseSensors (char *data, size_t length, jsmn_parser* jSMNparser,
    uint32_t input_num;
    uint32_t parameter_num;
    size_t len;
-   volatile int resultCode = 0;
 
-   jsmn_init(jSMNparser);
+   jsmn_init(jsonParser->jSMNparser);
 
-   resultCode = jsmn_parse(jSMNparser, data, length, jSMNtokens, CONFIG_JSMN_NUM_TOKENS);
+   jsonParser->resultCode = xjsmn_parse(jsonParser);
 
    input_num = 0;
-   if(resultCode > 0)
+
+   if(jsonParser->resultCode > 0)
    {
       while (result)
       {
@@ -555,7 +555,7 @@ static error_t parseSensors (char *data, size_t length, jsmn_parser* jSMNparser,
             break;
          }
          snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.inputs[%"PRIu32"].device", input_num);
-         result = jsmn_get_string(data, jSMNtokens, resultCode, &jsonPATH[0], &device[0], arraysize(device));
+         result = jsmn_get_string(jsonParser, &jsonPATH[0], &device[0], arraysize(device));
 
          if (result)
          {
@@ -571,7 +571,7 @@ static error_t parseSensors (char *data, size_t length, jsmn_parser* jSMNparser,
                    * try to get it manually.
                    * It's not clean, but it should work */
                   snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.inputs[%"PRIu32"].parameters[%"PRIu32"]", input_num, parameter_num);
-                  parameters = jsmn_get_string(data, jSMNtokens, resultCode, &jsonPATH[0], &parameter[0], arraysize(parameter));
+                  parameters = jsmn_get_string(jsonParser, &jsonPATH[0], &parameter[0], arraysize(parameter));
                   if (parameters)
                   {
                      pcParameter = strchr(parameter, '\"'); /*Find opening quote */
@@ -583,7 +583,7 @@ static error_t parseSensors (char *data, size_t length, jsmn_parser* jSMNparser,
                      }
 
                      snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.inputs[%"PRIu32"].parameters[%"PRIu32"]%s", input_num, parameter_num, pcParameter);
-                     parameters = jsmn_get_string(data, jSMNtokens, resultCode, &jsonPATH[0], &value[0], arraysize(value));
+                     parameters = jsmn_get_string(jsonParser, &jsonPATH[0], &value[0], arraysize(value));
                      if (parameters)
                      {
                         driver_ioctl(&(currentSensor->fd), pcParameter, &value[0]);
@@ -608,7 +608,7 @@ static error_t parseSensors (char *data, size_t length, jsmn_parser* jSMNparser,
                /*Setting up name and place*/
                snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.inputs[%"PRIu32"].name", input_num);
 
-               len = jsmn_get_string(data, jSMNtokens, resultCode, &jsonPATH[0], name, arraysize(parameter));
+               len = jsmn_get_string(jsonParser, &jsonPATH[0], name, arraysize(parameter));
                if(len>0)
                {
                   currentSensor->name = sensorsFindName(name, len);
@@ -626,7 +626,7 @@ static error_t parseSensors (char *data, size_t length, jsmn_parser* jSMNparser,
 
                snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.inputs[%"PRIu32"].place", input_num);
 
-               len = jsmn_get_string(data, jSMNtokens, resultCode, &jsonPATH[0], place, arraysize(parameter));
+               len = jsmn_get_string(jsonParser, &jsonPATH[0], place, arraysize(parameter));
                if(len>0)
                {
                   currentSensor->place = sensorsFindPlace(place, len);
@@ -644,7 +644,7 @@ static error_t parseSensors (char *data, size_t length, jsmn_parser* jSMNparser,
                /* Setting up type */
                snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.inputs[%"PRIu32"].type", input_num);
 
-               len = jsmn_get_string(data, jSMNtokens, resultCode, &jsonPATH[0], type, arraysize(parameter));
+               len = jsmn_get_string(jsonParser, &jsonPATH[0], type, arraysize(parameter));
 
                if(len>0)
                {

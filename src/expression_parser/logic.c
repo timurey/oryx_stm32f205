@@ -28,25 +28,25 @@ char * pExpression[EXPRESSION_MAX_COUNT];
 char rules[RESULT_LENGHT];
 char * pRules[EXPRESSION_MAX_COUNT];
 
-static error_t parseRules (char *data, size_t len, jsmn_parser* jSMNparser, jsmntok_t *jSMNtokens)
+static error_t parseRules (jsmnParserStruct * jsonParser)
 {
    int i;
    char path[64];
-   int resultCode;
 
    char * currExpr = &expressions[0];
    char * currRule = &rules[0];
    int strLen = 0;
-   jsmn_init(jSMNparser);
 
-   resultCode = jsmn_parse(jSMNparser, data, len, jSMNtokens, CONFIG_JSMN_NUM_TOKENS);
-   if(resultCode)
+   jsmn_init(jsonParser->jSMNparser);
+
+   jsonParser->resultCode = xjsmn_parse(jsonParser);
+   if(jsonParser->resultCode)
    {
       for (i=0;i<EXPRESSION_MAX_COUNT;i++)
       {
 
          sprintf(&path[0],"$.rules[%d].expression",i);
-         strLen = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], currExpr, EXPRESSIONS_LENGHT-(currExpr-&expressions[0]));
+         strLen = jsmn_get_string(jsonParser, &path[0], currExpr, EXPRESSIONS_LENGHT-(currExpr-&expressions[0]));
          if (strLen>0)
          {
             pExpression[i]=currExpr;
@@ -54,7 +54,7 @@ static error_t parseRules (char *data, size_t len, jsmn_parser* jSMNparser, jsmn
          }
          strLen=0;
          sprintf(&path[0],"$.rules[%d].result",i);
-         strLen = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], currRule, RESULT_LENGHT-(currRule-&rules[0]));
+         strLen = jsmn_get_string(jsonParser, &path[0], currRule, RESULT_LENGHT-(currRule-&rules[0]));
          if (strLen>0)
          {
             pRules[i]=currRule;

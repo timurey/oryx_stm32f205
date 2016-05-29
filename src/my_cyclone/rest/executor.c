@@ -38,13 +38,13 @@ static error_t restDenitExecutors(void)
 
 static executorFunctions * restFindExecutors(RestApi_t* RestApi)
 {
-   for (executorFunctions *cur_executor = &__start_executor_functions; cur_executor < &__stop_executor_functions; cur_executor++)
-   {
-      if (REST_CLASS_EQU(RestApi, cur_executor->executorClassPath))
-      {
-         return cur_executor;
-      }
-   }
+//   for (executorFunctions *cur_executor = &__start_executor_functions; cur_executor < &__stop_executor_functions; cur_executor++)
+//   {
+//      if (REST_CLASS_EQU(RestApi, cur_executor->executorClassPath))
+//      {
+//         return cur_executor;
+//      }
+//   }
    return NULL;
 }
 
@@ -148,10 +148,8 @@ error_t restDeleteExecutors(HttpConnection *connection, RestApi_t* RestApi)
    return error;
 }
 
-static error_t parseExecutors (char *data, size_t len, jsmn_parser* jSMNparser, jsmntok_t *jSMNtokens)
+static error_t parseExecutors (jsmnParserStruct * jsonParser)
 {
-   int resultCode;
-   jsmn_init(jSMNparser);
    volatile int strLen;
    uint8_t pos;
    error_t error;
@@ -159,16 +157,18 @@ static error_t parseExecutors (char *data, size_t len, jsmn_parser* jSMNparser, 
    volatile int size;
    int toknum;
    char path[32];
-   resultCode = jsmn_parse(jSMNparser, data, len, jSMNtokens, CONFIG_JSMN_NUM_TOKENS);
-   if (resultCode>0)
+
+   jsmn_init(jsonParser->jSMNparser);
+   jsonParser->resultCode = xjsmn_parse(jsonParser);
+   if (jsonParser->resultCode > 0)
    {
-      toknum = jsmn_get_value(data, jSMNtokens, resultCode, "$.executors.htmlGet");
-      size = jSMNtokens[toknum].size;
+      toknum = jsmn_get_value(jsonParser, "$.executors.htmlGet");
+      size = jsonParser->jSMNtokens[toknum].size;
 
       for (toknum=0;toknum<size;toknum++)
       {
          sprintf(&path[0],"$.executors.htmlGet[%d].name", toknum);
-         strLen = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], &str[0], 180);
+         strLen = jsmn_get_string(jsonParser, &path[0], &str[0], 180);
          if (strLen)
          {
 

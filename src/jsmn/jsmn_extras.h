@@ -22,8 +22,10 @@ typedef struct
    int resultCode;
 }jsmnParserStruct;
 
-int jsmn_get_value_token(jsmnParserStruct jsonStruct,  char * pPath);
-int jsmn_get_string(jsmnParserStruct jsonStruct,  char * pPath, char * string, int maxlen);
-int jsmn_get_bool(jsmnParserStruct jsonStruct,  char * pPath, int* pointer);
+int jsmn_get_value_token(jsmnParserStruct * jsonStruct,  char * pPath);
+int jsmn_get_string(jsmnParserStruct * jsonStruct,  char * pPath, char * string, int maxlen);
+int jsmn_get_bool(jsmnParserStruct * jsonStruct,  char * pPath, int* pointer);
+
+#define xjsmn_parse(jsonParser) jsmn_parse(jsonParser->jSMNparser, jsonParser->data, jsonParser->lengthOfData, jsonParser->jSMNtokens, jsonParser->numOfTokens);
 #endif /* JSMN_PARENT_LINKS */
 #endif /* _JSMN_EXTRAS_H_ */

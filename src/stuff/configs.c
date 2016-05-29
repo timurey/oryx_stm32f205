@@ -15,6 +15,7 @@
 //static jsmntok_t *jSMNtokens;
 
 static jsmnParserStruct jsonParser;
+
 error_t configInit(void)
 {
 

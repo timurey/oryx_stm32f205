@@ -8,9 +8,6 @@
 #include "configs.h"
 #include "macros.h"
 
-jsmn_parser parser;
-jsmntok_t tokens[15]; // a number >= total number of tokens
-//int resultCode;
 
 #define HOURS(a) (a*60*60)
 #define MINUTES(a) (a*60)
@@ -68,20 +65,20 @@ error_t restPostClock(HttpConnection *connection, RestApi_t* RestApi)
    return rest_400_bad_request(connection, "You can't create new clock...");
 }
 
-static error_t parseClock (char *data, size_t len, jsmn_parser* jSMNparser, jsmntok_t *jSMNtokens)
+static error_t parseClock (jsmnParserStruct * jsonParser)
 {
-   int resultCode;
    int strLen = 0;
    char str[12];
    error_t error = ERROR_UNSUPPORTED_REQUEST;
 
-   jsmn_init(jSMNparser);
+   jsmn_init(jsonParser->jSMNparser);
    clockContext.needSave = FALSE;
 
-   resultCode = jsmn_parse(jSMNparser, data, len, jSMNtokens, CONFIG_JSMN_NUM_TOKENS);
-   if (resultCode>0)
+   jsonParser->resultCode = xjsmn_parse(jsonParser);
+
+   if (jsonParser->resultCode>0)
    {
-      strLen = jsmn_get_string(data, jSMNtokens, resultCode, "$.timezone", &clockContext.tz[0], TIMEZONE_LENGTH);
+      strLen = jsmn_get_string(jsonParser, "$.timezone", &clockContext.tz[0], TIMEZONE_LENGTH);
       if (strLen)
       {
          RTC_SetTimezone(&(clockContext.tz[0]));
@@ -89,7 +86,7 @@ static error_t parseClock (char *data, size_t len, jsmn_parser* jSMNparser, jsmn
       }
 
 
-      strLen=jsmn_get_string(data, jSMNtokens, resultCode, "$.unixtime", &str[0], 12);
+      strLen=jsmn_get_string(jsonParser, "$.unixtime", &str[0], 12);
       if (strLen)
       {
          clockContext.unixtime=atoi(str);
@@ -97,7 +94,7 @@ static error_t parseClock (char *data, size_t len, jsmn_parser* jSMNparser, jsmn
          error = NO_ERROR;
       }
 
-       jsmn_get_bool(data, jSMNtokens, resultCode, "$.needSave", &clockContext.needSave);
+       jsmn_get_bool(jsonParser, "$.needSave", &clockContext.needSave);
 
    }
    return error;
@@ -126,6 +123,12 @@ error_t restPutClock(HttpConnection *connection, RestApi_t* RestApi)
 
    connection->response.noCache = TRUE;
 
+   jsmn_parser parser;
+   jsmntok_t tokens[15]; // a number >= total number of tokens
+
+   jsmnParserStruct jsonParser;
+
+
    error = httpReadStream(connection, connection->buffer, connection->request.contentLength, &received, HTTP_FLAG_BREAK_CRLF);
 
    if (error)
@@ -138,9 +141,16 @@ error_t restPutClock(HttpConnection *connection, RestApi_t* RestApi)
       connection->buffer[received] = '\0';
    }
 
-   jsmn_init(&parser);
+   jsonParser.jSMNparser = &parser;
+   jsonParser.jSMNtokens = &tokens[0];
+   jsonParser.numOfTokens = arraysize(tokens);
+   jsonParser.data = connection->buffer;
+   jsonParser.lengthOfData = connection->request.contentLength;
+   jsonParser.resultCode = 0;
 
-   error = parseClock(connection->buffer,  connection->request.contentLength,&parser, &tokens[0]);
+   jsmn_init(jsonParser.jSMNparser);
+
+   error = parseClock(&jsonParser);
 
    if (clockContext.needSave == TRUE)
    {

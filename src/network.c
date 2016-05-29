@@ -68,7 +68,7 @@ typedef struct
 static networkContext_t networkContext;
 
 static void networkSaveConfig (char * bufer, size_t maxLen);
-static error_t parseNetwork(char *data, size_t len, jsmn_parser* jSMNparser, jsmntok_t *jSMNtokens);
+static error_t parseNetwork(jsmnParserStruct * jsonParser);
 register_rest_function(network, "/network", NULL, NULL, &restGetNetwork, NULL, &restPutNetwork, NULL);
 
 
@@ -128,10 +128,14 @@ error_t restGetNetwork(HttpConnection *connection, RestApi_t* RestApi)
    return error;
 }
 
+
 error_t restPutNetwork(HttpConnection *connection, RestApi_t* RestApi)
 {
    jsmn_parser parser;
    jsmntok_t tokens[32]; // a number >= total number of tokens
+
+   jsmnParserStruct jsonParser;
+
    size_t received;
    error_t error = NO_ERROR;
 
@@ -142,8 +146,15 @@ error_t restPutNetwork(HttpConnection *connection, RestApi_t* RestApi)
    {
       connection->buffer[received] = '\0';
    }
-   jsmn_init(&parser);
-   error = parseNetwork(connection->buffer,  connection->request.contentLength,&parser, &tokens[0]);
+
+   jsonParser.jSMNparser = &parser;
+   jsonParser.jSMNtokens = &tokens[0];
+   jsonParser.numOfTokens = arraysize(tokens);
+   jsonParser.data = connection->buffer;
+   jsonParser.lengthOfData = connection->request.contentLength;
+
+   error = parseNetwork(&jsonParser);
+
    if (networkContext.needSave == TRUE)
    {
       networkSaveConfig(connection->buffer, HTTP_SERVER_BUFFER_SIZE);
@@ -169,7 +180,7 @@ static error_t useDefaultHostName(void)
 }
 
 
-static uint8_t parseIpv4Config(char *data, jsmntok_t *jSMNtokens, int resultCode)
+static uint8_t parseIpv4Config(jsmnParserStruct * jsonParser)
 {
    error_t error;
 #define IP_MAX_LEN 16 //Includeing '\0' at end
@@ -182,33 +193,33 @@ static uint8_t parseIpv4Config(char *data, jsmntok_t *jSMNtokens, int resultCode
    int length;
 #if (IPV4_SUPPORT == ENABLED)
 
-   jsmn_get_bool(data, jSMNtokens, resultCode, "$.ipv4.usedhcp", &networkContext.useDhcp);
+   jsmn_get_bool(jsonParser, "$.ipv4.usedhcp", &networkContext.useDhcp);
 
 
-   length = jsmn_get_string(data, jSMNtokens, resultCode, "$.ipv4.address", &ipAddr[0], IP_MAX_LEN);
+   length = jsmn_get_string(jsonParser, "$.ipv4.address", &ipAddr[0], IP_MAX_LEN);
    if (length ==0 || length > IP_MAX_LEN)
    {
       xprintf("Warning: wrong ip address in config file \"/config/lan.json\" ");
    }
-   length = jsmn_get_string(data, jSMNtokens, resultCode, "$.ipv4.netmask", &ipMask[0], IP_MAX_LEN);
+   length = jsmn_get_string(jsonParser, "$.ipv4.netmask", &ipMask[0], IP_MAX_LEN);
    if (length ==0 || length > IP_MAX_LEN)
    {
       xprintf("Warning: wrong subnet mask in config file \"/lan.json\" ");
    }
 
-   length = jsmn_get_string(data, jSMNtokens, resultCode, "$.ipv4.gateway", &ipGateway[0], IP_MAX_LEN);
+   length = jsmn_get_string(jsonParser, "$.ipv4.gateway", &ipGateway[0], IP_MAX_LEN);
    if (length ==0 || length > IP_MAX_LEN)
    {
       xprintf("Warning: wrong default gateway in config file \"/config/lan.json\" ");
    }
 
-   length = jsmn_get_string(data, jSMNtokens, resultCode, "$.ipv4.primarydns", &ipDns1[0], IP_MAX_LEN);
+   length = jsmn_get_string(jsonParser, "$.ipv4.primarydns", &ipDns1[0], IP_MAX_LEN);
    if (length ==0 || length > IP_MAX_LEN)
    {
       xprintf("Warning: wrong primary dns in config file \"/config/lan.json\" ");
    }
 
-   length = jsmn_get_string(data, jSMNtokens, resultCode, "$.ipv4.secondarydns", &ipDns2[0], IP_MAX_LEN);
+   length = jsmn_get_string(jsonParser, "$.ipv4.secondarydns", &ipDns2[0], IP_MAX_LEN);
 
    if (length ==0 || length > IP_MAX_LEN)
    {
@@ -252,33 +263,32 @@ inline void networkSaveConfig (char * bufer, size_t maxLen)
 
 }
 
-static error_t parseNetwork(char *data, size_t len, jsmn_parser* jSMNparser, jsmntok_t *jSMNtokens)
+static error_t parseNetwork(jsmnParserStruct * jsonParser)
 {
-   int resultCode;
    int strLen;
-   jsmn_init(jSMNparser);
+   jsmn_init(jsonParser->jSMNparser);
    networkContext.needSave = FALSE;
    //   networkContext.useIpV4 = FALSE;
    //   networkContext.useIpV6 = FALSE;
    //   networkContext.useDhcp = FALSE;
-   resultCode = jsmn_parse(jSMNparser, data, len, jSMNtokens, CONFIG_JSMN_NUM_TOKENS);
+   jsonParser->resultCode = xjsmn_parse(jsonParser);
 
-   strLen = jsmn_get_string(data, jSMNtokens, resultCode, "$.mac", &networkContext.sMacAddr[0], APP_MAC_ADDR_LEN);
+   strLen = jsmn_get_string(jsonParser, "$.mac", &networkContext.sMacAddr[0], APP_MAC_ADDR_LEN);
    if (strLen == 0)
    {
       useDefaultMacAddress();
    }
 
-   strLen = jsmn_get_string(data, jSMNtokens, resultCode, "$.hostname", &networkContext.hostname[0], NET_MAX_HOSTNAME_LEN);
+   strLen = jsmn_get_string(jsonParser, "$.hostname", &networkContext.hostname[0], NET_MAX_HOSTNAME_LEN);
    if (strLen == 0)
    {
       useDefaultHostName();
    }
 
-   jsmn_get_bool(data, jSMNtokens, resultCode, "$.ipv4.useipv4", &networkContext.useIpV4);
+   jsmn_get_bool(jsonParser, "$.ipv4.useipv4", &networkContext.useIpV4);
    if (networkContext.useIpV4 == TRUE)
    {
-      parseIpv4Config(data, jSMNtokens, resultCode);
+      parseIpv4Config(jsonParser);
    }
 #if IPV6_SUPPORT == ENABLED
    networkContext.useIpV6 = jsmn_get_bool(data, jSMNtokens, resultCode, "$.ipv6.useipv6");
@@ -298,7 +308,7 @@ static error_t parseNetwork(char *data, size_t len, jsmn_parser* jSMNparser, jsm
    }
 #endif
 
-   jsmn_get_bool(data, jSMNtokens, resultCode, "$.needSave", &networkContext.needSave);
+   jsmn_get_bool(jsonParser, "$.needSave", &networkContext.needSave);
 
    return NO_ERROR;
 }
@@ -513,7 +523,7 @@ void networkServices(void *pvParametrs)
 
    networkConfigure();
 
-   executorsConfigure();
+//   executorsConfigure();
    ntpdConfigure();
    clockConfigure();
 

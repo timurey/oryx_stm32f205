@@ -14,7 +14,7 @@
 
 static OsTask *pOutputTask;
 
-error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCurrentExecutor, int resultCode, uint8_t * pos);
+error_t InitOutputs(jsmnParserStruct * jsonParser, executor_t ** pCurrentExecutor, uint8_t * pos);
 error_t restDenitOutput(void);
 error_t restGetOutput(HttpConnection *connection, RestApi_t * rest);
 error_t restPostOutput(HttpConnection *connection, RestApi_t * rest);
@@ -33,7 +33,7 @@ static void initOutput(executor_t * currentExecutor)
    (void) currentExecutor;
 
 }
-error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCurrentExecutor, int resultCode, uint8_t * pos)
+error_t InitOutputs(const char * data, jsmntok_t *jSMNtokens, executor_t ** pCurrentExecutor, uint8_t * pos)
 {
 #define MAXLEN 64
    char tmp_str[MAXLEN];

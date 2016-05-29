@@ -41,40 +41,40 @@ static void httpdUseDefaultConfig(void)
 
 
 
-static error_t parseHttpdConfig (char *data, size_t len, jsmn_parser* jSMNparser, jsmntok_t *jSMNtokens)
+static error_t parseHttpdConfig (jsmnParserStruct * jsonParser)
 {
 #define MAXLEN 64
    char tmp_str[MAXLEN];
    char * str = &tmp_str[0];
    uint8_t httpEnable = 0;
-   int resultCode;
    int strLen;
    int length;
-   jsmn_init(jSMNparser);
-   resultCode = jsmn_parse(jSMNparser, data, len, jSMNtokens, CONFIG_JSMN_NUM_TOKENS);
-   if (resultCode >0 )
+
+   jsmn_init(jsonParser->jSMNparser);
+   jsonParser->resultCode = xjsmn_parse(jsonParser);
+   if (jsonParser->resultCode >0 )
    {
-      strLen = jsmn_get_string(data, jSMNtokens, resultCode, "$.config.port", str, MAXLEN);
+      strLen = jsmn_get_string(jsonParser, "$.config.port", str, MAXLEN);
       if (strLen > 0)
       {
          httpServerSettings.port = atoi(str);
          httpEnable++;
       }
 
-      strLen = jsmn_get_string(data, jSMNtokens, resultCode, "$.config.max connections", str, MAXLEN);
+      strLen = jsmn_get_string(jsonParser, "$.config.max connections", str, MAXLEN);
       if (strLen > 0)
       {
          httpServerSettings.maxConnections = MIN (atoi(str), APP_HTTP_MAX_CONNECTIONS);
          httpEnable++;
       }
 
-      strLen = jsmn_get_string(data, jSMNtokens, resultCode, "$.config.root directory", &(httpServerSettings.rootDirectory[0]), HTTP_SERVER_ROOT_DIR_MAX_LEN);
+      strLen = jsmn_get_string(jsonParser, "$.config.root directory", &(httpServerSettings.rootDirectory[0]), HTTP_SERVER_ROOT_DIR_MAX_LEN);
       if (strLen > 0)
       {
             httpEnable++;
       }
 #if (HTTP_SERVER_GZIPED_FILES == ENABLED)
-      strLen = jsmn_get_string(data, jSMNtokens, resultCode, "$.config.gziped directory", &(httpServerSettings.gzipedDirectory[0]), HTTP_SERVER_ROOT_DIR_MAX_LEN);
+      strLen = jsmn_get_string(jsonParser, "$.config.gziped directory", &(httpServerSettings.gzipedDirectory[0]), HTTP_SERVER_ROOT_DIR_MAX_LEN);
       if (strLen >= 0)
       {
             httpEnable++;
@@ -82,7 +82,7 @@ static error_t parseHttpdConfig (char *data, size_t len, jsmn_parser* jSMNparser
 #else
       httpEnable++;
 #endif
-      strLen = jsmn_get_string(data, jSMNtokens, resultCode, "$.config.default document", &(httpServerSettings.defaultDocument[0]), HTTP_SERVER_DEFAULT_DOC_MAX_LEN);
+      strLen = jsmn_get_string(jsonParser, "$.config.default document", &(httpServerSettings.defaultDocument[0]), HTTP_SERVER_DEFAULT_DOC_MAX_LEN);
       if (strLen >= 0)
       {
             httpEnable++;

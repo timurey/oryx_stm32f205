@@ -162,30 +162,28 @@ inline void ntpdRestart(void)
 }
 
 
-static error_t parseNTP (char *data, size_t len, jsmn_parser* jSMNparser, jsmntok_t *jSMNtokens)
+static error_t parseNTP (jsmnParserStruct * jsonParser)
 {
-   int resultCode;
 #define MAXLEN 12
    char tmp_str[MAXLEN];
    char * str = &tmp_str[0];
    int strLen;
-   jsmn_init(jSMNparser);
    int i;
-   int length;
    int period = 0;
    char path[] = "$.servers[xxx]";
    int servers =0;
    ntpContext.needSave = FALSE;
    ntpContext.enabled = TRUE;
 
-   resultCode = jsmn_parse(jSMNparser, data, len, jSMNtokens, CONFIG_JSMN_NUM_TOKENS);
+   jsmn_init(jsonParser->jSMNparser);
+   jsonParser->resultCode = xjsmn_parse(jsonParser);
 
-   if(resultCode)
+   if(jsonParser->resultCode)
    {
       for (i=0;i<NUM_OF_NTP_SERVERS;i++)
       {
          sprintf(&path[0], "$.servers[%d]", i);
-         strLen = jsmn_get_string(data, jSMNtokens, resultCode, &path[0], &ntpContext.ntp_candidates[i][0],MAX_LENGTH_OF_NTP_SERVER_NAME);
+         strLen = jsmn_get_string(jsonParser, &path[0], &ntpContext.ntp_candidates[i][0],MAX_LENGTH_OF_NTP_SERVER_NAME);
 
          if (i ==0 && strLen == 0)
          {
@@ -207,7 +205,7 @@ static error_t parseNTP (char *data, size_t len, jsmn_parser* jSMNparser, jsmnto
       }
    }
 
-   strLen = jsmn_get_string(data, jSMNtokens, resultCode, "$.period", str, MAXLEN);
+   strLen = jsmn_get_string(jsonParser, "$.period", str, MAXLEN);
 
    if (strLen>0)
    {
@@ -221,10 +219,10 @@ static error_t parseNTP (char *data, size_t len, jsmn_parser* jSMNparser, jsmnto
       }
    }
 
-   jsmn_get_bool(data, jSMNtokens, resultCode, "$.needSave", &ntpContext.needSave);
+   jsmn_get_bool(jsonParser, "$.needSave", &ntpContext.needSave);
 
 
-   jsmn_get_bool(data, jSMNtokens, resultCode, "$.enabled", &ntpContext.enabled);
+   jsmn_get_bool(jsonParser, "$.enabled", &ntpContext.enabled);
 
    return NO_ERROR;
 }
@@ -306,6 +304,8 @@ error_t putRestSNTP(HttpConnection *connection, RestApi_t* RestApi)
 {
    jsmn_parser parser;
    jsmntok_t tokens[32]; // a number >= total number of tokens
+   jsmnParserStruct jsonParser;
+
    size_t received;
    error_t error = NO_ERROR;
 
@@ -316,8 +316,18 @@ error_t putRestSNTP(HttpConnection *connection, RestApi_t* RestApi)
    {
       connection->buffer[received] = '\0';
    }
+
+   jsonParser.jSMNparser = &parser;
+   jsonParser.jSMNtokens = &tokens[0];
+   jsonParser.numOfTokens = arraysize(tokens);
+   jsonParser.data = connection->buffer;
+   jsonParser.lengthOfData = connection->request.contentLength;
+   jsonParser.resultCode = 0;
+
    jsmn_init(&parser);
-   error = parseNTP(connection->buffer,  connection->request.contentLength,&parser, &tokens[0]);
+
+   error = parseNTP(&jsonParser);
+
    if (ntpContext.needSave == TRUE)
    {
       ntpdSaveConfig();
