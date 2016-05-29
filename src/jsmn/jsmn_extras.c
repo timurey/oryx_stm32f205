@@ -8,7 +8,8 @@
 
 #include "jsmn_extras.h"
 #include <string.h>
-#define ISDIGIT(a) ((a>='0' && a<='9'))
+/* todo: only integer numbers is supported */
+#define ISDIGIT(a) ((a>='0' && a<='9') || (a=='-'))
 #define ISUPPER(a) (a>='A' && a<= 'Z')
 #define ISALPHA(a) ((a>='a' && a<='z')||(a>='A' && a<= 'Z'))
 #define ISALNUM(a) (ISDIGIT(a)||ISALPHA(a))
@@ -26,7 +27,6 @@
 #ifdef JSMN_PARENT_LINKS
 /*
  * Implement of atoi function
- * This implementation do not support negative numbers
  */
 
 static int jsmn_atoi ( char *s)
@@ -38,7 +38,11 @@ static int jsmn_atoi ( char *s)
    {
       s++;
    }
-
+   if (*s == '-')
+   {
+      sign = -1;
+      s++;
+   }
    while (ISDIGIT(*s))
    {
       i=i*10+(*s-'0');

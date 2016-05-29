@@ -113,20 +113,13 @@ typedef  struct
 
 typedef struct
 {
-//   uint8_t id;
-//   uint8_t serial[MAX_LEN_SERIAL];
    mysensor_sensor_t type;
    mysensor_sensor_t subType;
-//   mysensor_driver_t driver;
    peripheral_t fd; //file descriptor
-//   sensValueType_t valueType;
    char* place;   //Place
    char* name;    //Name
    char* device;  //Path
-//   sensValue_t value;
-//   uint8_t status;
    health_t health;
-//   OsMutex mutex;
 }sensor_t;
 
 

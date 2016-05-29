@@ -65,7 +65,7 @@ const mysensorSensorList_t sensorList[] =
    {S_RGBW_LIGHT, ""}, // RGB light with an additional White component. Send data using V_RGBW. Also supports V_WATT
    {S_COLOR_SENSOR,  ""}, // Color sensor, send color information using V_RGB
    {S_HVAC, ""}, // Thermostat/HVAC device. V_HVAC_SETPOINT_HEAT, V_HVAC_SETPOINT_COLD, V_HVAC_FLOW_STATE, V_HVAC_FLOW_MODE, V_TEMP
-   {S_MULTIMETER, "analog"}, // Multimeter device, V_VOLTAGE, V_CURRENT, V_IMPEDANCE
+   {S_MULTIMETER, "multimeter"}, // Multimeter device, V_VOLTAGE, V_CURRENT, V_IMPEDANCE
    {S_SPRINKLER,  ""}, // Sprinkler, V_STATUS (turn on/off), V_TRIPPED (if fire detecting device)
    {S_WATER_LEAK, ""}, // Water leak sensor, V_TRIPPED, V_ARMED
    {S_SOUND, ""}, // Sound sensor, V_TRIPPED, V_ARMED, V_LEVEL (sound level in dB)
@@ -166,7 +166,6 @@ static int snprintfSensor(char * bufer, size_t maxLen, sensor_t * sensor, int re
    int p=0;
    int d1, d2;
    double f2, f_val;
-   int i;
 
    if (restVersion == 1)
    {
@@ -206,11 +205,15 @@ static int snprintfSensor(char * bufer, size_t maxLen, sensor_t * sensor, int re
    //   p+=snprintf(bufer+p, maxLen-p, "\"health\":%d,", sensorsHealthGetValue(&sensors[i]));
    if (restVersion == 1)
    {
-      p+=snprintf(bufer+p, maxLen-p, "\"online\":%s},", ((sensor->fd.status & DEV_STAT_ONLINE)?"true":"false"));
+      p+=snprintf(bufer+p, maxLen-p, "\"online\":");
+      p+=driver_getproperty(&sensor->fd, "active",bufer+p, maxLen-p);
+      p+=snprintf(bufer+p, maxLen-p, "},");
    }
    else if (restVersion == 2)
    {
-      p+=snprintf(bufer+p, maxLen-p, "\"online\":%s}},", ((sensor->fd.status & DEV_STAT_ONLINE)?"true":"false"));
+      p+=snprintf(bufer+p, maxLen-p, "\"online\":");
+      p+=driver_getproperty(&sensor->fd, "active",bufer+p, maxLen-p);
+      p+=snprintf(bufer+p, maxLen-p, "}},");
    }
 
    return p;
@@ -500,9 +503,25 @@ char* sensorsAddPlace(const char * place, size_t length)
    return NULL;
 }
 
-static sensor_t *findFreeSensor(void)
+static sensor_t *findSensor(char* deviceName)
 {
    sensor_t * curr_sensor = &sensors[0];
+   /* If deviceName is defined, try to find it*/
+
+   if  (deviceName != NULL && *deviceName != '\0' )
+   {
+      while ( curr_sensor < &sensors[MAX_NUM_SENSORS])
+      {
+         if (strcmp(curr_sensor->device, deviceName) == 0)
+         {
+            return curr_sensor;
+         }
+         curr_sensor++;
+      }
+   }
+
+   curr_sensor = &sensors[0];
+   /* If deviceName is not found in sensor list or it not defined*/
    while ( curr_sensor < &sensors[MAX_NUM_SENSORS])
    {
       if (curr_sensor->device == NULL)
@@ -511,7 +530,7 @@ static sensor_t *findFreeSensor(void)
       }
       curr_sensor++;
    }
-   return NULL; //No free sensors
+   return NULL; //No sensors found
 }
 
 
@@ -549,11 +568,6 @@ static error_t parseSensors (jsmnParserStruct * jsonParser)
    {
       while (result)
       {
-         currentSensor = findFreeSensor();
-         if (!currentSensor)
-         {
-            break;
-         }
          snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.inputs[%"PRIu32"].device", input_num);
          result = jsmn_get_string(jsonParser, &jsonPATH[0], &device[0], arraysize(device));
 
@@ -561,9 +575,23 @@ static error_t parseSensors (jsmnParserStruct * jsonParser)
          {
             parameters = 1;
             parameter_num = 0;
+
+            currentSensor = findSensor(&device[0]);
+
+            if (!currentSensor)
+            {
+               break;
+            }
+
             error = driver_open(&(currentSensor->fd), &device[0], 0);
             if (!error)
             {
+               /* Если устройство уже запущено */
+               if (*currentSensor->fd.status == DEV_STAT_ACTIVE)
+               {
+                  /* Stop device here for reconfigure */
+                  driver_setproperty(&(currentSensor->fd), "stop", "");
+               }
                /*Setting up parameters*/
                while (parameters)
                {
@@ -586,7 +614,7 @@ static error_t parseSensors (jsmnParserStruct * jsonParser)
                      parameters = jsmn_get_string(jsonParser, &jsonPATH[0], &value[0], arraysize(value));
                      if (parameters)
                      {
-                        driver_ioctl(&(currentSensor->fd), pcParameter, &value[0]);
+                        driver_setproperty(&(currentSensor->fd), pcParameter, &value[0]);
                      }
                      parameter_num++;
                   }
@@ -652,7 +680,7 @@ static error_t parseSensors (jsmnParserStruct * jsonParser)
                   /*todo: check for undefined type*/
                }
 
-               driver_ioctl(&(currentSensor->fd), "start", "");
+               driver_setproperty(&(currentSensor->fd), "start", "");
             }
             /*If device configured and we did not reach end of devices*/
             if (&(currentSensor->fd) && currentSensor <= &sensors[MAX_NUM_SENSORS-1])
@@ -694,17 +722,16 @@ static error_t initSensor(sensor_t * cur_sensor)
    }
    return error;
 }
-*/
+ */
 void sensorsConfigure(void)
 {
    volatile error_t error = NO_ERROR;
-   int i;
 
    memset (&sensors[0], 0, sizeof(sensor_t)*MAX_NUM_SENSORS);
-//   for (i=0;i<MAX_NUM_SENSORS; i++)
-//   {
-//      initSensor(&sensors[i]);
-//   }
+   //   for (i=0;i<MAX_NUM_SENSORS; i++)
+   //   {
+   //      initSensor(&sensors[i]);
+   //   }
    if (!error)
    {
       error = read_config("/config/sensors_draft.json", &parseSensors);
@@ -943,28 +970,28 @@ char *serialHexToString(const uint8_t *serial, char *str, int length)
 error_t sensorsGetValue(const char *name, double * value)
 {
    error_t error = ERROR_OBJECT_NOT_FOUND;
-//   sensor_t * sensor = findSensorByName(name);
-//
-//   if(sensor)
-//   {
-//      {
-//         switch (sensor->valueType)
-//         {
-//         case FLOAT:
-//            *value =  (double) sensorsGetValueFloat(sensor);
-//            error = NO_ERROR;
-//            break;
-//         case UINT16:
-//            *value = sensorsGetValueUint16(sensor);
-//            error = NO_ERROR;
-//            break;
-//         case CHAR://Not supported yet
-//         case PCHAR:
-//         default:
-//            break;
-//         }
-//      }
-//   }
+   //   sensor_t * sensor = findSensorByName(name);
+   //
+   //   if(sensor)
+   //   {
+   //      {
+   //         switch (sensor->valueType)
+   //         {
+   //         case FLOAT:
+   //            *value =  (double) sensorsGetValueFloat(sensor);
+   //            error = NO_ERROR;
+   //            break;
+   //         case UINT16:
+   //            *value = sensorsGetValueUint16(sensor);
+   //            error = NO_ERROR;
+   //            break;
+   //         case CHAR://Not supported yet
+   //         case PCHAR:
+   //         default:
+   //            break;
+   //         }
+   //      }
+   //   }
    return error;
 }
 
