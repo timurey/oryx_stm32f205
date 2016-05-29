@@ -11,32 +11,43 @@
 
 #include <stdarg.h>
 
-static jsmn_parser *jSMNparser;
-static jsmntok_t *jSMNtokens;
+//static jsmn_parser *jSMNparser;
+//static jsmntok_t *jSMNtokens;
 
+static jsmnParserStruct jsonParser;
 error_t configInit(void)
 {
 
-   jSMNparser = osAllocMem(sizeof(jsmn_parser));
-   jSMNtokens = osAllocMem(sizeof(jsmntok_t) * CONFIG_JSMN_NUM_TOKENS); // a number >= total number of tokens
+   jsonParser.jSMNparser = osAllocMem(sizeof(jsmn_parser));
+   jsonParser.jSMNtokens = osAllocMem(sizeof(jsmntok_t) * CONFIG_JSMN_NUM_TOKENS); // a number >= total number of tokens
+   jsonParser.resultCode = 0;
 
-   if (!jSMNparser)
+   if (!jsonParser.jSMNparser)
       return ERROR_OUT_OF_MEMORY;
-   if (!jSMNtokens)
+   if (!jsonParser.jSMNtokens)
       return ERROR_OUT_OF_MEMORY;
+   jsonParser.numOfTokens = CONFIG_JSMN_NUM_TOKENS;
    return NO_ERROR;
 }
 
 void configDeinit(void)
 {
-   osFreeMem(jSMNparser);
-   osFreeMem(jSMNtokens);
+   osFreeMem(jsonParser.jSMNparser);
+   osFreeMem(jsonParser.jSMNtokens);
 }
 
 error_t read_default(const defaultConfig_t * defaultConfig, tConfigParser parser)
 {
    error_t error = NO_ERROR;
-   error =  parser(defaultConfig->config, defaultConfig->len, jSMNparser, jSMNtokens);
+
+   jsonParser.data = defaultConfig->config;
+   jsonParser.lengthOfData = defaultConfig->len;
+
+   error =  parser(&jsonParser);
+
+   jsonParser.data = NULL;
+   jsonParser.lengthOfData = 0;
+
    return error;
 }
 error_t read_config(char * path, tConfigParser parser)
@@ -79,8 +90,13 @@ error_t read_config(char * path, tConfigParser parser)
 
    }
    fsCloseFile(file);
-   error =  parser(data, readed, jSMNparser, jSMNtokens);
+   jsonParser.data = data;
+   jsonParser.lengthOfData =readed;
 
+   error =  parser(&jsonParser);
+
+   jsonParser.data = NULL;
+   jsonParser.lengthOfData = 0;
    osFreeMem (data);
 
    return error;
