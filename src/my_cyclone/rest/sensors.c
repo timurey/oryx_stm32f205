@@ -500,11 +500,24 @@ char* sensorsAddPlace(const char * place, size_t length)
    return NULL;
 }
 
+static sensor_t *findFreeSensor(void)
+{
+   sensor_t * curr_sensor = &sensors[0];
+   while ( curr_sensor < &sensors[MAX_NUM_SENSORS])
+   {
+      if (curr_sensor->device == NULL)
+      {
+         return curr_sensor;
+      }
+      curr_sensor++;
+   }
+   return NULL; //No free sensors
+}
 
 
 static error_t parseSensors (char *data, size_t length, jsmn_parser* jSMNparser, jsmntok_t *jSMNtokens)
 {
-   sensor_t * currentSensor = &sensors[0];
+   sensor_t * currentSensor;
    char jsonPATH[64]; //
 
    char device[64];
@@ -536,6 +549,11 @@ static error_t parseSensors (char *data, size_t length, jsmn_parser* jSMNparser,
    {
       while (result)
       {
+         currentSensor = findFreeSensor();
+         if (!currentSensor)
+         {
+            break;
+         }
          snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.inputs[%"PRIu32"].device", input_num);
          result = jsmn_get_string(data, jSMNtokens, resultCode, &jsonPATH[0], &device[0], arraysize(device));
 
@@ -636,12 +654,11 @@ static error_t parseSensors (char *data, size_t length, jsmn_parser* jSMNparser,
 
                driver_ioctl(&(currentSensor->fd), "start", "");
             }
-            /*If device configured and we don't reach end of devices*/
+            /*If device configured and we did not reach end of devices*/
             if (&(currentSensor->fd) && currentSensor <= &sensors[MAX_NUM_SENSORS-1])
             {
 
                driver_close(&(currentSensor->fd));
-               currentSensor++;
 
             }
             else
@@ -649,7 +666,6 @@ static error_t parseSensors (char *data, size_t length, jsmn_parser* jSMNparser,
                driver_close(&(currentSensor->fd));
 
             }
-
          }
          input_num++;
       }
@@ -923,6 +939,34 @@ char *serialHexToString(const uint8_t *serial, char *str, int length)
 //
 //
 //
+
+error_t sensorsGetValue(const char *name, double * value)
+{
+   error_t error = ERROR_OBJECT_NOT_FOUND;
+//   sensor_t * sensor = findSensorByName(name);
+//
+//   if(sensor)
+//   {
+//      {
+//         switch (sensor->valueType)
+//         {
+//         case FLOAT:
+//            *value =  (double) sensorsGetValueFloat(sensor);
+//            error = NO_ERROR;
+//            break;
+//         case UINT16:
+//            *value = sensorsGetValueUint16(sensor);
+//            error = NO_ERROR;
+//            break;
+//         case CHAR://Not supported yet
+//         case PCHAR:
+//         default:
+//            break;
+//         }
+//      }
+//   }
+   return error;
+}
 
 
 static mysensor_sensor_t findTypeByName(const char * type)
