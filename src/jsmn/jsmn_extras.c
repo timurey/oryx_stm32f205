@@ -12,7 +12,7 @@
 #define ISUPPER(a) (a>='A' && a<= 'Z')
 #define ISALPHA(a) ((a>='a' && a<='z')||(a>='A' && a<= 'Z'))
 #define ISALNUM(a) (ISDIGIT(a)||ISALPHA(a))
-#define ISSPACE(a) (a==' ' || a=='\t' || a== '\n' || a == '_')
+#define ISSPACE(a) (a==' ' || a=='\t' || a== '\n')
 #define ISDOT(a) (a=='.')
 
 #ifndef FALSE
@@ -216,7 +216,7 @@ static int findTokenByParentAndName(const char *pJSON, jsmntok_t * pTok, int par
 }
 
 
-int jsmn_get_value(const char *js, jsmntok_t *tokens,  int num_tokens,  char * pPath)
+int jsmn_get_value_token(jsmnParserStruct jsonStruct,  char * pPath)
 {
    char *path = pPath;
    int token =-1;
@@ -225,13 +225,13 @@ int jsmn_get_value(const char *js, jsmntok_t *tokens,  int num_tokens,  char * p
       path = nextNode(path);
       if (path)
       {
-         token = findTokenByParentAndName(js, tokens, token, path, num_tokens); //Must be 0
+         token = findTokenByParentAndName(jsonStruct->data, jsonStruct->jSMNtokens, token, path, jsonStruct->numOfTokens); //Must be 0
       }
       path = nextNode(path);
       while (*path && token>=0 )
       {
 
-         token = findTokenByParentAndName(js, tokens, token, path, num_tokens);
+         token = findTokenByParentAndName(jsonStruct->data, jsonStruct->jSMNtokens, token, path, jsonStruct->numOfTokens);
          path = nextNode(path);
 
       }
@@ -240,7 +240,7 @@ int jsmn_get_value(const char *js, jsmntok_t *tokens,  int num_tokens,  char * p
          jsmntok_t * parent = tokens+((tokens +token)->parent);
          if (parent->type == JSMN_OBJECT)
          {
-            token = findTokenByParentAndName(js, tokens, token, ".", num_tokens);
+            token = findTokenByParentAndName(jsonStruct->data, jsonStruct->jSMNtokens, token, ".", jsonStruct->numOfTokens);
          }
       }
    }
@@ -252,11 +252,11 @@ int jsmn_get_value(const char *js, jsmntok_t *tokens,  int num_tokens,  char * p
 
 }
 
-int jsmn_get_string(const char *js, jsmntok_t *tokens,  int num_tokens,  char * pPath, char * string, int maxlen)
+int jsmn_get_string(jsmnParserStruct jsonStruct,  char * pPath, char * string, int maxlen)
 {
    int tokNum;
    int length =0;
-   tokNum = jsmn_get_value(js, tokens, num_tokens, pPath);
+   tokNum = jsmn_get_value_token(jsonStruct, pPath);
 
    if (tokNum>0)
    {
@@ -264,7 +264,7 @@ int jsmn_get_string(const char *js, jsmntok_t *tokens,  int num_tokens,  char * 
       length = tokens[tokNum].end - tokens[tokNum].start;
       if (length < maxlen)
       {
-         memcpy(string, &js[tokens[tokNum].start], length);
+         memcpy(string, &jsonStruct->data[tokens[tokNum].start], length);
          string[length] = '\0';
       }
       else
@@ -275,19 +275,21 @@ int jsmn_get_string(const char *js, jsmntok_t *tokens,  int num_tokens,  char * 
 
    return length;
 }
-int jsmn_get_bool(const char *js, jsmntok_t *tokens,  int num_tokens,  char * pPath, int* pointer)
+
+int jsmn_get_bool(jsmnParserStruct jsonStruct,  char * pPath, int* pointer)
 {
+   int result = FALSE;
    int tokNum;
 
-   tokNum = jsmn_get_value(js, tokens, num_tokens, pPath);
+   tokNum = jsmn_get_value_token(jsonStruct, pPath);
 
    if (tokNum > 0)
    {
-      if (strncmp (&js[tokens[tokNum].start], "true" ,4) == 0)
+      if (strncmp (&jsonStruct->data[tokens[tokNum].start], "true" ,4) == 0)
       {
          *pointer = TRUE;
       }
-      else if (strncmp (&js[tokens[tokNum].start], "false" ,5) == 0)
+      else if (strncmp (&jsonStruct->data[tokens[tokNum].start], "false" ,5) == 0)
       {
          *pointer = FALSE;
       }
