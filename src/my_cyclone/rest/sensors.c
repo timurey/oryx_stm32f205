@@ -680,7 +680,7 @@ static error_t parseSensors (jsmnParserStruct * jsonParser)
                   /*todo: check for undefined type*/
                }
 
-               driver_setproperty(&(currentSensor->fd), "start", "");
+               driver_setproperty(&(currentSensor->fd), "active", "true");
             }
             /*If device configured and we did not reach end of devices*/
             if (&(currentSensor->fd) && currentSensor <= &sensors[MAX_NUM_SENSORS-1])

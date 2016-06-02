@@ -58,7 +58,7 @@ static const driver_functions_t testFunctions =
 
 static const driver_functions_t gpioFunctions = {gpio_open, NULL, gpio_read, test_ioctl};
 
-register_driver(test, "/test", testFunctions, testStatus, 12, testPropList, PCHAR);
+register_driver(test, "/test", testFunctions, testStatus, 12, testPropList, FLOAT);
 register_driver(gpio, "/gpio", gpioFunctions, gpioStatus, 12, gpioPropList, PCHAR);
 
 static size_t test_open(peripheral_t * const pxPeripheral)
@@ -80,8 +80,11 @@ static size_t test_read(peripheral_t * const pxPeripheral, void * const pvBuffer
 {
 
    peripheral_t * peripheral = (peripheral_t *) pxPeripheral;
-   return snprintf(pvBuffer, xBytes, "24", peripheral->peripheralNum);
+   double * value = (double *)pvBuffer;
 
+   *value = 24.0;
+
+   return sizeof(double);
 }
 
 static size_t gpio_read(peripheral_t * const pxPeripheral, void * const pvBuffer, const size_t xBytes)
