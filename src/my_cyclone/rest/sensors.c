@@ -590,7 +590,7 @@ static error_t parseSensors (jsmnParserStruct * jsonParser)
                if (*currentSensor->fd.status == DEV_STAT_ACTIVE)
                {
                   /* Stop device here for reconfigure */
-                  driver_setproperty(&(currentSensor->fd), "stop", "");
+                  driver_setproperty(&(currentSensor->fd), "active", "false");
                }
                /*Setting up parameters*/
                while (parameters)

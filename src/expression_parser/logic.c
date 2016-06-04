@@ -15,18 +15,18 @@
 #include <math.h>
 #include "debug.h"
 
-#include"expression_parser.h"
+
 #include "configs.h"
 #include "variables_def.h"
+#include "DataManager.h"
 
-#define EXPRESSIONS_LENGHT 128
-#define EXPRESSION_MAX_COUNT 8
-#define RESULT_LENGHT 64
 char expressions[EXPRESSIONS_LENGHT];
 char * pExpression[EXPRESSION_MAX_COUNT];
 
 char rules[RESULT_LENGHT];
 char * pRules[EXPRESSION_MAX_COUNT];
+
+OsTask *logicTask;
 
 static error_t parseRules (jsmnParserStruct * jsonParser)
 {
@@ -130,43 +130,51 @@ int user_fnc_cb( void *user_data, const char *name, const int num_args, const do
  @return true if the variable exists and the return argument was successfully set, false otherwise
  */
 static int user_var_cb( void *user_data, const char *name, double *value ){
-   error_t error = ERROR_OBJECT_NOT_FOUND;
-   (void) user_data;
-   for (varFunctions *cur_varHandler = &__start_var_functions; cur_varHandler < &__stop_var_functions; cur_varHandler++)
-   {
-      error = cur_varHandler->varGetMethodHadler(name, value);
-      if (!error)
-      {
-         break;
-      }
-   }
 
+   char device[32];
+   error_t error = ERROR_OBJECT_NOT_FOUND;
+   peripheral_t fd; //file descriptor
+   memset(&fd, 0, sizeof(fd));
+
+   (void) user_data;
+   snprintf(&device[0], 32, "/%s", name);
+   error = driver_open(&fd, &device[0], READ);
    if (error)
    {
       return PARSER_FALSE;
    }
    else
    {
+      driver_read(&fd, value, sizeof(double));
+      driver_close(&fd);
+
       return PARSER_TRUE;
    }
 }
 
 
 
-static void parse_rules(void)
+static void parse_rules(uint_t exprNum)
 {
    double result;
    int d1, d2;
    float f2;
-   int i=0;
+
+   result = parse_expression_with_callbacks( pExpression[exprNum], &user_var_cb, &user_fnc_cb, NULL );
+
+   d1 = result;
+   f2 = result - d1;
+   d2 = abs(trunc(f2 * 1000));
+   xprintf("Parsed: %d.%01d\n", d1, d2 );
+}
+
+static void buildDeps(void)
+{
+
+   uint8_t i=0;
    while (pExpression[i])
    {
-      result = parse_expression_with_callbacks( pExpression[i], &user_var_cb, &user_fnc_cb, NULL );
-
-      d1 = result;
-      f2 = result - d1;
-      d2 = abs(trunc(f2 * 1000));
-      xprintf("Parsed: %d.%01d\n", d1, d2 );
+      parse_expression_with_callbacks( pExpression[i], &userVarFake, &user_fnc_cb, &i );
       i++;
    }
 
@@ -175,13 +183,19 @@ static void parse_rules(void)
 static void parser_task (void *pvParameters)
 {
    (void) pvParameters;
+   portBASE_TYPE xStatus;
+   uint8_t exprNum;
    while (1)
    {
-      vTaskDelay(1000);
-      xprintf("Parser is starting...\r\n");
-      parse_rules();
+      xStatus = xQueueReceive(exprQueue, &exprNum, INFINITE_DELAY);
+      if (xStatus == pdPASS) {
+         if (exprNum<EXPRESSION_MAX_COUNT)
+         {
+            xprintf("\r\nParser is starting...\r\n");
+            parse_rules(exprNum);
+         }
+      }
    }
-
    vTaskDelete(NULL);
 }
 
@@ -189,13 +203,47 @@ error_t logicConfigure(void)
 {
    error_t error;
    error = read_config("/config/rules.json",&parseRules);
+   if (!error)
+   {
+      buildDeps();
+   }
+   if (!error)
+   {
+      exprQueue = xQueueCreate(EXPRESSION_MAX_COUNT *2, sizeof(uint8_t));
+
+      if (exprQueue == NULL)
+      {
+         error = ERROR_OUT_OF_MEMORY;
+      }
+   }
+   if (!error)
+   {
+      dataQueue = xQueueCreate(EXPRESSION_MAX_COUNT *2, sizeof(mask_t));
+
+      if (dataQueue == NULL)
+      {
+         error = ERROR_OUT_OF_MEMORY;
+      }
+   }
    return error;
 }
 
 error_t logicStart(void)
 {
-   if (osCreateTask("parser_Services", parser_task,  NULL, configMINIMAL_STACK_SIZE*8, 1)!=NULL)
-      return NO_ERROR;
-   return ERROR_OUT_OF_MEMORY;
+   error_t error = NO_ERROR;
+
+   dataManagerTask = osCreateTask("data_manger", dataManager_task, NULL, configMINIMAL_STACK_SIZE, 1);
+   if (dataManagerTask == NULL)
+   {
+      error = ERROR_OUT_OF_MEMORY;
+   }
+
+   logicTask = osCreateTask("parser_Services", parser_task,  NULL, configMINIMAL_STACK_SIZE*4, 1);
+   if (logicTask==NULL)
+   {
+      error = ERROR_OUT_OF_MEMORY;
+   }
+
+   return error;
 }
 #endif /* EXPRESSION_PARSER_LOGIC_C_ */

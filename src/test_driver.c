@@ -14,22 +14,48 @@ char output[128];
 char bufer[128];
 
 devStatusAttributes testStatus[12];
+float testValue[12];
+
+
+OsTask *vTestTask;
+
 devStatusAttributes gpioStatus[12];
 
 static size_t test_write(peripheral_t * const pxPeripheral, const void * pvBuffer, const size_t xBytes);
 static size_t test_read(peripheral_t * const pxPeripheral, void * const pvBuffer, const size_t xBytes);
 static size_t gpio_read(peripheral_t * const pxPeripheral, void * const pvBuffer, const size_t xBytes);
-static size_t test_ioctl(peripheral_t * const pxPeripheral, char* pcParameter, char *pcValue);
 static size_t test_open(peripheral_t * const pxPeripheral);
 static size_t gpio_open(peripheral_t * const pxPeripheral);
-static size_t set_bufer(peripheral_t * const pxPeripheral, char* pcParameter, char *pcValue)
+static size_t set_active(peripheral_t * const pxPeripheral, char* pcParameter, char *pcValue);
+static size_t get_active(peripheral_t * const pxPeripheral, char* pcParameter, char *pcValue, const size_t xBytes);
+
+static size_t set_bufer( peripheral_t * const pxPeripheral, char * pcRequest, char *pcValue )
 {
    return 0;
 }
 
-static size_t get_bufer(peripheral_t * const pxPeripheral, char* pcParameter, char *pcValue)
+static size_t get_bufer(peripheral_t * const pxPeripheral, char* pcParameter, char *pcValue, const size_t xBytes)
 {
    return 0;
+}
+
+
+static size_t get_active(peripheral_t * const pxPeripheral, char* pcParameter, char *pcValue, const size_t xBytes)
+{
+   peripheral_t * peripheral = (peripheral_t *) pxPeripheral;
+   size_t result;
+   /*Common comands*/
+   if (peripheral->status[peripheral->peripheralNum] == DEV_STAT_ACTIVE)
+   {
+      strncpy(pcValue, "true", xBytes);
+      result = strlen(pcValue);
+   }
+   else
+   {
+      strncpy(pcValue, "false", xBytes);
+      result = strlen(pcValue);
+   }
+   return result;
 }
 
 //Array of properties. Conatins names of parameters and type of values.
@@ -43,6 +69,7 @@ static const property_t gpioPropList[] =
 
 static const property_t testPropList[] =
 {
+   { "active", PCHAR, set_active, get_active},
    { "set_bufer", PCHAR, set_bufer, get_bufer},
    { "time", PCHAR, set_bufer, get_bufer}
 };
@@ -53,13 +80,69 @@ static const driver_functions_t testFunctions =
    test_open,       //open
    test_write, //write
    test_read,  //read
-   test_ioctl  //ioctl
 };
 
-static const driver_functions_t gpioFunctions = {gpio_open, NULL, gpio_read, test_ioctl};
+static const driver_functions_t gpioFunctions = {gpio_open, NULL, gpio_read};
 
 register_driver(test, "/test", testFunctions, testStatus, 12, testPropList, FLOAT);
 register_driver(gpio, "/gpio", gpioFunctions, gpioStatus, 12, gpioPropList, PCHAR);
+
+
+static void testTask(void * pvParameters)
+{
+   driver_t * driver = (driver_t *) pvParameters;
+   mask_t * mask = (mask_t *) driver->mask;
+   /* Преобразование типа void* к типу TaskParam* */
+   //   mask = (struct mask_t *) pvParameters->;
+   mask->driver = driver;
+   int i;
+   while (1)
+   {
+      for (i = 0; i< 12; i++)
+      {
+         testValue[i]++;
+         if (i%2)
+         {
+            (mask->mask) |= (1<<i);
+         }
+         else
+         {
+            (mask->mask) &= ~(1<<i);
+         }
+      }
+      xQueueSendToBack(dataQueue, mask, 0);
+      osDelayTask(5000);
+   }
+
+}
+
+static size_t set_active( peripheral_t * const pxPeripheral, char * pcRequest, char *pcValue )
+{
+   peripheral_t * peripheral = (peripheral_t *) pxPeripheral;
+   size_t result =0 ;
+
+   if (strcmp(pcRequest, "active") == 0)
+   {
+      if (strcmp(pcValue, "true") == 0)
+      {
+
+         peripheral->status[peripheral->peripheralNum] |= DEV_STAT_ACTIVE;
+         vTestTask = osCreateTask("testTask", testTask, peripheral->driver, configMINIMAL_STACK_SIZE, 2);
+         result = 1;
+      }
+   }
+   if (strcmp(pcRequest, "active") == 0)
+   {
+      if (strcmp(pcValue, "false") == 0)
+      {
+         osDeleteTask(vTestTask);
+         peripheral->status[peripheral->peripheralNum] &= ~DEV_STAT_ACTIVE;
+         result = 1;
+      }
+
+   }
+   return result;
+}
 
 static size_t test_open(peripheral_t * const pxPeripheral)
 {
@@ -82,7 +165,7 @@ static size_t test_read(peripheral_t * const pxPeripheral, void * const pvBuffer
    peripheral_t * peripheral = (peripheral_t *) pxPeripheral;
    double * value = (double *)pvBuffer;
 
-   *value = 24.0;
+   *value = testValue[peripheral->peripheralNum];
 
    return sizeof(double);
 }
@@ -105,17 +188,6 @@ static size_t test_write(peripheral_t * const pxPeripheral, const void * pvBuffe
 
 }
 
-static size_t test_ioctl(peripheral_t * const pxPeripheral, char* pcParameter, char *pcValue)
-{
-   size_t lenValue = 0;
-   //   lenParameter = strlen(pcParameter);
-   if (strcmp(pcParameter, "set_bufer") == 0)
-   {
-      strncpy(&bufer[0], pcValue, arraysize(bufer));
-      lenValue = strlen(bufer);
-   }
-   return lenValue;
-}
 
 
 void driverTask (void *pvParameters)

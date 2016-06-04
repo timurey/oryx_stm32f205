@@ -12,10 +12,13 @@
 #include <stdint.h>
 #include "os_port.h"
 #include "error.h"
+#include "DataManager.h"
 
+#define MAX_OF_PERIPHERALS 32
 /* Peripheral handles are void * for data hiding purposes. */
 //typedef void * Peripheral_Descriptor_t;
 typedef struct Tperipheral_t peripheral_t;
+typedef struct Tmask_t mask_t ;
 
 /**
  * @brief Device status
@@ -30,6 +33,16 @@ typedef enum
    DEV_STAT_WRITEBLE      = 0x10,
 
 } devStatusAttributes;
+
+/**
+ * @brief Device opening type
+ **/
+typedef enum
+{
+   UNDEFINED,
+   READ,
+   WRITE
+}periphOpenType;
 
 /**
  * @brief Answer type
@@ -47,9 +60,9 @@ typedef enum
 typedef size_t ( *Peripheral_open_Function_t )( peripheral_t * const pxPeripheral);
 typedef size_t ( *Peripheral_read_Function_t )( peripheral_t * const pxPeripheral, void * const pvBuffer, const size_t xBytes );
 typedef size_t ( *Peripheral_write_Function_t )( peripheral_t * const pxPeripheral, const void *pvBuffer, const size_t xBytes );
-typedef size_t ( *Peripheral_ioctl_Function_t )( peripheral_t * const pxPeripheral, char* pcParameter, char *pcValue );
-typedef size_t ( *setPropertyFunction_t )( peripheral_t * const pxPeripheral, char* pcParameter, char *pcValue );
-typedef size_t ( *getPropertyFunction_t )( peripheral_t * const pxPeripheral, char* pcParameter, char *pcValue );
+typedef size_t ( *setPropertyFunction_t )( peripheral_t * const pxPeripheral, char * pcRequest, char *pcValue );
+typedef size_t ( *getPropertyFunction_t )( peripheral_t * const pxPeripheral, char* pcParameter, char *pcValue, const size_t xBytes );
+
 
 typedef struct {
    const char * property;
@@ -67,7 +80,6 @@ typedef struct {
    const Peripheral_open_Function_t open; /*Function to ioctl peripheral*/
    const Peripheral_write_Function_t write; /*Function to read some bytes from peripheral*/
    const Peripheral_read_Function_t read;   /*Function to write some bytes to peripheral */
-//   const Peripheral_ioctl_Function_t setProperty; /*Function to ioctl peripheral*/
 }driver_functions_t;
 
 typedef struct {
@@ -78,8 +90,13 @@ typedef struct {
    const uint32_t countOfPerepherals;       /*Count of perepherals, that uses this driver*/
    const properties_t * propertyList;
    const periphDataType dataType;
+   const mask_t * mask;
 }driver_t;
 
+typedef struct Tmask_t{
+   driver_t * driver;
+   unsigned mask: MAX_OF_PERIPHERALS;
+}mask_t;
 
 typedef struct Tperipheral_t {
    driver_t * driver;
@@ -89,10 +106,12 @@ typedef struct Tperipheral_t {
 }peripheral_t;
 
 
+
+
 /*
  * Function prototypes.
  */
-error_t driver_open(peripheral_t * const pxPeripheral, const char * path, const uint16_t flags);
+error_t driver_open(peripheral_t * const pxPeripheral, const char * path, const periphOpenType flags);
 size_t driver_read(peripheral_t * const pxPeripheral, void * const pvBuffer, const size_t xBytes );
 size_t driver_write(peripheral_t * const pxPeripheral, const void *pvBuffer, const size_t xBytes );
 size_t driver_setproperty( peripheral_t * const pxPeripheral, char * pcRequest, char *pcValue );
@@ -102,25 +121,30 @@ void driver_close(peripheral_t  * pxPeripheral);
 #define str(s) #s
 
 #define register_driver(d_name, d_path, d_funcs, d_status_a, d_max_peripheral, d_prop_l, d_data_type) \
-const properties_t properties_##d_name  = \
+   mask_t d_name##Mask; \
+   \
+   const properties_t properties_##d_name  = \
    { \
-   .properties = &d_prop_l[0],\
-   .numOfProperies = arraysize(d_prop_l),\
+      .properties = &d_prop_l[0],\
+      .numOfProperies = arraysize(d_prop_l),\
    }; \
-const driver_t driver_##d_name __attribute__ ((section ("drivers"))) = \
+   const driver_t driver_##d_name __attribute__ ((section ("drivers"))) = \
    { \
-   .name = str(d_name),\
-   .path = d_path,\
-   .functions = &d_funcs,\
-   .status = &d_status_a[0],\
-   .countOfPerepherals = d_max_peripheral,\
-   .propertyList = &(properties_##d_name), \
-   .dataType = d_data_type,\
-   }
+      .name = str(d_name),\
+      .path = d_path,\
+      .functions = &d_funcs,\
+      .status = &d_status_a[0],\
+      .countOfPerepherals = d_max_peripheral,\
+      .propertyList = &(properties_##d_name), \
+      .dataType = d_data_type,\
+      .mask = &(d_name##Mask),\
+   };\
+
 
 extern driver_t __start_drivers; //предоставленный линкером символ начала секции rest_functions
 extern driver_t __stop_drivers; //предоставленный линкером символ конца секции rest_functions
 
+#define drivers_count (&__stop_drivers - &__start_drivers)
 
 
 //#undef str

@@ -519,6 +519,8 @@ void networkServices(void *pvParametrs)
 {
    (void) pvParametrs;
    configInit();
+   logicConfigure();
+
    sensorsConfigure();
 
    networkConfigure();
@@ -527,7 +529,7 @@ void networkServices(void *pvParametrs)
    ntpdConfigure();
    clockConfigure();
 
-   logicConfigure();
+
 #if (FTP_SERVER_SUPPORT == ENABLED)
    ftpdConfigure();
 #endif
@@ -535,9 +537,10 @@ void networkServices(void *pvParametrs)
 
    configDeinit();
 
+   logicStart();
    networkStart();
    ntpdStart();
-   logicStart();
+
 #if (FTP_SERVER_SUPPORT == ENABLED)
    ftpdStart();
 #endif
