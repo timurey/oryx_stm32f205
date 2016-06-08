@@ -193,7 +193,7 @@
 
 //#define AUTO_IP_SUPPORT ENABLED
 
-#define DNS_CACHE_SIZE 8
+#define DNS_CACHE_SIZE 4
 
 //#define NET_TASK_STACK_SIZE 550*4
 //#define NET_TASK_PRIORITY 5

@@ -14,7 +14,7 @@ QueueHandle_t dataQueue;
 
 OsTask * dataManagerTask;
 
-uint8_t depedencesArr[EXPRESSION_MAX_COUNT][32][32]; //32 - magic number (driver count & periph max count)
+uint8_t depedencesArr[EXPRESSION_MAX_COUNT][3][16]; //32 - magic number (driver count & periph max count)
 
 
 /* Build depedency matrix */

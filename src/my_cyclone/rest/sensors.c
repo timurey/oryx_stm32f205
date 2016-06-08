@@ -11,20 +11,19 @@
 #include "rest/sensors.h"
 #include "rest/sensors_def.h"
 //#include "rest/input.h"
-#include "rest/temperature.h"
 #include "configs.h"
 #include <ctype.h>
 #include <math.h>
 #include "debug.h"
 #include "macros.h"
 #include "../../expression_parser/variables_def.h"
-char places[PLACES_CACHE_LENGTH];
-char names[NAMES_CACHE_LENGTH];
-char devices[DEVICES_CACHE_LENGTH];
+char * places[MAX_PLACES_COUNT];
+char * names[MAX_NAMES_COUNT];
+char * devices[MAX_DEVICES_COUNT];
 
-char *pPlaces = &places[0];
-char *pNames = &names[0];
-char *pDevices = &devices[0];
+//char *pPlaces = &places[0];
+//char *pNames = &names[0];
+//char *pDevices = &devices[0];
 
 
 
@@ -418,87 +417,130 @@ error_t restPutSensors(HttpConnection *connection, RestApi_t* RestApi)
 
 char* sensorsFindDevice(const char * device, size_t length)
 {
-   char * p = &devices[0];
-   while (p < &(devices[DEVICES_CACHE_LENGTH-1]))
+   (void) length;
+   int i =0;
+   while(devices[i])
    {
-      if (strncmp(device, p, length)==0)
+      if (i == MAX_DEVICES_COUNT)
       {
-         return p;
+         break;
       }
-      p = strchr(++p,'\0');
+      if (strcmp(device, devices[i]) == 0)
+      {
+         return devices[i];
+      }
+      i++;
    }
    return NULL;
 }
-
+/* todo: if allocator suppotrs, try to allocate static memory.
+ * We'll never free this block, try to allocate it without fragmentation*/
 char* sensorsAddDevice(const char * device, size_t length)
 {
-   if (length+pDevices<&(devices[DEVICES_CACHE_LENGTH-1]))
+   int i =0;
+   while(devices[i])
    {
-      memcpy(pDevices, device, length);
-      pDevices+=length;
-      *pDevices = '\0';
-      pDevices++;
-      return pDevices-(length+1);
+      if (i == MAX_DEVICES_COUNT)
+      {
+         break;
+      }
+      i++;
+   }
+   if (i<MAX_DEVICES_COUNT)
+   {
+      devices[i] = osAllocMem(length+1);
+      if (devices[i])
+      {
+         memcpy(devices[i], device, length);
+         return devices[i];
+      }
    }
    return NULL;
 }
 
 char* sensorsFindName(const char * name, size_t length)
 {
-   char * p = &names[0];
-   while (p < &(names[NAMES_CACHE_LENGTH-1]))
+   (void) length;
+   int i =0;
+   while(names[i])
    {
-      if (strncmp(name, p, length)==0)
+      if (i == MAX_NAMES_COUNT)
       {
-         return p;
+         break;
       }
-      p = strchr(++p,'\0');
+      if (strcmp(name, names[i]) == 0)
+      {
+         return names[i];
+      }
+      i++;
    }
    return NULL;
 }
-
+/* todo: if allocator suppotrs, try to allocate static memory.
+ * We'll never free this block, try to allocate it without fragmentation*/
 char* sensorsAddName(const char * name, size_t length)
 {
-   if (length+pNames<&(names[NAMES_CACHE_LENGTH-1]))
+   int i =0;
+   while(names[i])
    {
-      memcpy(pNames, name, length);
-      pNames+=length;
-      *pNames = '\0';
-      pNames++;
-      return pNames-(length+1);
+      if (i == MAX_NAMES_COUNT)
+      {
+         break;
+      }
+      i++;
+   }
+   if (i<MAX_NAMES_COUNT)
+   {
+      names[i] = osAllocMem(length+1);
+      if (names[i])
+      {
+         memcpy(names[i], name, length);
+         return names[i];
+      }
    }
    return NULL;
 }
 
 char* sensorsFindPlace(const char * place, size_t length)
 {
-   char * p = &places[0];
-   while (p < &(places[NAMES_CACHE_LENGTH-1]))
-   {
-      if (strncmp(place, p, length)==0)
-      {
-         return p;
-      }
-      p = strchr(p,'\0');
+   (void) length;
+   int i =0;
 
-      if (*p=='\0' && *(p+1) == '\0')
+   while(places[i])
+   {
+      if (i == MAX_PLACES_COUNT)
       {
-         return NULL;
+         break;
       }
-      p++;
+      if (strcmp(place, places[i]) == 0)
+      {
+         return places[i];
+      }
+      i++;
    }
    return NULL;
 }
-
+/* todo: if allocator suppotrs, try to allocate static memory.
+ * We'll never free this block, try to allocate it without fragmentation*/
 char* sensorsAddPlace(const char * place, size_t length)
 {
-   if (length+pPlaces<&(places[NAMES_CACHE_LENGTH-1]))
+   int i =0;
+   while(places[i])
    {
-      memcpy(pPlaces, place, length);
-      pPlaces+=length;
-      *pPlaces = '\0';
-      pPlaces++;
-      return pPlaces-(length+1);
+      if (i == MAX_PLACES_COUNT)
+      {
+         break;
+      }
+      i++;
+   }
+   if (i<MAX_PLACES_COUNT)
+   {
+      places[i] = osAllocMem(length+1);
+      if (places[i])
+      {
+         memcpy(places[i], place, length);
+         return places[i];
+      }
    }
    return NULL;
 }

@@ -19,9 +19,9 @@
 #include "compiler_port.h"
 #include "../../driver/include/DriverInterface.h"
 
-#define NAMES_CACHE_LENGTH 256
-#define PLACES_CACHE_LENGTH 256
-#define DEVICES_CACHE_LENGTH 256
+#define MAX_NAMES_COUNT 32
+#define MAX_PLACES_COUNT 32
+#define MAX_DEVICES_COUNT 128
 #define MAX_LEN_SERIAL ONEWIRE_SERIAL_LENGTH
 
 #define MAX_NUM_SENSORS (MAX_ONEWIRE_COUNT+MAX_INPUTS_COUNT)
@@ -125,8 +125,8 @@ typedef struct
 
 
 
-extern char places[PLACES_CACHE_LENGTH];
-extern char names[NAMES_CACHE_LENGTH];
+//extern char places[MAX_PLACES_COUNT];
+//extern char names[MAX_NAMES_COUNT];
 extern char *pPlaces;
 extern char *pNames;
 

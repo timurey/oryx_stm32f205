@@ -33,7 +33,7 @@
 #define USE_FATFS
 
 //Number of files that can be opened simultaneously
-#define FS_MAX_FILES 10
+#define FS_MAX_FILES 6
 
 //Number of directories that can be opened simultaneously
 #define FS_MAX_DIRS 5

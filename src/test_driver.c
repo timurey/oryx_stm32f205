@@ -9,9 +9,9 @@
 #include "DriverInterface.h"
 #include "os_port.h"
 #include <string.h>
-char input[128];
+//char input[128];
 char output[128];
-char bufer[128];
+//char bufer[128];
 
 devStatusAttributes testStatus[12];
 float testValue[12];
@@ -174,7 +174,7 @@ static size_t gpio_read(peripheral_t * const pxPeripheral, void * const pvBuffer
 {
 
    peripheral_t * peripheral = (peripheral_t *) pxPeripheral;
-   return snprintf(pvBuffer, xBytes, "23", &bufer[0]);
+   return snprintf(pvBuffer, xBytes, "23", pvBuffer);
 
 }
 
@@ -190,29 +190,29 @@ static size_t test_write(peripheral_t * const pxPeripheral, const void * pvBuffe
 
 
 
-void driverTask (void *pvParameters)
-{
-
-   peripheral_t fp;
-   volatile size_t readed, writed, setted;
-   volatile error_t error;
-
-   error = driver_open(&fp, "/test", 0);
-   readed = driver_read(&fp, &input, arraysize(input) );
-   driver_close(&fp);
-   error = driver_open(&fp, "/test_1", 0);
-   readed = driver_read(&fp, &input, arraysize(input) );
-   writed = driver_write(&fp, "Hello from application to driver", 33);
-   driver_close(&fp);
-   error = driver_open(&fp, "/test_10", 0);
-   readed = driver_read(&fp, &input, arraysize(input) );
-   writed = driver_write(&fp, "Hello from application to driver", 33);
-   driver_close(&fp);
-   error = driver_open(&fp, "/check", 0);
-   setted = driver_setproperty(&fp, "set_bufer", "Hello, aurora!");
-   driver_close(&fp);
-   error = driver_open(&fp, "/check", 0);
-   readed = driver_read(&fp, &input, arraysize(input) );
-   driver_close(&fp);
-   osDeleteTask(NULL);
-}
+//void driverTask (void *pvParameters)
+//{
+//
+//   peripheral_t fp;
+//   volatile size_t readed, writed, setted;
+//   volatile error_t error;
+//
+//   error = driver_open(&fp, "/test", 0);
+//   readed = driver_read(&fp, &input, arraysize(input) );
+//   driver_close(&fp);
+//   error = driver_open(&fp, "/test_1", 0);
+//   readed = driver_read(&fp, &input, arraysize(input) );
+//   writed = driver_write(&fp, "Hello from application to driver", 33);
+//   driver_close(&fp);
+//   error = driver_open(&fp, "/test_10", 0);
+//   readed = driver_read(&fp, &input, arraysize(input) );
+//   writed = driver_write(&fp, "Hello from application to driver", 33);
+//   driver_close(&fp);
+//   error = driver_open(&fp, "/check", 0);
+//   setted = driver_setproperty(&fp, "set_bufer", "Hello, aurora!");
+//   driver_close(&fp);
+//   error = driver_open(&fp, "/check", 0);
+//   readed = driver_read(&fp, &input, arraysize(input) );
+//   driver_close(&fp);
+//   osDeleteTask(NULL);
+//}

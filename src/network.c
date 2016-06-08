@@ -19,8 +19,6 @@
 #include "uuid.h"
 
 #include "rest/sensors.h"
-#include "rest/executor.h"
-#include "rest/variables.h"
 
 #include "expression_parser/logic.h"
 #include "rest/rest.h"
