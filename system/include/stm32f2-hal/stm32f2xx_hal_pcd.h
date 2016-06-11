@@ -79,8 +79,8 @@ typedef struct
 {
   PCD_TypeDef             *Instance;   /*!< Register base address              */ 
   PCD_InitTypeDef         Init;       /*!< PCD required parameters            */
-  PCD_EPTypeDef           IN_ep[15];  /*!< IN endpoint parameters             */
-  PCD_EPTypeDef           OUT_ep[15]; /*!< OUT endpoint parameters            */ 
+  PCD_EPTypeDef           IN_ep[2];  /*!< IN endpoint parameters             */
+  PCD_EPTypeDef           OUT_ep[2]; /*!< OUT endpoint parameters            */
   HAL_LockTypeDef         Lock;       /*!< PCD peripheral status              */
   __IO PCD_StateTypeDef   State;      /*!< PCD communication state            */
   uint32_t                Setup[12];  /*!< Setup packet buffer                */
