@@ -20,19 +20,19 @@ static error_t restGetOneWire (HttpConnection *connection, RestApi_t* RestApi)
 	int i;
 	int p =0;
 	error_t error = NO_ERROR;
-
-	p+=snprintf(restBuffer+p, sizeof(restBuffer)-p, "{\"onewire\":{\"status\":\"ok\",\"health\":%d,", onewireHealth);
-	p+=snprintf(restBuffer+p, sizeof(restBuffer)-p, "\"founded devices\":{\"count\":%d,\"serials\":[", oneWireFoundedDevices);
+	const size_t maxLen = arraysize(restBuffer);
+	p+=snprintf(restBuffer+p, maxLen-p, "{\"onewire\":{\"status\":\"ok\",\"health\":%d,", onewireHealth);
+	p+=snprintf(restBuffer+p, maxLen-p, "\"founded devices\":{\"count\":%d,\"serials\":[", oneWireFoundedDevices);
 
 	for (i=0; i<oneWireFoundedDevices; i++ )
 	{
-		p+=snprintf(restBuffer+p, sizeof(restBuffer)-p, "\"%s\",", serialHexToString(foundedSerial[i].serial, NULL, ONEWIRE_SERIAL_LENGTH));
+		p+=snprintf(restBuffer+p, maxLen-p, "\"%s\",", serialHexToString(foundedSerial[i].serial, NULL, ONEWIRE_SERIAL_LENGTH));
 	}
 	if (oneWireFoundedDevices>0)
 	{
 		p--;
 	}
-	p+=snprintf(restBuffer+p, sizeof(restBuffer)-p, "]}}}\r\n");
+	p+=snprintf(restBuffer+p, maxLen-p, "]}}}\r\n");
 
 	connection->response.contentType = mimeGetType(".json");
 	connection->response.noCache = TRUE;

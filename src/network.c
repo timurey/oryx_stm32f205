@@ -95,27 +95,29 @@ error_t restGetNetwork(HttpConnection *connection, RestApi_t* RestApi)
    error_t error = NO_ERROR;
    int p=0;
    (void) RestApi;
+   const size_t maxLen = arraysize(restBuffer);
+
    getNetworkContext(interface, &networkContext );
    if (RestApi->restVersion == 1)
    {
-      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"{\"ipv4\":{\"useipv4\":%s,\"usedhcp\":%s,", (networkContext.useIpV4 == TRUE)?"true":"false", (networkContext.useDhcp == TRUE)?"true":"false");
-      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"address\":\"%s\",",ipv4AddrToString(networkContext.ipv4Addr, NULL));
-      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"netmask\":\"%s\",",ipv4AddrToString(networkContext.ipv4Mask, NULL));
-      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"gateway\":\"%s\",",ipv4AddrToString(networkContext.ipv4Gateway, NULL));
-      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"primarydns\":\"%s\",",ipv4AddrToString(networkContext.ipv4Dns1, NULL));
-      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"secondarydns\":\"%s\"}}",ipv4AddrToString(networkContext.ipv4Dns2, NULL));
+      p+=snprintf(restBuffer+p, maxLen-p,"{\"ipv4\":{\"useipv4\":%s,\"usedhcp\":%s,", (networkContext.useIpV4 == TRUE)?"true":"false", (networkContext.useDhcp == TRUE)?"true":"false");
+      p+=snprintf(restBuffer+p, maxLen-p,"\"address\":\"%s\",",ipv4AddrToString(networkContext.ipv4Addr, NULL));
+      p+=snprintf(restBuffer+p, maxLen-p,"\"netmask\":\"%s\",",ipv4AddrToString(networkContext.ipv4Mask, NULL));
+      p+=snprintf(restBuffer+p, maxLen-p,"\"gateway\":\"%s\",",ipv4AddrToString(networkContext.ipv4Gateway, NULL));
+      p+=snprintf(restBuffer+p, maxLen-p,"\"primarydns\":\"%s\",",ipv4AddrToString(networkContext.ipv4Dns1, NULL));
+      p+=snprintf(restBuffer+p, maxLen-p,"\"secondarydns\":\"%s\"}}",ipv4AddrToString(networkContext.ipv4Dns2, NULL));
 
       connection->response.contentType = mimeGetType(".json");
    }
    else if (RestApi->restVersion == 2)
    {
       p+=sprintf(restBuffer+p,"{\"data\":{\"type\":\"network\", \"id\":0,\"attributes\":{");
-      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"useipv4\":%s,\"usedhcp\":%s,", (networkContext.useIpV4 == TRUE)?"true":"false", (networkContext.useDhcp == TRUE)?"true":"false");
-      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"address\":\"%s\",",ipv4AddrToString(networkContext.ipv4Addr, NULL));
-      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"netmask\":\"%s\",",ipv4AddrToString(networkContext.ipv4Mask, NULL));
-      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"gateway\":\"%s\",",ipv4AddrToString(networkContext.ipv4Gateway, NULL));
-      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"primarydns\":\"%s\",",ipv4AddrToString(networkContext.ipv4Dns1, NULL));
-      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"secondarydns\":\"%s\"}}}",ipv4AddrToString(networkContext.ipv4Dns2, NULL));
+      p+=snprintf(restBuffer+p, maxLen-p,"\"useipv4\":%s,\"usedhcp\":%s,", (networkContext.useIpV4 == TRUE)?"true":"false", (networkContext.useDhcp == TRUE)?"true":"false");
+      p+=snprintf(restBuffer+p, maxLen-p,"\"address\":\"%s\",",ipv4AddrToString(networkContext.ipv4Addr, NULL));
+      p+=snprintf(restBuffer+p, maxLen-p,"\"netmask\":\"%s\",",ipv4AddrToString(networkContext.ipv4Mask, NULL));
+      p+=snprintf(restBuffer+p, maxLen-p,"\"gateway\":\"%s\",",ipv4AddrToString(networkContext.ipv4Gateway, NULL));
+      p+=snprintf(restBuffer+p, maxLen-p,"\"primarydns\":\"%s\",",ipv4AddrToString(networkContext.ipv4Dns1, NULL));
+      p+=snprintf(restBuffer+p, maxLen-p,"\"secondarydns\":\"%s\"}}}",ipv4AddrToString(networkContext.ipv4Dns2, NULL));
       connection->response.contentType = mimeGetType(".apijson");
    }
    connection->response.noCache = TRUE;

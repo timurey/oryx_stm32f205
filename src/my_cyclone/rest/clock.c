@@ -29,27 +29,29 @@ error_t restGetClock(HttpConnection *connection, RestApi_t* RestApi)
    DateTime time;
    int p=0;
 
+   const size_t maxLen = arraysize(restBuffer);
+
    (void) RestApi;
    getCurrentDate(&time);
    if (RestApi->restVersion == 1)
    {
-      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"{\"clock\":{\r\n\"unixtime\":%lu,\r\n", getCurrentUnixTime());
-      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"localtime\":\"%s %s\",\r\n",
+      p+=snprintf(restBuffer+p, maxLen-p,"{\"clock\":{\r\n\"unixtime\":%lu,\r\n", getCurrentUnixTime());
+      p+=snprintf(restBuffer+p, maxLen-p,"\"localtime\":\"%s %s\",\r\n",
          htmlFormatDate(&time, &buf[0]),
          pRTC_GetTimezone()
       );
-      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"time\":\"%02d:%02d:%02d\",\r\n", time.hours, time.minutes, time.seconds);
-      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"date\":\"%04d.%02d.%02d\",\r\n", time.year,time.month,time.day);
-      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"timezone\":\"%s\"}}\r\n",pRTC_GetTimezone());
+      p+=snprintf(restBuffer+p, maxLen-p,"\"time\":\"%02d:%02d:%02d\",\r\n", time.hours, time.minutes, time.seconds);
+      p+=snprintf(restBuffer+p, maxLen-p,"\"date\":\"%04d.%02d.%02d\",\r\n", time.year, time.month, time.day);
+      p+=snprintf(restBuffer+p, maxLen-p,"\"timezone\":\"%s\"}}\r\n", pRTC_GetTimezone());
       connection->response.contentType = mimeGetType(".json");
    }
    else if (RestApi->restVersion == 2)
    {
-      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"{\"data\":{\"type\":\"clock\", \"id\":0,\"attributes\":{");
-      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"unixtime\":%lu,\"localtime\":\"%s %s\",\"time\":\"%02d:%02d:%02d\",",getCurrentUnixTime(),htmlFormatDate(&time, &buf[0]),
-         pRTC_GetTimezone(),time.hours, time.minutes, time.seconds);
-      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"date\":\"%04d.%02d.%02d\",",time.year,time.month,time.day);
-      p+=snprintf(restBuffer+p, sizeof(restBuffer)-p,"\"timezone\":\"%s\"}}}",pRTC_GetTimezone());
+      p+=snprintf(restBuffer+p, maxLen-p, "{\"data\":{\"type\":\"clock\", \"id\":0,\"attributes\":{");
+      p+=snprintf(restBuffer+p, maxLen-p, "\"unixtime\":%lu,\"localtime\":\"%s %s\",\"time\":\"%02d:%02d:%02d\",", getCurrentUnixTime(), htmlFormatDate(&time, &buf[0]),
+         pRTC_GetTimezone(), time.hours, time.minutes, time.seconds);
+      p+=snprintf(restBuffer+p, maxLen-p, "\"date\":\"%04d.%02d.%02d\",", time.year, time.month, time.day);
+      p+=snprintf(restBuffer+p, maxLen-p, "\"timezone\":\"%s\"}}}", pRTC_GetTimezone());
       connection->response.contentType = mimeGetType(".apijson");
    }
    connection->response.noCache = TRUE;

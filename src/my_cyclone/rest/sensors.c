@@ -103,7 +103,7 @@ static int sprintfSensor (char * bufer, int maxLen, mysensor_sensor_t curr_list_
 static error_t sprintfListSensors (HttpConnection *connection, RestApi_t* RestApi)
 {
    int p =0;
-   const size_t maxLen = sizeof(restBuffer);
+   const size_t maxLen = arraysize(restBuffer);
    error_t error = NO_ERROR;
    if (RestApi->restVersion == 1)
    {
