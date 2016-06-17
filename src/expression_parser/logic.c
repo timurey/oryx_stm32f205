@@ -138,7 +138,7 @@ static int user_var_cb( void *user_data, const char *name, double *value ){
 
    (void) user_data;
    snprintf(&device[0], 32, "/%s", name);
-   error = driver_open(&fd, &device[0], READ);
+   error = driver_open(&fd, &device[0], POPEN_READ);
    if (error)
    {
       return PARSER_FALSE;
@@ -203,10 +203,7 @@ error_t logicConfigure(void)
 {
    error_t error;
    error = read_config("/config/rules.json",&parseRules);
-   if (!error)
-   {
-      buildDeps();
-   }
+
    if (!error)
    {
       exprQueue = xQueueCreate(EXPRESSION_MAX_COUNT *2, sizeof(uint8_t));
@@ -231,7 +228,7 @@ error_t logicConfigure(void)
 error_t logicStart(void)
 {
    error_t error = NO_ERROR;
-
+   buildDeps();
    dataManagerTask = osCreateTask("data_manger", dataManager_task, NULL, configMINIMAL_STACK_SIZE, 1);
    if (dataManagerTask == NULL)
    {

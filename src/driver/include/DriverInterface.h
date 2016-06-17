@@ -40,8 +40,9 @@ typedef enum
 typedef enum
 {
    UNDEFINED,
-   READ,
-   WRITE
+   POPEN_READ = 0x01,
+   POPEN_WRITE = 0x02,
+   POPEN_CREATE = 0x04
 }periphOpenType;
 
 /**
@@ -60,8 +61,8 @@ typedef enum
 typedef size_t ( *Peripheral_open_Function_t )( peripheral_t * const pxPeripheral);
 typedef size_t ( *Peripheral_read_Function_t )( peripheral_t * const pxPeripheral, void * const pvBuffer, const size_t xBytes );
 typedef size_t ( *Peripheral_write_Function_t )( peripheral_t * const pxPeripheral, const void *pvBuffer, const size_t xBytes );
-typedef size_t ( *setPropertyFunction_t )( peripheral_t * const pxPeripheral, char * pcRequest, char *pcValue );
-typedef size_t ( *getPropertyFunction_t )( peripheral_t * const pxPeripheral, char* pcParameter, char *pcValue, const size_t xBytes );
+typedef size_t ( *setPropertyFunction_t )( peripheral_t * const pxPeripheral, char *pcValue );
+typedef size_t ( *getPropertyFunction_t )( peripheral_t * const pxPeripheral, char *pcValue, const size_t xBytes );
 
 
 typedef struct {
@@ -101,8 +102,9 @@ typedef struct Tmask_t{
 typedef struct Tperipheral_t {
    driver_t * driver;
    devStatusAttributes * status;
-   uint32_t peripheralNum; /*Number of peripheral*/
+   uint8_t peripheralNum; /*Number of peripheral*/
    OsMutex mutex; /*Mutex for exclusive access*/
+   periphOpenType mode;
 }peripheral_t;
 
 

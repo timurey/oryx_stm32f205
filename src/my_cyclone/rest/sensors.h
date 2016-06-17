@@ -8,9 +8,6 @@
 #ifndef MY_CYCLONE_REST_SENSORS_H_
 #define MY_CYCLONE_REST_SENSORS_H_
 
-#define MAX_INPUTS_COUNT 16
-#define MAX_ANALUG_COUNT 9
-#define MAX_ONEWIRE_COUNT 16
 
 #include "error.h"
 #include "rest.h"
@@ -24,7 +21,8 @@
 #define MAX_DEVICES_COUNT 128
 #define MAX_LEN_SERIAL ONEWIRE_SERIAL_LENGTH
 
-#define MAX_NUM_SENSORS (MAX_ONEWIRE_COUNT+MAX_INPUTS_COUNT)
+#define MAX_ONEWIRE_COUNT 16
+#define MAX_NUM_SENSORS 128
 
 #define SENSORS_HEALTH_MAX_VALUE 100
 #define SENSORS_HEALTH_MIN_VALUE 0
@@ -114,7 +112,6 @@ typedef  struct
 typedef struct
 {
    mysensor_sensor_t type;
-   mysensor_sensor_t subType;
    peripheral_t fd; //file descriptor
    char* place;   //Place
    char* name;    //Name
@@ -124,7 +121,7 @@ typedef struct
 
 
 
-
+extern const mysensorSensorList_t sensorList[];
 //extern char places[MAX_PLACES_COUNT];
 //extern char names[MAX_NAMES_COUNT];
 extern char *pPlaces;
@@ -143,11 +140,7 @@ int sensorsHealthGetValue(sensor_t * sensor);
 void sensorsHealthIncValue(sensor_t * sensor);
 void sensorsHealthDecValue(sensor_t * sensor);
 void sensorsHealthSetValue(sensor_t * sensor, int value);
-void sensorsSetValueFloat(sensor_t * sensor, float value);
-void sensorsSetValueUint16(sensor_t * sensor, uint16_t value);
 error_t sensorsGetValue(const char *name, double * value);
-uint16_t sensorsGetValueUint16(sensor_t * sensor);
-float sensorsGetValueFloat(sensor_t * sensor);
 
 char* sensorsAddDevice(const char * device, size_t length);
 char* sensorsFindDevice(const char * device, size_t length);

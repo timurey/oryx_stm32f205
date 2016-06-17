@@ -19,7 +19,23 @@
 #include "../../expression_parser/variables_def.h"
 char * places[MAX_PLACES_COUNT];
 char * names[MAX_NAMES_COUNT];
+/*
+ * todo : изментить статический массив на связанный список.
+ * Должно получиться более "пластично"
+ */
 char * devices[MAX_DEVICES_COUNT];
+
+/**
+ * Circular doubly linked list item, for internal kernel usage.
+ */
+struct TN_ListItem {
+   ///
+   /// pointer to previous item
+   struct TN_ListItem *prev;
+   ///
+   /// pointer to next item
+   struct TN_ListItem *next;
+};
 
 //char *pPlaces = &places[0];
 //char *pNames = &names[0];
@@ -163,6 +179,7 @@ error_t restDenitSensors(void)
 static int snprintfSensor(char * bufer, size_t maxLen, sensor_t * sensor, int restVersion)
 {
    int p=0;
+   uint16_t u16;
    int d1, d2;
    double f2, f_val;
 
@@ -188,7 +205,12 @@ static int snprintfSensor(char * bufer, size_t maxLen, sensor_t * sensor, int re
       p+=snprintf(bufer+p, maxLen-p, "\"value\":\"%d.%01d\",", d1, d2);
       break;
    case UINT16:
-      //      p+=snprintf(bufer+p, maxLen-p, "\"value\":\"%u\",",sensorsGetValueUint16(&sensors[i]));
+      p+=snprintf(bufer+p, maxLen-p, "\"value\":\"");
+      if (driver_read(&sensor->fd, &u16, sizeof(uint16_t)) == sizeof(uint16_t))
+      {
+         p+=snprintf(bufer+p, maxLen-p, "%"PRIu16"", u16);
+      }
+      p+=snprintf(bufer+p, maxLen-p, "\",");
       break;
    case CHAR://Not supported yet
       break;
@@ -242,15 +264,16 @@ static error_t sensCommonGetHandler(HttpConnection *connection, RestApi_t* RestA
          if ((curr_sensor->type == sens_type) && (strncmp(curr_sensor->device, RestApi->objectId, RestApi->objectIdLen) == 0))
          {
 
-            error = driver_open(&curr_sensor->fd, RestApi->objectId, 0);
+            error = driver_open(&curr_sensor->fd, RestApi->objectId, POPEN_READ);
 
-            if (error)
-               return error;
 
-            p+=snprintfSensor(&restBuffer[p], maxLen-p, curr_sensor, RestApi->restVersion);
-            error = NO_ERROR;
-            driver_close(&curr_sensor->fd);
-            break;
+            if (error == NO_ERROR)
+            {
+               p+=snprintfSensor(&restBuffer[p], maxLen-p, curr_sensor, RestApi->restVersion);
+               driver_close(&curr_sensor->fd);
+               break;
+            }
+
          }
       }
    }
@@ -261,14 +284,14 @@ static error_t sensCommonGetHandler(HttpConnection *connection, RestApi_t* RestA
          if (curr_sensor->type == sens_type)
          {
 
-            error = driver_open(&curr_sensor->fd, curr_sensor->device, 0);
+            error = driver_open(&curr_sensor->fd, curr_sensor->device, POPEN_READ);
 
-            if (error)
-               return error;
-
-            p+=snprintfSensor(&restBuffer[p], maxLen-p, curr_sensor, RestApi->restVersion);
-            error = NO_ERROR;
-            driver_close(&curr_sensor->fd);
+            if (error==NO_ERROR)
+            {
+               p+=snprintfSensor(&restBuffer[p], maxLen-p, curr_sensor, RestApi->restVersion);
+               driver_close(&curr_sensor->fd);
+            }
+            error=NO_ERROR;
          }
       }
    }
@@ -625,8 +648,8 @@ static error_t parseSensors (jsmnParserStruct * jsonParser)
                break;
             }
 
-            error = driver_open(&(currentSensor->fd), &device[0], 0);
-            if (!error)
+            error = driver_open(&(currentSensor->fd), &device[0], POPEN_CREATE);
+            if (error == NO_ERROR)
             {
                /* Если устройство уже запущено */
                if (*currentSensor->fd.status == DEV_STAT_ACTIVE)
@@ -662,80 +685,83 @@ static error_t parseSensors (jsmnParserStruct * jsonParser)
                   }
                }
                /*Store device*/
-
-               currentSensor->device = sensorsFindDevice(&device[0], strlen(&device[0]));
-
-               if (currentSensor->device == 0)
+               if (driver_setproperty(&(currentSensor->fd), "active", "true") == 1)
                {
-                  currentSensor->device = sensorsAddDevice(&device[0], strlen(&device[0]));
+
+                  currentSensor->device = sensorsFindDevice(&device[0], strlen(&device[0]));
 
                   if (currentSensor->device == 0)
                   {
-                     xprintf("error saving device: no avalible memory for saving device");
+                     currentSensor->device = sensorsAddDevice(&device[0], strlen(&device[0]));
+
+                     if (currentSensor->device == 0)
+                     {
+                        xprintf("error saving device: no avalible memory for saving device");
+                     }
                   }
-               }
 
-               /*Setting up name and place*/
-               snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.inputs[%"PRIu32"].name", input_num);
+                  /*Setting up name and place*/
+                  snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.inputs[%"PRIu32"].name", input_num);
 
-               len = jsmn_get_string(jsonParser, &jsonPATH[0], name, arraysize(parameter));
-               if(len>0)
-               {
-                  currentSensor->name = sensorsFindName(name, len);
-
-                  if (currentSensor->name == 0)
+                  len = jsmn_get_string(jsonParser, &jsonPATH[0], name, arraysize(parameter));
+                  if(len>0)
                   {
-                     currentSensor->name = sensorsAddName(name, len);
+                     currentSensor->name = sensorsFindName(name, len);
 
                      if (currentSensor->name == 0)
                      {
-                        xprintf("error parsing input name: no avalible memory for saving name");
+                        currentSensor->name = sensorsAddName(name, len);
+
+                        if (currentSensor->name == 0)
+                        {
+                           xprintf("error parsing input name: no avalible memory for saving name");
+                        }
                      }
                   }
-               }
 
-               snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.inputs[%"PRIu32"].place", input_num);
+                  snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.inputs[%"PRIu32"].place", input_num);
 
-               len = jsmn_get_string(jsonParser, &jsonPATH[0], place, arraysize(parameter));
-               if(len>0)
-               {
-                  currentSensor->place = sensorsFindPlace(place, len);
-
-                  if (currentSensor->place == 0)
+                  len = jsmn_get_string(jsonParser, &jsonPATH[0], place, arraysize(parameter));
+                  if(len>0)
                   {
-                     currentSensor->place = sensorsAddPlace(place, len);
+                     currentSensor->place = sensorsFindPlace(place, len);
 
                      if (currentSensor->place == 0)
                      {
-                        xprintf("error parsing input place: no avalible memory for saving place");
+                        currentSensor->place = sensorsAddPlace(place, len);
+
+                        if (currentSensor->place == 0)
+                        {
+                           xprintf("error parsing input place: no avalible memory for saving place");
+                        }
                      }
                   }
+                  /* Setting up type */
+                  snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.inputs[%"PRIu32"].type", input_num);
+
+                  len = jsmn_get_string(jsonParser, &jsonPATH[0], type, arraysize(parameter));
+
+                  if(len>0)
+                  {
+                     currentSensor->type = findTypeByName(type);
+                     /*todo: check for undefined type*/
+                  }
                }
-               /* Setting up type */
-               snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.inputs[%"PRIu32"].type", input_num);
-
-               len = jsmn_get_string(jsonParser, &jsonPATH[0], type, arraysize(parameter));
-
-               if(len>0)
-               {
-                  currentSensor->type = findTypeByName(type);
-                  /*todo: check for undefined type*/
-               }
-
-               driver_setproperty(&(currentSensor->fd), "active", "true");
-            }
-            /*If device configured and we did not reach end of devices*/
-            if (&(currentSensor->fd) && currentSensor <= &sensors[MAX_NUM_SENSORS-1])
-            {
 
                driver_close(&(currentSensor->fd));
-
             }
-            else
-            {
-               driver_close(&(currentSensor->fd));
-
-            }
+            //            /*If device configured and we did not reach end of devices*/
+            //            if (&(currentSensor->fd) && currentSensor <= &sensors[MAX_NUM_SENSORS-1])
+            //            {
+            //
+            //
+            //
+            //            }
+            //            else
+            //            {
+            //               driver_close(&(currentSensor->fd));
+            //
+            //            }
          }
          input_num++;
       }

@@ -9,8 +9,7 @@
 #define MY_CYCLONE_REST_SENSORS_INPUT_H_
 
 #include "rest/sensors.h"
-
-#define INPUT_SERIAL_LENGTH 8
+#include "stm32f2xx_hal.h"
 
 #define MAX_SAMPLES_COUNT 10
 
@@ -79,18 +78,23 @@
 
 #define TOTAL_INPUTS 16
 
-typedef enum {
-   digital,
-   invert_digital,
-   analog,
-   pwm
-}inputMode_t;
+//typedef enum {
+//   GPIO_INPUT,
+//   GPIO_MORZE,
+//   GPIO_DIMMER,
+//   GPIO_ANALOG,
+//}inputMode_t;
 
 typedef enum {
-   click,
-   double_click,
-}inputEvent_t;
+   GPIO_ACTIVELOW,
+   GPIO_ACTIVEHIGH
+}activeLevel_t;
 
+typedef enum {
+   GPIO_Z = GPIO_NOPULL,
+   GPIO_PULLHIGH = GPIO_PULLUP,
+   GPIO_PULLLOW = GPIO_PULLDOWN,
+}pull_t;
 
 
 #define GPIO_PIN_ISTATE(PORT,PIN)  &(*(__I uint32_t *)(PERIPH_BB_BASE + ((((uint32_t)&((PORT)->IDR)) - PERIPH_BASE) << 5) + ((PIN) << 2)))

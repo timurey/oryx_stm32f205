@@ -42,7 +42,7 @@ void buildQueue(mask_t * mask)
             xStatus = xQueueSendToBack(exprQueue, &exprNum, 0);
             if (xStatus == pdPASS)
             {
-//               depedencesArr[exprNum][driverNumber][periphNum] =0;
+               //               depedencesArr[exprNum][driverNumber][periphNum] =0;
             }
          }
       }
@@ -71,11 +71,12 @@ int userVarFake( void *user_data, const char *name, double *value )
 
    memset(&fd, 0, sizeof(fd));
 
-   if (driver_open(&fd, &device[0], 0) == NO_ERROR)
+   if (driver_open(&fd, &device[0], POPEN_READ) == NO_ERROR)
    {
       storeDependence(expressionNumber, &fd);
+      driver_close(&fd);
    }
-   driver_close(&fd);
+
 
    *value = 1.0;
 
