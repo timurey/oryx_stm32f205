@@ -7,7 +7,8 @@
 #include "DataManager.h"
 #include "../../expression_parser/logic.h"
 #include "error.h"
-#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
 
 QueueHandle_t exprQueue;
 QueueHandle_t dataQueue;
@@ -15,7 +16,6 @@ QueueHandle_t dataQueue;
 OsTask * dataManagerTask;
 
 uint8_t depedencesArr[EXPRESSION_MAX_COUNT][3][16]; //32 - magic number (driver count & periph max count)
-
 
 /* Build depedency matrix */
 static void storeDependence(uint8_t depExpr, peripheral_t * depPeriph)
@@ -25,11 +25,11 @@ static void storeDependence(uint8_t depExpr, peripheral_t * depPeriph)
    depedencesArr[depExpr][driverNumber][peripheralNumber] = 1;
 }
 
-void buildQueue(mask_t * mask)
+static void buildQueue(mask_t * mask)
 {
-   uint8_t exprNum;
-   uint32_t periphNum;
-   portBASE_TYPE xStatus;
+   volatile uint8_t exprNum;
+   volatile uint32_t periphNum;
+   volatile portBASE_TYPE xStatus;
    driver_t * driver= mask->driver;
    uint32_t driverNumber = (driver-&__start_drivers);
 
@@ -51,6 +51,7 @@ void buildQueue(mask_t * mask)
 
 void dataManager_task(void * pvParameters)
 {
+   (void) pvParameters;
    portBASE_TYPE xStatus;
    mask_t mask;
    while(1)
@@ -65,13 +66,16 @@ void dataManager_task(void * pvParameters)
 int userVarFake( void *user_data, const char *name, double *value )
 {
    peripheral_t fd; //file descriptor
+   error_t error;
    uint8_t expressionNumber = *( uint8_t *)(user_data);
    char device[32];
    snprintf(&device[0], 32, "/%s", name);
 
    memset(&fd, 0, sizeof(fd));
+   error = driver_open(&fd, &device[0], POPEN_INFO);
 
-   if (driver_open(&fd, &device[0], POPEN_READ) == NO_ERROR)
+   //If no error
+   if ( (error == NO_ERROR))
    {
       storeDependence(expressionNumber, &fd);
       driver_close(&fd);

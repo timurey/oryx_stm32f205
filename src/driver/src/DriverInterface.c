@@ -37,6 +37,7 @@ error_t driver_open(peripheral_t * const pxPeripheral, const char * path, const 
          error =  ERROR_INVALID_PATH;
       }
    }
+
    if (error==NO_ERROR)
    {
       memset(peripheral, 0 , sizeof( peripheral_t ));
@@ -104,7 +105,13 @@ error_t driver_open(peripheral_t * const pxPeripheral, const char * path, const 
          /* Если просто читаем, то проверяем, можем ли его прочесть*/
          if (flags == POPEN_READ)
          {
-            if (!(*(peripheral->status) & (DEV_STAT_MANAGED | DEV_STAT_READBLE)))
+            if (!(*(peripheral->status) & DEV_STAT_MANAGED))
+            {
+               error = ERROR_NOT_CONFIGURED;
+               break;
+            }
+
+            if (!(*(peripheral->status) & DEV_STAT_READBLE))
             {
                error = ERROR_FILE_READING_FAILED;
                break;
@@ -112,7 +119,12 @@ error_t driver_open(peripheral_t * const pxPeripheral, const char * path, const 
          }
          else if (flags == POPEN_WRITE)
          {
-            if (!(*(peripheral->status) & (DEV_STAT_MANAGED | DEV_STAT_WRITEBLE)))
+            if (!(*(peripheral->status) & DEV_STAT_MANAGED))
+            {
+               error = ERROR_NOT_CONFIGURED;
+               break;
+            }
+            if (!(*(peripheral->status) & DEV_STAT_WRITEBLE))
             {
                error = ERROR_NOT_WRITABLE;
                break;
@@ -125,6 +137,11 @@ error_t driver_open(peripheral_t * const pxPeripheral, const char * path, const 
                error=  ERROR_INVALID_RECIPIENT;
                break;
             }
+         }
+         else if (flags == POPEN_INFO)
+         {
+            error = NO_ERROR;
+            break;
          }
          else
          {
@@ -151,6 +168,7 @@ error_t driver_open(peripheral_t * const pxPeripheral, const char * path, const 
 
          peripheral->mode = flags;
       } while (0);
+
       if (error!=NO_ERROR)
       {
          peripheral->driver = NULL;

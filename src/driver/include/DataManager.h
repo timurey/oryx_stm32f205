@@ -18,4 +18,9 @@ void setExpressionNumber(uint32_t setExpressionNumber );
 void dataManager_task(void * pvParameters);
 int userVarFake( void *user_data, const char *name, double *value );
 
+typedef struct
+{
+   uint32_t test;
+}depedency_t;
+
 #endif /* DRIVER_INCLUDE_DATAMANAGER_H_ */

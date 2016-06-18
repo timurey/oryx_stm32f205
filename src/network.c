@@ -519,9 +519,9 @@ void networkServices(void *pvParametrs)
 {
    (void) pvParametrs;
    configInit();
-   logicConfigure();
 
    sensorsConfigure();
+   logicConfigure();
 
    networkConfigure();
 

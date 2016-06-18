@@ -91,7 +91,7 @@ register_driver(gpiotest, "/tesgpio", gpioFunctions, gpioStatus, 12, gpioPropLis
 static void testTask(void * pvParameters)
 {
    driver_t * driver = (driver_t *) pvParameters;
-   mask_t * mask = (mask_t *) driver->mask;
+   mask_t * mask = driver->mask;
    /* Преобразование типа void* к типу TaskParam* */
    //   mask = (struct mask_t *) pvParameters->;
    mask->driver = driver;
@@ -109,6 +109,11 @@ static void testTask(void * pvParameters)
          {
             (mask->mask) &= ~(1<<i);
          }
+      }
+
+      while (dataQueue == NULL)
+      {
+         osDelayTask(10);
       }
       xQueueSendToBack(dataQueue, mask, 0);
       osDelayTask(5000);
@@ -142,14 +147,14 @@ static size_t test_open(peripheral_t * const pxPeripheral)
 {
    /* OK, boys and girls! Let's get read and write!!!*/
    peripheral_t * peripheral = (peripheral_t *) pxPeripheral;
-   testStatus[peripheral->peripheralNum] |= DEV_STAT_READBLE|DEV_STAT_WRITEBLE;
+   testStatus[peripheral->peripheralNum] |= DEV_STAT_MANAGED|DEV_STAT_READBLE|DEV_STAT_WRITEBLE;
    return 1;
 }
 
 static size_t gpio_open(peripheral_t * const pxPeripheral)
 {
    peripheral_t * peripheral = (peripheral_t *) pxPeripheral;
-   gpioStatus[peripheral->peripheralNum] |= DEV_STAT_READBLE|DEV_STAT_WRITEBLE;
+   gpioStatus[peripheral->peripheralNum] |= DEV_STAT_MANAGED|DEV_STAT_READBLE|DEV_STAT_WRITEBLE;
    return 1;
 }
 

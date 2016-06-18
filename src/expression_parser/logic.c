@@ -13,6 +13,7 @@
 #include "task.h"
 #include "queue.h"
 #include <math.h>
+#include <string.h>
 #include "debug.h"
 
 
@@ -132,6 +133,11 @@ int user_fnc_cb( void *user_data, const char *name, const int num_args, const do
 static int user_var_cb( void *user_data, const char *name, double *value ){
 
    char device[32];
+   double dVal;
+   uint16_t u16Val;
+   char cVal __attribute__((unused)); //Not used yet
+   char * pcVal __attribute__((unused)); //Not used yet
+
    error_t error = ERROR_OBJECT_NOT_FOUND;
    peripheral_t fd; //file descriptor
    memset(&fd, 0, sizeof(fd));
@@ -145,7 +151,22 @@ static int user_var_cb( void *user_data, const char *name, double *value ){
    }
    else
    {
-      driver_read(&fd, value, sizeof(double));
+      switch (fd.driver->dataType)
+      {
+      case FLOAT:
+         driver_read(&fd, &dVal, sizeof(double));
+         *value = dVal;
+         break;
+      case UINT16:
+         driver_read(&fd, &u16Val, sizeof(double));
+         *value = (double) u16Val;
+         break;
+      case CHAR:
+      case PCHAR:
+      default:
+         break;
+      }
+
       driver_close(&fd);
 
       return PARSER_TRUE;
@@ -228,7 +249,9 @@ error_t logicConfigure(void)
 error_t logicStart(void)
 {
    error_t error = NO_ERROR;
+
    buildDeps();
+
    dataManagerTask = osCreateTask("data_manger", dataManager_task, NULL, configMINIMAL_STACK_SIZE, 1);
    if (dataManagerTask == NULL)
    {

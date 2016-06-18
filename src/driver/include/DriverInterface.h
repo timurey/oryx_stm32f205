@@ -42,7 +42,8 @@ typedef enum
    UNDEFINED,
    POPEN_READ = 0x01,
    POPEN_WRITE = 0x02,
-   POPEN_CREATE = 0x04
+   POPEN_CREATE = 0x04,
+   POPEN_INFO = 0x08,
 }periphOpenType;
 
 /**
@@ -123,7 +124,7 @@ void driver_close(peripheral_t  * pxPeripheral);
 #define str(s) #s
 
 #define register_driver(d_name, d_path, d_funcs, d_status_a, d_max_peripheral, d_prop_l, d_data_type) \
-   mask_t d_name##Mask; \
+   mask_t d_name##_mask; \
    \
    const properties_t properties_##d_name  = \
    { \
@@ -139,12 +140,12 @@ void driver_close(peripheral_t  * pxPeripheral);
       .countOfPerepherals = d_max_peripheral,\
       .propertyList = &(properties_##d_name), \
       .dataType = d_data_type,\
-      .mask = &(d_name##Mask),\
+      .mask = &(d_name##_mask),\
    };\
 
 
-extern driver_t __start_drivers; //предоставленный линкером символ начала секции rest_functions
-extern driver_t __stop_drivers; //предоставленный линкером символ конца секции rest_functions
+extern const driver_t __start_drivers; //предоставленный линкером символ начала секции rest_functions
+extern const driver_t __stop_drivers; //предоставленный линкером символ конца секции rest_functions
 
 #define drivers_count (&__stop_drivers - &__start_drivers)
 
