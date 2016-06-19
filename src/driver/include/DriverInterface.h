@@ -74,7 +74,7 @@ typedef struct {
 }property_t;
 
 typedef struct {
-   property_t * properties;
+   const property_t * properties;
    size_t numOfProperies;
 }properties_t;
 
@@ -88,15 +88,15 @@ typedef struct {
    const char * name; /*Internal name of the driver*/
    const char * path; /*Text name of the peripheral. For example /ONEWIRE/ or /GPIO/ or /somthing_else/ */
    const driver_functions_t *functions;
-   const devStatusAttributes * status; /* Array of status register */
+   devStatusAttributes * status; /* Array of status register */
    const uint32_t countOfPerepherals;       /*Count of perepherals, that uses this driver*/
    const properties_t * propertyList;
    const periphDataType dataType;
-   const mask_t * mask;
+   mask_t * mask;
 }driver_t;
 
 typedef struct Tmask_t{
-   driver_t * driver;
+   const driver_t * driver;
    unsigned mask: MAX_OF_PERIPHERALS;
 }mask_t;
 
@@ -115,7 +115,7 @@ typedef struct Tperipheral_t {
  * Function prototypes.
  */
 error_t driver_open(peripheral_t * const pxPeripheral, const char * path, const periphOpenType flags);
-size_t driver_read(peripheral_t * const pxPeripheral, void * const pvBuffer, const size_t xBytes );
+size_t driver_read(peripheral_t * const pxPeripheral, const void * pvBuffer, const size_t xBytes );
 size_t driver_write(peripheral_t * const pxPeripheral, const void *pvBuffer, const size_t xBytes );
 size_t driver_setproperty( peripheral_t * const pxPeripheral, char * pcRequest, char *pcValue );
 size_t driver_getproperty( peripheral_t * const pxPeripheral, char * pcRequest, char *pcValue, const size_t xBytes );
@@ -124,7 +124,12 @@ void driver_close(peripheral_t  * pxPeripheral);
 #define str(s) #s
 
 #define register_driver(d_name, d_path, d_funcs, d_status_a, d_max_peripheral, d_prop_l, d_data_type) \
-   mask_t d_name##_mask; \
+   const driver_t driver_##d_name;\
+   \
+   mask_t d_name##_mask =  \
+   {\
+   .driver = &(driver_##d_name), \
+   };\
    \
    const properties_t properties_##d_name  = \
    { \
@@ -144,12 +149,12 @@ void driver_close(peripheral_t  * pxPeripheral);
    };\
 
 
-extern const driver_t __start_drivers; //предоставленный линкером символ начала секции rest_functions
-extern const driver_t __stop_drivers; //предоставленный линкером символ конца секции rest_functions
+   extern const driver_t __start_drivers; //предоставленный линкером символ начала секции rest_functions
+   extern const driver_t __stop_drivers; //предоставленный линкером символ конца секции rest_functions
 
 #define drivers_count (&__stop_drivers - &__start_drivers)
 
 
-//#undef str
+   //#undef str
 
 #endif /* DRIVER_INCLUDE_DRIVERINTERFACE_H_ */

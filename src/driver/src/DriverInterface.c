@@ -179,7 +179,7 @@ error_t driver_open(peripheral_t * const pxPeripheral, const char * path, const 
    return error;
 }
 
-size_t driver_read(peripheral_t * const pxPeripheral, void * const pvBuffer, const size_t xBytes )
+size_t driver_read(peripheral_t * const pxPeripheral, const void * pvBuffer, const size_t xBytes )
 {
    peripheral_t * peripheral = (peripheral_t *) pxPeripheral;
    size_t result = 0;
@@ -312,7 +312,7 @@ size_t driver_getproperty( peripheral_t * pxPeripheral, char * pcRequest, char *
       /*If request is common*/
 
       /*Common comands*/
-      if (peripheral->status == DEV_STAT_ACTIVE)
+      if (*(peripheral->status) == DEV_STAT_ACTIVE)
       {
          strncpy(pcValue, "true", xBytes);
          result = strlen(pcValue);

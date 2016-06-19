@@ -69,11 +69,13 @@ static const driver_functions_t gpioFunctions = {gpio_open, gpio_write, gpio_rea
 
 register_driver(gpio, "/gpio", gpioFunctions, gpioStatus, arraysize(inputPin), gpioPropList, UINT16);
 
+
 static ADC_HandleTypeDef hadc1;
 static void inputTask(void * pvParameters);
 static error_t initInputs (void);
 static error_t startPeripheral (peripheral_t * peripheral);
 static error_t stopPeripheral (peripheral_t * peripheral);
+
 #define release_timeout   40 //Таймаут обработки кнопки после отпускания. Максимум 255 при использовании типа s08 для bt_release_time
 #define max_value 255
 #define min_value 255
@@ -82,6 +84,7 @@ static error_t stopPeripheral (peripheral_t * peripheral);
 #define debounce 4
 
 #define dimmer_long_press 5 // время ступени max 127
+#define dimmer_min_value 0
 #define dimmer_max_value 100 // Число ступеней
 #define plato_duration 20 //Продолжительность плато
 
@@ -104,6 +107,7 @@ volatile const uint32_t * inputState[]={
 typedef enum
 {
    NONE = 0x00,
+   MinValueClick = NONE,
    //Sequence
    SingleShortClick, //0x01 Single short click   (.)
    DoubleShortClick, //0x02 Double short click   (..)
@@ -112,12 +116,48 @@ typedef enum
    DoubleLongClick,  //0x05                      (--)
    TripleShortClick, //0x06                      (...)
    ShortShortLongClick, //0x07                   (..-)
+   MaxValueClick,
    //Dimmer
    IncreaseValue = 0x11,   //0x11 17
    DecreaseValue,          //0x12 18
    PlatoValue,             //0x13 19
 } clicType;
 
+static size_t gpioSetValue(uint8_t gpioNum, uint16_t value)
+{
+   size_t result = 0;
+
+   if (gpioNum < arraysize(inputPin))
+   {
+      switch (gpioContext[gpioNum].inputMode)
+      {
+      case S_BINARY:
+         /* We can't write into S_BINARY*/
+         break;
+      case S_MORZE:
+         if ((value>=MinValueClick) && (value < MaxValueClick))
+         {
+            gpioContext[gpioNum].value = value;
+            result = sizeof(value);
+         }
+         break;
+      case S_DIMMER:
+         if ((value>=dimmer_min_value) && (value <= dimmer_max_value))
+         {
+            gpioContext[gpioNum].value = value;
+            result = sizeof(value);
+         }
+         break;
+      case S_MULTIMETER:
+         /* We can't write into S_MULTIMETER*/
+      default:
+         break;
+      }
+   }
+
+
+   return result;
+}
 
 static size_t set_mode(peripheral_t * const pxPeripheral, char *pcValue)
 {
@@ -330,10 +370,21 @@ static size_t gpio_open(peripheral_t * const pxPeripheral)
 }
 static size_t gpio_write(peripheral_t * const pxPeripheral, const void * pvBuffer, const size_t xBytes)
 {
-   (void) pxPeripheral;
-   (void) pvBuffer;
-   (void) xBytes;
-   return 0;
+   size_t result =0 ;
+   peripheral_t * peripheral = (peripheral_t *) pxPeripheral;
+   uint8_t gpioNum = peripheral->peripheralNum;
+   uint16_t * value;
+   if (xBytes<= sizeof(uint16_t)) //gpio_t.value
+   {
+      value = (uint16_t *) pvBuffer;
+
+      /* Check, if device is writeble */
+      if (gpioStatus[gpioNum] & DEV_STAT_WRITEBLE)
+      {
+         result = gpioSetValue(gpioNum, *value);
+      }
+   }
+   return result;
 }
 
 static size_t gpio_read(peripheral_t * const pxPeripheral, void * const pvBuffer, const size_t xBytes)
@@ -593,7 +644,7 @@ static clicType check_bit_map(uint8_t bt_result, uint8_t bt_cnt)
 static clicType check_dimmervalue(uint8_t presentValue, uint8_t bt_direction, uint8_t duration)
 {
    clicType result;
-   if (presentValue == 0)
+   if (presentValue == dimmer_min_value)
    {
       if (duration < plato_duration)
       {
@@ -604,7 +655,7 @@ static clicType check_dimmervalue(uint8_t presentValue, uint8_t bt_direction, ui
          result = IncreaseValue;
       }
    }
-   else if (presentValue > 0 && presentValue < dimmer_max_value  && bt_direction == IncreaseValue)
+   else if (presentValue > dimmer_min_value && presentValue < dimmer_max_value  && bt_direction == IncreaseValue)
    {
       result = IncreaseValue;
    }
@@ -619,11 +670,11 @@ static clicType check_dimmervalue(uint8_t presentValue, uint8_t bt_direction, ui
          result = DecreaseValue;
       }
    }
-   else if (presentValue > 0 && presentValue < dimmer_max_value  && bt_direction ==DecreaseValue)
+   else if (presentValue > dimmer_min_value && presentValue < dimmer_max_value  && bt_direction ==DecreaseValue)
    {
       result = DecreaseValue;
    }
-   else if (presentValue == 0 && bt_direction ==DecreaseValue)
+   else if (presentValue == dimmer_min_value && bt_direction ==DecreaseValue)
    {
       result = PlatoValue;
    }
@@ -663,227 +714,258 @@ static void inputTask(void * pvParameters)
    uint16_t currentVal;
 
    mask_t * mask = (mask_t *) driver_gpio.mask;
-   mask->driver = &driver_gpio;
+   //   mask->driver = &driver_gpio;
    while (1)
    {
       for (i=0; i<arraysize(inputPin); i++)
       {
-         if ((gpioStatus[i] & (DEV_STAT_ACTIVE | DEV_STAT_MANAGED)) && (gpioContext[i].inputMode == S_BINARY))
+         if (gpioStatus[i] &  DEV_STAT_MANAGED)
          {
-            // Кнопень придавлена. Тупо считаем время придавки.
-            if (*inputState[i])
+            if ((gpioStatus[i] & (DEV_STAT_ACTIVE )) && (gpioContext[i].inputMode == S_BINARY))
             {
-               if (gpioContext[i].bt_time<max_value-1)
+               // Кнопень придавлена. Тупо считаем время придавки.
+               if (*inputState[i])
                {
-                  gpioContext[i].bt_time++;
-               }
-               if (gpioContext[i].bt_time>debounce)
-               {
-
-                  osAcquireMutex(&gpioMutexes[i]);
-                  gpioContext[i].value = 0x01;
-                  gpioStatus[i]|=DEV_STAT_READBLE;
-                  osReleaseMutex(&gpioMutexes[i]);
-                  gpioContext[i].bt_release_time=0;
-               }
-            }
-            else
-            {
-               if (gpioContext[i].bt_release_time<min_value-1 )
-               {
-                  gpioContext[i].bt_release_time++; //  отсчета таймаута ожидания завершения комманды после последней нажатой кнопки.
-               }
-               if (gpioContext[i].bt_release_time>debounce)
-               {
-                  osAcquireMutex(&gpioMutexes[i]);
-                  gpioContext[i].value = 0x00;
-                  gpioStatus[i]|=DEV_STAT_READBLE;
-                  osReleaseMutex(&gpioMutexes[i]);
-                  gpioContext[i].bt_time=0;
-               }
-            }
-
-         }
-         else if ((gpioStatus[i] & (DEV_STAT_ACTIVE | DEV_STAT_MANAGED)) && (gpioContext[i].inputMode == S_DIMMER))
-         {
-            // Кнопень придавлена. Тупо считаем время придавки.
-            if (*inputState[i])
-            {
-               if (gpioContext[i].bt_time<max_value-1) //Давно не нажимали кнопку
-               {
-                  gpioContext[i].bt_time++;
-               }
-
-               if (gpioContext[i].bt_time>long_press)
-               {
-                  osAcquireMutex(&gpioMutexes[i]);
-                  currentVal = gpioContext[i].value;
-                  osReleaseMutex(&gpioMutexes[i]);
-
-                  tempClickValue = check_dimmervalue(currentVal, gpioContext[i].direction, gpioContext[i].bt_cnt);
-                  gpioContext[i].bt_time=long_press-dimmer_long_press;
-
-                  if (tempClickValue == IncreaseValue)
-
+                  if (gpioContext[i].bt_time<max_value-1)
                   {
-                     gpioContext[i].bt_cnt=1;
-                     currentVal++;
-                     gpioContext[i].direction = tempClickValue;
+                     gpioContext[i].bt_time++;
                   }
-                  else if (tempClickValue == DecreaseValue)
+                  if (gpioContext[i].bt_time>debounce)
                   {
-                     gpioContext[i].bt_cnt=1;
-                     currentVal--;
-                     gpioContext[i].direction = tempClickValue;
-                  }
-                  else if (tempClickValue == PlatoValue)
-                  {
-                     gpioContext[i].bt_cnt++;
-                     gpioContext[i].direction = tempClickValue;
-                  }
 
-                  osAcquireMutex(&gpioMutexes[i]);
-                  gpioContext[i].value = currentVal;
-                  gpioStatus[i]|=DEV_STAT_READBLE;
-                  osReleaseMutex(&gpioMutexes[i]);
-
-                  if (gpioContext[i].direction != PlatoValue && currentVal == 0 )
-                  {
-                     gpioContext[i].direction =PlatoValue;
-                  }
-
-
-               }
-            }
-            //  Момент отпускания кнопки.
-            else if (gpioContext[i].bt_time>debounce) //Если кнопка была нажата больше времени дребезга
-            {
-               if (gpioContext[i].bt_cnt > 0)
-               {
-                  // Отпустили после длинного нажатия
-                  gpioContext[i].bt_time = 0;
-                  gpioContext[i].bt_cnt = 0;
-
-               }
-               else if (gpioContext[i].bt_time>=short_press)
-               {
-                  osAcquireMutex(&gpioMutexes[i]);
-                  tempVal = gpioContext[i].value;
-                  osReleaseMutex(&gpioMutexes[i]);
-                  // Отпустили после короткого нажатия
-                  if (tempVal>0)
-                  {
-                     //Сохраняем значение и выключаем
                      osAcquireMutex(&gpioMutexes[i]);
-                     gpioContext[i].bt_result = gpioContext[i].value;
+
+                     gpioContext[i].value = 0x01;
+                     /* We can only read value */
+                     gpioStatus[i] |= DEV_STAT_READBLE;
+
+                     osReleaseMutex(&gpioMutexes[i]);
+                     gpioContext[i].bt_release_time=0;
+                  }
+               }
+               else
+               {
+                  if (gpioContext[i].bt_release_time<min_value-1 )
+                  {
+                     gpioContext[i].bt_release_time++; //  отсчета таймаута ожидания завершения комманды после последней нажатой кнопки.
+                  }
+                  if (gpioContext[i].bt_release_time>debounce)
+                  {
+                     osAcquireMutex(&gpioMutexes[i]);
+
                      gpioContext[i].value = 0x00;
-                     gpioStatus[i]|=DEV_STAT_READBLE;
+                     /* We can only read value*/
+                     gpioStatus[i] |= DEV_STAT_READBLE;
+
                      osReleaseMutex(&gpioMutexes[i]);
+                     gpioContext[i].bt_time=0;
                   }
-                  else if(tempVal == 0 && (gpioContext[i].bt_result > 0))
+               }
+
+            }
+            else if ((gpioStatus[i] & (DEV_STAT_ACTIVE )) && (gpioContext[i].inputMode == S_DIMMER))
+            {
+               /* We can read and write value*/
+               gpioStatus[i] |= DEV_STAT_READBLE | DEV_STAT_WRITEBLE;
+
+               // Кнопень придавлена. Тупо считаем время придавки.
+               if (*inputState[i])
+               {
+                  if (gpioContext[i].bt_time<max_value-1) //Давно не нажимали кнопку
                   {
-                     //Если есть сохраненное значение, то восстанавливаем
-                     osAcquireMutex(&gpioMutexes[i]);
-                     gpioContext[i].value = gpioContext[i].bt_result;
-                     gpioStatus[i]|=DEV_STAT_READBLE;
-                     osReleaseMutex(&gpioMutexes[i]);
+                     gpioContext[i].bt_time++;
                   }
-                  else
+
+                  if (gpioContext[i].bt_time>long_press)
                   {
-                     // Иначе включаем на всю
                      osAcquireMutex(&gpioMutexes[i]);
-                     gpioContext[i].value = dimmer_max_value;
-                     gpioStatus[i]|=DEV_STAT_READBLE;
+                     currentVal = gpioContext[i].value;
                      osReleaseMutex(&gpioMutexes[i]);
+
+                     tempClickValue = check_dimmervalue(currentVal, gpioContext[i].direction, gpioContext[i].bt_cnt);
+                     gpioContext[i].bt_time=long_press - dimmer_long_press;
+
+                     if (tempClickValue == IncreaseValue)
+
+                     {
+                        gpioContext[i].bt_cnt=1;
+                        currentVal++;
+                        gpioContext[i].direction = tempClickValue;
+                     }
+                     else if (tempClickValue == DecreaseValue)
+                     {
+                        gpioContext[i].bt_cnt=1;
+                        currentVal--;
+                        gpioContext[i].direction = tempClickValue;
+                     }
+                     else if (tempClickValue == PlatoValue)
+                     {
+                        gpioContext[i].bt_cnt++;
+                        gpioContext[i].direction = tempClickValue;
+                     }
+
+                     osAcquireMutex(&gpioMutexes[i]);
+
+                     gpioContext[i].value = currentVal;
+                     //                  /* We can read and write value*/
+                     //                  gpioStatus[i] |= DEV_STAT_READBLE | DEV_STAT_WRITEBLE;
+
+                     osReleaseMutex(&gpioMutexes[i]);
+
+                     if (gpioContext[i].direction != PlatoValue && currentVal == 0 )
+                     {
+                        gpioContext[i].direction =PlatoValue;
+                     }
+
+
                   }
-                  gpioContext[i].bt_cnt = 0;
-                  gpioContext[i].bt_time = 0;
+               }
+               //  Момент отпускания кнопки.
+               else if (gpioContext[i].bt_time>debounce) //Если кнопка была нажата больше времени дребезга
+               {
+                  if (gpioContext[i].bt_cnt > 0)
+                  {
+                     // Отпустили после длинного нажатия
+                     gpioContext[i].bt_time = 0;
+                     gpioContext[i].bt_cnt = 0;
+
+                  }
+                  else if (gpioContext[i].bt_time>=short_press)
+                  {
+                     osAcquireMutex(&gpioMutexes[i]);
+                     tempVal = gpioContext[i].value;
+                     osReleaseMutex(&gpioMutexes[i]);
+                     // Отпустили после короткого нажатия
+                     if (tempVal>0)
+                     {
+                        //Сохраняем значение и выключаем
+                        osAcquireMutex(&gpioMutexes[i]);
+
+                        gpioContext[i].bt_result = gpioContext[i].value;
+                        gpioContext[i].value = dimmer_min_value;
+                        //                     /* We can read and write value*/
+                        //                     gpioStatus[i] |= DEV_STAT_READBLE | DEV_STAT_WRITEBLE;
+
+                        osReleaseMutex(&gpioMutexes[i]);
+                     }
+                     else if(tempVal == 0 && (gpioContext[i].bt_result > 0))
+                     {
+                        //Если есть сохраненное значение, то восстанавливаем
+                        osAcquireMutex(&gpioMutexes[i]);
+
+                        gpioContext[i].value = gpioContext[i].bt_result;
+                        //                     /* We can read and write value*/
+                        //                     gpioStatus[i] |= DEV_STAT_READBLE | DEV_STAT_WRITEBLE;
+
+                        osReleaseMutex(&gpioMutexes[i]);
+                     }
+                     else
+                     {
+                        // Иначе включаем на всю
+                        osAcquireMutex(&gpioMutexes[i]);
+                        gpioContext[i].value = dimmer_max_value;
+
+                        //                     /* We can read and write value*/
+                        //                     gpioStatus[i] |= DEV_STAT_READBLE | DEV_STAT_WRITEBLE;
+
+                        osReleaseMutex(&gpioMutexes[i]);
+                     }
+                     gpioContext[i].bt_cnt = 0;
+                     gpioContext[i].bt_time = 0;
+
+                  }
+               }
+
+            }
+            else if ((gpioStatus[i] & (DEV_STAT_ACTIVE )) && (gpioContext[i].inputMode == S_MORZE))
+            {
+               /* We can read and write value*/
+               gpioStatus[i] |= DEV_STAT_READBLE | DEV_STAT_WRITEBLE;
+               // Кнопень придавлена. Тупо считаем время придавки.
+               if ((*inputState[i]))
+               {
+                  if (gpioContext[i].bt_time<max_value-1)
+                  {
+                     gpioContext[i].bt_time++;
+                  }
+               }
+               //  Момент отпускания кнопки.
+               else if (gpioContext[i].bt_time>debounce) //Если кнопка была нажата больше времени дребезга
+               {
+                  // Длинное нажатие. Ставим единичку в битовое поле результата.
+                  if (gpioContext[i].bt_time>=long_press)
+                  {
+                     gpioContext[i].bt_result|=(1<<gpioContext[i].bt_cnt);
+                     gpioContext[i].bt_cnt++; // Длинное нажатие. Пропускаем установку бита.
+                     gpioContext[i].bt_time=0; // время придавки кнопки нам больше не нужно, сбрасываем.
+                     gpioContext[i].bt_release_time=0;
+                  }
+                  else if (gpioContext[i].bt_time>=short_press)
+                  {
+                     gpioContext[i].bt_release_time=0;
+                     gpioContext[i].bt_cnt++; // Короткое нажатие. Пропускаем установку бита.
+                     gpioContext[i].bt_time=0; // время придавки кнопки нам больше не нужно, сбрасываем.
+                  }
 
                }
-            }
-
-         }
-         else if ((gpioStatus[i] & (DEV_STAT_ACTIVE | DEV_STAT_MANAGED)) && (gpioContext[i].inputMode == S_MORZE))
-         {
-            // Кнопень придавлена. Тупо считаем время придавки.
-            if ((*inputState[i]))
-            {
-               if (gpioContext[i].bt_time<max_value-1)
+               // Прошел ли таймаут отпускания кнопки
+               else if (gpioContext[i].bt_cnt>0 && gpioContext[i].bt_release_time<release_timeout)
                {
-                  gpioContext[i].bt_time++;
+                  // Отпущено, счетчик таймаута комманды(последовательности). Здесь мы еще ждем ввода нажатий для последовательности.
+                  if (gpioContext[i].bt_release_time<min_value-1 )
+                  {
+                     gpioContext[i].bt_release_time++; //  отсчета таймаута ожидания завершения комманды после последней нажатой кнопки.
+                  }
                }
-            }
-            //  Момент отпускания кнопки.
-            else if (gpioContext[i].bt_time>debounce) //Если кнопка была нажата больше времени дребезга
-            {
-               // Длинное нажатие. Ставим единичку в битовое поле результата.
-               if (gpioContext[i].bt_time>=long_press)
-               {
-                  gpioContext[i].bt_result|=(1<<gpioContext[i].bt_cnt);
-                  gpioContext[i].bt_cnt++; // Длинное нажатие. Пропускаем установку бита.
-                  gpioContext[i].bt_time=0; // время придавки кнопки нам больше не нужно, сбрасываем.
+               else if (gpioContext[i].bt_cnt>0 && gpioContext[i].bt_release_time>=release_timeout)
+               { // Таймаут комманды, сброс состояний
+                  tempClickValue = check_bit_map(gpioContext[i].bt_result, gpioContext[i].bt_cnt);
+                  if (tempClickValue)
+                  {
+                     osAcquireMutex(&gpioMutexes[i]);
+
+                     gpioContext[i].value = tempClickValue;
+                     //                  /* We can read and write value*/
+                     //                  gpioStatus[i] |= DEV_STAT_READBLE | DEV_STAT_WRITEBLE;
+
+                     osReleaseMutex(&gpioMutexes[i]);
+                  }
+                  gpioContext[i].bt_time=0;
+                  gpioContext[i].bt_cnt=0;
+                  gpioContext[i].bt_result=0;
                   gpioContext[i].bt_release_time=0;
                }
-               else if (gpioContext[i].bt_time>=short_press)
+               else
                {
+                  //               gpioStatus[i]|=DEV_STAT_READBLE;
+                  gpioContext[i].bt_cnt=0; // Было ложное нажатие
+                  gpioContext[i].bt_time=0;
+                  gpioContext[i].bt_result=0;
                   gpioContext[i].bt_release_time=0;
-                  gpioContext[i].bt_cnt++; // Короткое нажатие. Пропускаем установку бита.
-                  gpioContext[i].bt_time=0; // время придавки кнопки нам больше не нужно, сбрасываем.
                }
-
             }
-            // Прошел ли таймаут отпускания кнопки
-            else if (gpioContext[i].bt_cnt>0 && gpioContext[i].bt_release_time<release_timeout)
+            else if ((gpioStatus[i] & (DEV_STAT_ACTIVE )) && (gpioContext[i].inputMode == S_MULTIMETER))
             {
-               // Отпущено, счетчик таймаута комманды(последовательности). Здесь мы еще ждем ввода нажатий для последовательности.
-               if (gpioContext[i].bt_release_time<min_value-1 )
-               {
-                  gpioContext[i].bt_release_time++; //  отсчета таймаута ожидания завершения комманды после последней нажатой кнопки.
-               }
+               tempADCValue = GetADCValue(adcChannel[i], 5);
+
+               osAcquireMutex(&gpioMutexes[i]);
+               gpioContext[i].value = tempADCValue;
+               /* We can only read value*/
+               gpioStatus[i] |= DEV_STAT_READBLE;
+
+               osReleaseMutex(&gpioMutexes[i]);
             }
-            else if (gpioContext[i].bt_cnt>0 && gpioContext[i].bt_release_time>=release_timeout)
-            { // Таймаут комманды, сброс состояний
-               tempClickValue = check_bit_map(gpioContext[i].bt_result, gpioContext[i].bt_cnt);
-               if (tempClickValue)
-               {
-                  osAcquireMutex(&gpioMutexes[i]);
-                  gpioContext[i].value = tempClickValue;
-                  gpioStatus[i]|=DEV_STAT_READBLE;
-                  osReleaseMutex(&gpioMutexes[i]);
-               }
-               gpioContext[i].bt_time=0;
-               gpioContext[i].bt_cnt=0;
-               gpioContext[i].bt_result=0;
-               gpioContext[i].bt_release_time=0;
+
+            if (gpioContext[i].prevValue!=gpioContext[i].value)
+            {
+               (mask->mask) |= (1<<i);
             }
             else
             {
-               gpioStatus[i]|=DEV_STAT_READBLE;
-               gpioContext[i].bt_cnt=0; // Было ложное нажатие
-               gpioContext[i].bt_time=0;
-               gpioContext[i].bt_result=0;
-               gpioContext[i].bt_release_time=0;
+               (mask->mask) &= ~(1<<i);
             }
+            gpioContext[i].prevValue = gpioContext[i].value;
          }
-         else if ((gpioStatus[i] & (DEV_STAT_ACTIVE | DEV_STAT_MANAGED)) && (gpioContext[i].inputMode == S_MULTIMETER))
-         {
-            tempADCValue = GetADCValue(adcChannel[i], 5);
-
-            osAcquireMutex(&gpioMutexes[i]);
-            gpioContext[i].value = tempADCValue;
-            gpioStatus[i]|=DEV_STAT_READBLE;
-            osReleaseMutex(&gpioMutexes[i]);
-         }
-
-         if (gpioContext[i].prevValue!=gpioContext[i].value)
-         {
-            (mask->mask) |= (1<<i);
-         }
-         else
-         {
-            (mask->mask) &= ~(1<<i);
-         }
-         gpioContext[i].prevValue = gpioContext[i].value;
       }
       if (mask->mask != 0)
       {

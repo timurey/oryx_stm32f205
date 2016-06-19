@@ -32,6 +32,14 @@ typedef error_t (*tPostRestHandler)(HttpConnection *connection, RestApi_t * rest
 typedef error_t (*tPutRestHandler)(HttpConnection *connection, RestApi_t * rest);
 typedef error_t (*tDeleteRestHandler)(HttpConnection *connection, RestApi_t * rest);
 
+#define PRIlevel0 "\r\n"
+#define PRIlevel1 "\r\n\t"
+#define PRIlevel2 "\r\n\t\t"
+#define PRIlevel3 "\r\n\t\t\t"
+#define PRIlevel4 "\r\n\t\t\t\t"
+#define PRIlevel5 "\r\n\t\t\t\t\t"
+#define PRIlevel6 "\r\n\t\t\t\t\t\t"
+
 #define rest_200_ok(a, b) rest_answer(a, b, 200)
 #define rest_300_multiple_choices(a, b) rest_answer(a, b, 300)
 #define rest_400_bad_request(a, b) rest_answer(a, b, 400)
@@ -54,6 +62,8 @@ typedef enum
 	METHOD_PATCH = 0x04,
 	METHOD_DELETE = 0x05
 } HttpMethod_t;
+
+
 
 typedef struct
 {
