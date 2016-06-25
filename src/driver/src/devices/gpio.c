@@ -481,6 +481,9 @@ static size_t set_active( peripheral_t * const pxPeripheral, char *pcValue )
    else if (strcmp(pcValue, "false") == 0)
    {
       *(peripheral->status) &= ~DEV_STAT_ACTIVE;
+      /*
+       * todo: debug this place
+       */
       if (gpioMutexes[gpioNum].handle != NULL)
       {
          osDeleteMutex(&gpioMutexes[gpioNum]);

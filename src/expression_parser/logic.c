@@ -29,7 +29,7 @@ char * pRules[EXPRESSION_MAX_COUNT];
 
 OsTask *logicTask;
 
-static error_t parseRules (jsmnParserStruct * jsonParser)
+static error_t parseRules (jsmnParserStruct * jsonParser, configMode mode)
 {
    int i;
    char path[64];

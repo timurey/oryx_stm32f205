@@ -1,8 +1,8 @@
 /*
  * jsmn_extras.c
  *
- *  Created on: 13 июня 2015 г.
- *      Author: timurtaipov
+ *Created on: 13 июня 2015 г.
+ *Author: timurtaipov
  */
 
 
@@ -220,7 +220,7 @@ static int findTokenByParentAndName(const char *pJSON, jsmntok_t * pTok, int par
 }
 
 
-int jsmn_get_value_token(jsmnParserStruct * jsonStruct,  char * pPath)
+int jsmn_get_value_token(jsmnParserStruct * jsonStruct,char * pPath)
 {
    char *path = pPath;
    int token =-1;
@@ -256,7 +256,7 @@ int jsmn_get_value_token(jsmnParserStruct * jsonStruct,  char * pPath)
 
 }
 
-int jsmn_get_string(jsmnParserStruct * jsonStruct,  char * pPath, char * string, int maxlen)
+int jsmn_get_string(jsmnParserStruct * jsonStruct,char * pPath, char * string, int maxlen)
 {
    int tokNum;
    int length =0;
@@ -280,7 +280,7 @@ int jsmn_get_string(jsmnParserStruct * jsonStruct,  char * pPath, char * string,
    return length;
 }
 
-int jsmn_get_bool(jsmnParserStruct * jsonStruct,  char * pPath, int* pointer)
+int jsmn_get_bool(jsmnParserStruct * jsonStruct,char * pPath, int* pointer)
 {
    int tokNum;
 
@@ -288,11 +288,11 @@ int jsmn_get_bool(jsmnParserStruct * jsonStruct,  char * pPath, int* pointer)
 
    if (tokNum > 0)
    {
-      if (strncmp (&jsonStruct->data[jsonStruct->jSMNtokens[tokNum].start], "true" ,4) == 0)
+      if (jsmn_strncmp (&jsonStruct->data[jsonStruct->jSMNtokens[tokNum].start], "true", 4) == 0)
       {
          *pointer = TRUE;
       }
-      else if (strncmp (&jsonStruct->data[jsonStruct->jSMNtokens[tokNum].start], "false" ,5) == 0)
+      else if (jsmn_strncmp (&jsonStruct->data[jsonStruct->jSMNtokens[tokNum].start], "false", 5) == 0)
       {
          *pointer = FALSE;
       }

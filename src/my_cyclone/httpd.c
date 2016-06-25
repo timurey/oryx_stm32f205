@@ -41,7 +41,7 @@ static void httpdUseDefaultConfig(void)
 
 
 
-static error_t parseHttpdConfig (jsmnParserStruct * jsonParser)
+static error_t parseHttpdConfig (jsmnParserStruct * jsonParser, configMode mode)
 {
 #define MAXLEN 64
    char tmp_str[MAXLEN];

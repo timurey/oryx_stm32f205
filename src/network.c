@@ -66,7 +66,7 @@ typedef struct
 static networkContext_t networkContext;
 
 static void networkSaveConfig (char * bufer, size_t maxLen);
-static error_t parseNetwork(jsmnParserStruct * jsonParser);
+static error_t parseNetwork(jsmnParserStruct * jsonParser, configMode mode);
 register_rest_function(network, "/network", NULL, NULL, &restGetNetwork, NULL, &restPutNetwork, NULL);
 
 
@@ -153,7 +153,7 @@ error_t restPutNetwork(HttpConnection *connection, RestApi_t* RestApi)
    jsonParser.data = connection->buffer;
    jsonParser.lengthOfData = connection->request.contentLength;
 
-   error = parseNetwork(&jsonParser);
+   error = parseNetwork(&jsonParser, RESTv1PUT);
 
    if (networkContext.needSave == TRUE)
    {
@@ -263,7 +263,7 @@ inline void networkSaveConfig (char * bufer, size_t maxLen)
 
 }
 
-static error_t parseNetwork(jsmnParserStruct * jsonParser)
+static error_t parseNetwork(jsmnParserStruct * jsonParser, configMode mode)
 {
    int strLen;
    jsmn_init(jsonParser->jSMNparser);

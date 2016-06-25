@@ -47,7 +47,7 @@ static size_t get_active(peripheral_t * const pxPeripheral, char *pcValue, const
    peripheral_t * peripheral = (peripheral_t *) pxPeripheral;
    size_t result;
    /*Common comands*/
-   if (peripheral->status[peripheral->peripheralNum] == DEV_STAT_ACTIVE)
+   if (testStatus[peripheral->peripheralNum] & DEV_STAT_ACTIVE)
    {
       strncpy(pcValue, "true", xBytes);
       result = strlen(pcValue);
@@ -132,14 +132,14 @@ static size_t set_active( peripheral_t * const pxPeripheral, char *pcValue )
       if (strcmp(pcValue, "true") == 0)
       {
 
-         peripheral->status[peripheral->peripheralNum] |= DEV_STAT_ACTIVE;
+         testStatus[peripheral->peripheralNum] |= DEV_STAT_ACTIVE;
          vTestTask = osCreateTask("testTask", testTask, peripheral->driver, configMINIMAL_STACK_SIZE, 2);
          result = 1;
       }
       else if (strcmp(pcValue, "false") == 0)
       {
          osDeleteTask(vTestTask);
-         peripheral->status[peripheral->peripheralNum] &= ~DEV_STAT_ACTIVE;
+         testStatus[peripheral->peripheralNum] &= ~DEV_STAT_ACTIVE;
          result = 1;
       }
 
@@ -203,7 +203,7 @@ void driverTask (void *pvParameters)
    volatile error_t error;
    volatile uint16_t value;
    memset(&fp,0,sizeof(peripheral_t));
-   error = driver_open(&fp, "/test_7", POPEN_CREATE);
+   error = driver_open(&fp, "/test_7", POPEN_CONFIGURE);
    driver_close(&fp);
 
    error = driver_open(&fp, "/test_7", POPEN_READ);
@@ -213,7 +213,7 @@ void driverTask (void *pvParameters)
    error = driver_open(&fp, "/test_7", POPEN_WRITE);
    writed = driver_write(&fp, "hahaha", 5);
    driver_close(&fp);
-   error = driver_open(&fp, "/gpio_5", POPEN_CREATE);
+   error = driver_open(&fp, "/gpio_5", POPEN_CONFIGURE);
    setted = driver_setproperty(&fp, "mode", "digital");
    setted = driver_setproperty(&fp, "active_level", "low");
    setted = driver_setproperty(&fp, "pull", "low");

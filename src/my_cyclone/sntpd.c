@@ -162,7 +162,7 @@ inline void ntpdRestart(void)
 }
 
 
-static error_t parseNTP (jsmnParserStruct * jsonParser)
+static error_t parseNTP (jsmnParserStruct * jsonParser, configMode mode)
 {
 #define MAXLEN 12
    char tmp_str[MAXLEN];
@@ -326,7 +326,7 @@ error_t putRestSNTP(HttpConnection *connection, RestApi_t* RestApi)
 
    jsmn_init(&parser);
 
-   error = parseNTP(&jsonParser);
+   error = parseNTP(&jsonParser, RESTv1PUT);
 
    if (ntpContext.needSave == TRUE)
    {

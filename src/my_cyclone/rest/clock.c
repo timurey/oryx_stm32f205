@@ -67,7 +67,7 @@ error_t restPostClock(HttpConnection *connection, RestApi_t* RestApi)
    return rest_400_bad_request(connection, "You can't create new clock...");
 }
 
-static error_t parseClock (jsmnParserStruct * jsonParser)
+static error_t parseClock (jsmnParserStruct * jsonParser, configMode mode)
 {
    int strLen = 0;
    char str[12];
@@ -152,7 +152,7 @@ error_t restPutClock(HttpConnection *connection, RestApi_t* RestApi)
 
    jsmn_init(jsonParser.jSMNparser);
 
-   error = parseClock(&jsonParser);
+   error = parseClock(&jsonParser, RESTv1PUT);
 
    if (clockContext.needSave == TRUE)
    {

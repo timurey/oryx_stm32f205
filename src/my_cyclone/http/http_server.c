@@ -79,6 +79,7 @@ static const HttpStatusCodeDesc statusCodeList[] =
    {401, "Unauthorized"},
    {403, "Forbidden"},
    {404, "Not Found"},
+   {409, "Conflict"},
    //Server error
    {500, "Internal Server Error"},
    {501, "Not Implemented"},

@@ -414,7 +414,7 @@ error_t restParsePath(HttpConnection *connection, RestApi_t *RestApi)
    if (error != NO_ERROR)
       return error;
 
-   if (token.lenght ==strlen(restPrefix))
+   if (token.lenght == strlen(restPrefix))
    {
       if (strncmp(_uri, restPrefix, token.lenght) ==  0)
       {
@@ -581,7 +581,7 @@ error_t findRestHandler(RestApi_t* RestApi)
    volatile error_t error = NO_ERROR;
    for (restFunctions *cur_rest = &__start_rest_functions; cur_rest < &__stop_rest_functions; cur_rest++)
    {
-      if (strncmp(RestApi->class, cur_rest->restClassPath, RestApi->classLen ) == 0)
+      if (strncmp(RestApi->class, cur_rest->restClassPath, strlen(cur_rest->restClassPath) ) == 0)
       {
          RestApi->restClassHadlers = cur_rest;
          return error;

@@ -42,7 +42,7 @@ typedef enum
    UNDEFINED,
    POPEN_READ = 0x01,
    POPEN_WRITE = 0x02,
-   POPEN_CREATE = 0x04,
+   POPEN_CONFIGURE = 0x04,
    POPEN_INFO = 0x08,
 }periphOpenType;
 

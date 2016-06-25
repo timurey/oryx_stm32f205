@@ -130,7 +130,8 @@ error_t driver_open(peripheral_t * const pxPeripheral, const char * path, const 
                break;
             }
          }
-         else if (flags == POPEN_CREATE)
+
+         else if (flags == POPEN_CONFIGURE)
          {
             if (*(peripheral->status) & (DEV_STAT_ACTIVE))
             {
@@ -253,7 +254,7 @@ size_t driver_setproperty( peripheral_t * const pxPeripheral, char * pcRequest, 
    {
       return 0;
    }
-   if (pxPeripheral->mode != POPEN_CREATE)
+   if (pxPeripheral->mode != POPEN_CONFIGURE)
    {
       return 0;
    }

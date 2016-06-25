@@ -44,7 +44,7 @@ error_t read_default(const defaultConfig_t * defaultConfig, tConfigParser parser
    jsonParser.data = defaultConfig->config;
    jsonParser.lengthOfData = defaultConfig->len;
 
-   error =  parser(&jsonParser);
+   error =  parser(&jsonParser, CONFIGURE_MODE);
 
    jsonParser.data = NULL;
    jsonParser.lengthOfData = 0;
@@ -94,7 +94,7 @@ error_t read_config(char * path, tConfigParser parser)
    jsonParser.data = data;
    jsonParser.lengthOfData =readed;
 
-   error =  parser(&jsonParser);
+   error =  parser(&jsonParser, CONFIGURE_MODE);
 
    jsonParser.data = NULL;
    jsonParser.lengthOfData = 0;

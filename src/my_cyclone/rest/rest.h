@@ -41,9 +41,11 @@ typedef error_t (*tDeleteRestHandler)(HttpConnection *connection, RestApi_t * re
 #define PRIlevel6 "\r\n\t\t\t\t\t\t"
 
 #define rest_200_ok(a, b) rest_answer(a, b, 200)
+#define rest_201_created(a, b) rest_answer(a, b, 201)
 #define rest_300_multiple_choices(a, b) rest_answer(a, b, 300)
 #define rest_400_bad_request(a, b) rest_answer(a, b, 400)
 #define rest_404_not_found(a, b) rest_answer(a, b, 404)
+#define rest_409_conflict(a, b) rest_answer(a, b, 409)
 #define rest_500_int_server_error(a, b) rest_answer(a, b, 500)
 #define rest_501_not_implemented(a, b) rest_answer(a, b, 501)
 
