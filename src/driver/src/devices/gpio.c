@@ -7,9 +7,11 @@
 #include "gpio.h"
 #include "os_port.h"
 #include "DriverInterface.h"
-
+#include "../expression_parser/expression_parser.h"
+#include <math.h>
 
 static OsTask *pInputTask;
+int adc_used = 0;
 
 static  uint16_t inputPin[]={IPNUT_PIN_0, IPNUT_PIN_1, IPNUT_PIN_2, IPNUT_PIN_3,
    IPNUT_PIN_4, IPNUT_PIN_5, IPNUT_PIN_6, IPNUT_PIN_7, IPNUT_PIN_8, IPNUT_PIN_9,
@@ -33,6 +35,7 @@ typedef struct
    pull_t pull;
    uint16_t value;
    uint16_t prevValue;
+   char * formula;
 } gpio_t;
 
 gpio_t gpioContext[arraysize(inputPin)];
@@ -55,15 +58,20 @@ static size_t set_pull(peripheral_t * const pxPeripheral, char *pcValue);
 static size_t get_pull(peripheral_t * const pxPeripheral, char *pcValue, const size_t xBytes);
 static size_t set_formula(peripheral_t * const pxPeripheral, char *pcValue);
 static size_t get_formula(peripheral_t * const pxPeripheral, char *pcValue, const size_t xBytes);
+static size_t getMinValue(peripheral_t * const pxPeripheral, char *pcValue, const size_t xBytes);
+static size_t getMaxValue(peripheral_t * const pxPeripheral, char *pcValue, const size_t xBytes);
+static void MX_ADC1_Init(void);
 
 static const property_t gpioPropList[] =
-{
-   { "active", PCHAR, set_active, get_active},
-   { "mode", PCHAR, set_mode, get_mode},
-   { "active_level", PCHAR, set_activeLevel, get_activeLevel},
-   { "pull", PCHAR, set_pull, get_pull},
-   { "formula", PCHAR, set_formula, get_formula},
-};
+   {
+      { "active", PCHAR, set_active, get_active},
+      { "mode", PCHAR, set_mode, get_mode},
+      { "active_level", PCHAR, set_activeLevel, get_activeLevel},
+      { "pull", PCHAR, set_pull, get_pull},
+      { "formula", PCHAR, set_formula, get_formula},
+      { "min", PCHAR, NULL, getMinValue},
+      { "max", PCHAR, NULL, getMaxValue},
+   };
 
 static const driver_functions_t gpioFunctions = {gpio_open, gpio_write, gpio_read};
 
@@ -201,6 +209,7 @@ static size_t set_mode(peripheral_t * const pxPeripheral, char *pcValue)
    }
    return result;
 }
+
 static size_t get_mode(peripheral_t * const pxPeripheral, char *pcValue, const size_t xBytes)
 {
    peripheral_t * peripheral = (peripheral_t *) pxPeripheral;
@@ -214,11 +223,11 @@ static size_t get_mode(peripheral_t * const pxPeripheral, char *pcValue, const s
       result = 0;
    }
    else if ((gpioContext[gpioNum].inputMode == S_BINARY)
-      || (gpioContext[gpioNum].inputMode = S_DIMMER)
-      || (gpioContext[gpioNum].inputMode = S_MORZE)
-      || (gpioContext[gpioNum].inputMode = S_MULTIMETER))
+      || (gpioContext[gpioNum].inputMode == S_DIMMER)
+      || (gpioContext[gpioNum].inputMode == S_MORZE)
+      || (gpioContext[gpioNum].inputMode == S_MULTIMETER))
    {
-      result = snprintf(pcValue, xBytes, "%s", sensorList[gpioContext[peripheral->peripheralNum].inputMode].string);
+      result = snprintf(pcValue, xBytes, "\"%s\"", sensorList[gpioContext[peripheral->peripheralNum].inputMode].string);
    }
    return result;
 }
@@ -272,12 +281,12 @@ static size_t get_activeLevel(peripheral_t * const pxPeripheral, char *pcValue, 
    }
    else if (gpioContext[gpioNum].activeLevel == GPIO_ACTIVELOW)
    {
-      result = snprintf(pcValue, xBytes, "low");
+      result = snprintf(pcValue, xBytes, "\"low\"");
 
    }
    else if (gpioContext[gpioNum].activeLevel == GPIO_ACTIVEHIGH)
    {
-      result = snprintf(pcValue, xBytes, "high");
+      result = snprintf(pcValue, xBytes, "\"high\"");
    }
    return result;
 }
@@ -337,12 +346,12 @@ static size_t get_pull(peripheral_t * const pxPeripheral, char *pcValue, const s
    }
    else if (gpioContext[gpioNum].pull == GPIO_PULLLOW)
    {
-      result = snprintf(pcValue, xBytes, "low");
+      result = snprintf(pcValue, xBytes, "\"low\"");
 
    }
    else if (gpioContext[gpioNum].pull == GPIO_PULLHIGH)
    {
-      result = snprintf(pcValue, xBytes, "high");
+      result = snprintf(pcValue, xBytes, "\"high\"");
    }
    return result;
 }
@@ -368,6 +377,7 @@ static size_t gpio_open(peripheral_t * const pxPeripheral)
    }
    return result;
 }
+
 static size_t gpio_write(peripheral_t * const pxPeripheral, const void * pvBuffer, const size_t xBytes)
 {
    size_t result =0 ;
@@ -383,6 +393,19 @@ static size_t gpio_write(peripheral_t * const pxPeripheral, const void * pvBuffe
       {
          result = gpioSetValue(gpioNum, *value);
       }
+   }
+   return result;
+}
+
+static int gpioVarCallBack( void *user_data, const char *name, double *value ){
+
+   int result =  PARSER_FALSE;
+   uint16_t rawValue  = * (uint16_t *) user_data;
+   //   uint8_t expressionNumber = *( uint8_t *)(user_data);
+   if (strcmp(name, "x") == 0)
+   {
+      result =  PARSER_TRUE;
+      *value = (double) rawValue;
    }
    return result;
 }
@@ -403,7 +426,9 @@ static size_t gpio_read(peripheral_t * const pxPeripheral, void * const pvBuffer
    else if (peripheral->driver->dataType == UINT16 && xBytes >= sizeof(uint16_t))
    {
       osAcquireMutex(&gpioMutexes[gpioNum]);
+
       * value = gpioContext[gpioNum].value;
+
       osReleaseMutex(&gpioMutexes[gpioNum]);
 
       result = sizeof(uint16_t);
@@ -413,23 +438,141 @@ static size_t gpio_read(peripheral_t * const pxPeripheral, void * const pvBuffer
 
 
 /*
- * Not supported yet
+ * Test supported yet
  */
 static size_t set_formula(peripheral_t * const pxPeripheral, char *pcValue)
 {
-   (void) pxPeripheral;
-   (void) pcValue;
-   return 0;
+   peripheral_t * peripheral = (peripheral_t *) pxPeripheral;
+   uint8_t gpioNum = peripheral->peripheralNum;
+   size_t result =0;
+   size_t len = strlen(pcValue);
+   char* formula = osAllocMem(len+1);
+
+   if (formula != NULL)
+   {
+      strncpy(formula, pcValue, len);
+      formula[len] = '\0';
+      result = 1;
+   }
+   if (result == 1)
+   {
+      gpioContext[gpioNum].formula = formula;
+   }
+   else
+   {
+      osFreeMem(formula);
+   }
+   return result;
+}
+static size_t getMinValue(peripheral_t * const pxPeripheral, char *pcValue, const size_t xBytes)
+{
+   peripheral_t * peripheral = (peripheral_t *) pxPeripheral;
+   uint8_t gpioNum = peripheral->peripheralNum;
+   size_t result =0;
+   double dValue;
+   uint16_t dMinValue;
+   if (gpioNum < arraysize(inputPin))
+   {
+      switch (gpioContext[gpioNum].inputMode)
+      {
+      case S_BINARY:
+         result = snprintf(pcValue, xBytes, "0");
+         break;
+      case S_MORZE:
+         result = snprintf(pcValue, xBytes, "%"PRIu16"", MinValueClick);
+         break;
+      case S_DIMMER:
+         dMinValue =  dimmer_min_value;
+         if (gpioContext[gpioNum].formula!=NULL)
+         {
+            dValue = parse_expression_with_callbacks(gpioContext[gpioNum].formula , &gpioVarCallBack, NULL, &dMinValue);
+         }
+         else
+         {
+            dValue = dMinValue;
+         }
+         result = snprintf(pcValue, xBytes, "%"PRIu16"", (uint16_t) dValue);
+         break;
+      case S_MULTIMETER:
+         dMinValue =  0;
+         if (gpioContext[gpioNum].formula!=NULL)
+         {
+            dValue = parse_expression_with_callbacks(gpioContext[gpioNum].formula , &gpioVarCallBack, NULL, &dMinValue);
+         }
+         else
+         {
+            dValue = dMinValue;
+         }
+         result = snprintf(pcValue, xBytes, "%"PRIu16"", (uint16_t) dValue);
+         break;
+      default:
+         break;
+      }
+   }
+   return result;
+}
+static size_t getMaxValue(peripheral_t * const pxPeripheral, char *pcValue, const size_t xBytes)
+{
+   peripheral_t * peripheral = (peripheral_t *) pxPeripheral;
+   uint8_t gpioNum = peripheral->peripheralNum;
+   size_t result =0;
+   double dValue;
+   uint16_t dMaxValue;
+   if (gpioNum < arraysize(inputPin))
+   {
+      switch (gpioContext[gpioNum].inputMode)
+      {
+      case S_BINARY:
+         result = snprintf(pcValue, xBytes, "1");
+         break;
+      case S_MORZE:
+         result = snprintf(pcValue, xBytes, "%"PRIu16"", ShortShortLongClick);
+         break;
+      case S_DIMMER:
+         dMaxValue =  dimmer_max_value;
+         if (gpioContext[gpioNum].formula!=NULL)
+         {
+            dValue = parse_expression_with_callbacks(gpioContext[gpioNum].formula , &gpioVarCallBack, NULL, &dMaxValue);
+         }
+         else
+         {
+            dValue = dMaxValue;
+         }
+         result = snprintf(pcValue, xBytes, "%"PRIu16"", (uint16_t) dValue);
+         break;
+      case S_MULTIMETER:
+         dMaxValue = 4096;
+         if (gpioContext[gpioNum].formula!=NULL)
+         {
+            dValue = parse_expression_with_callbacks(gpioContext[gpioNum].formula , &gpioVarCallBack, NULL, &dMaxValue);
+         }
+         else
+         {
+            dValue = dMaxValue;
+         }
+         result = snprintf(pcValue, xBytes, "%"PRIu16"", (uint16_t) dValue);
+         break;
+      default:
+         break;
+      }
+   }
+   return result;
 }
 /*
- * Not supported yet
+ * Test support yet
  */
 static size_t get_formula(peripheral_t * const pxPeripheral, char *pcValue, const size_t xBytes)
 {
-   (void) pxPeripheral;
-   (void) pcValue;
-   (void) xBytes;
-   return 0;
+   peripheral_t * peripheral = (peripheral_t *) pxPeripheral;
+   uint8_t gpioNum = peripheral->peripheralNum;
+   size_t result =0;
+
+   if (gpioContext[gpioNum].formula != NULL)
+   {
+      snprintf(pcValue, xBytes, "\"%s\"", gpioContext[gpioNum].formula);
+      result = strlen(pcValue);
+   }
+   return result;
 }
 
 static size_t set_active( peripheral_t * const pxPeripheral, char *pcValue )
@@ -560,6 +703,7 @@ static error_t startPeripheral(peripheral_t * peripheral)
          GPIO_InitStruct.Pull = gpioContext[gpioNum].pull;
          HAL_GPIO_Init(inputPort[gpioNum], &GPIO_InitStruct);
          gpioStatus[gpioNum] |= DEV_STAT_MANAGED;
+         adc_used++;
       }
       else
       {
@@ -573,6 +717,11 @@ static error_t startPeripheral(peripheral_t * peripheral)
    if (error == NO_ERROR)
    {
       gpioStatus[gpioNum] |= DEV_STAT_ONLINE;
+   }
+   if (adc_used>0)
+   {
+      MX_ADC1_Init();
+      __ADC1_CLK_ENABLE();
    }
    return error;
 }
@@ -706,11 +855,34 @@ static uint16_t GetADCValue(uint32_t Channel, int Count)
    return (uint16_t) (val / Count);
 }
 
+static void setVal(uint32_t inputNum, uint16_t value)
+{
+   double dValue;
+   osAcquireMutex(&gpioMutexes[inputNum]);
+
+   if (gpioContext[inputNum].formula != NULL)
+   {
+      dValue = parse_expression_with_callbacks(gpioContext[inputNum].formula , &gpioVarCallBack, NULL, &value);
+      if (!isnan(dValue))
+      {
+         gpioContext[inputNum].value = (uint16_t) dValue;
+      }
+
+   }
+   else
+   {
+      gpioContext[inputNum].value = value;
+   }
+   gpioStatus[inputNum] |= DEV_STAT_READBLE;
+
+   osReleaseMutex(&gpioMutexes[inputNum]);
+}
+
 static void inputTask(void * pvParameters)
 {
    (void) pvParameters;
 
-   volatile uint32_t i;
+   uint32_t i;
    clicType tempClickValue;
    uint16_t tempADCValue;
    uint16_t tempVal;
@@ -736,13 +908,14 @@ static void inputTask(void * pvParameters)
                   if (gpioContext[i].bt_time>debounce)
                   {
 
-                     osAcquireMutex(&gpioMutexes[i]);
-
-                     gpioContext[i].value = 0x01;
-                     /* We can only read value */
-                     gpioStatus[i] |= DEV_STAT_READBLE;
-
-                     osReleaseMutex(&gpioMutexes[i]);
+                     setVal(i, 0x01);
+                     //                     osAcquireMutex(&gpioMutexes[i]);
+                     //
+                     //                     gpioContext[i].value = 0x01;
+                     //                     /* We can only read value */
+                     //                     gpioStatus[i] |= DEV_STAT_READBLE;
+                     //
+                     //                     osReleaseMutex(&gpioMutexes[i]);
                      gpioContext[i].bt_release_time=0;
                   }
                }
@@ -754,13 +927,14 @@ static void inputTask(void * pvParameters)
                   }
                   if (gpioContext[i].bt_release_time>debounce)
                   {
-                     osAcquireMutex(&gpioMutexes[i]);
-
-                     gpioContext[i].value = 0x00;
-                     /* We can only read value*/
-                     gpioStatus[i] |= DEV_STAT_READBLE;
-
-                     osReleaseMutex(&gpioMutexes[i]);
+                     setVal(i, 0x00);
+                     //                     osAcquireMutex(&gpioMutexes[i]);
+                     //
+                     //                     gpioContext[i].value = 0x00;
+                     //                     /* We can only read value*/
+                     //                     gpioStatus[i] |= DEV_STAT_READBLE;
+                     //
+                     //                     osReleaseMutex(&gpioMutexes[i]);
                      gpioContext[i].bt_time=0;
                   }
                }
@@ -806,14 +980,14 @@ static void inputTask(void * pvParameters)
                         gpioContext[i].bt_cnt++;
                         gpioContext[i].direction = tempClickValue;
                      }
+                     setVal(i,currentVal );
+                     //                     osAcquireMutex(&gpioMutexes[i]);
 
-                     osAcquireMutex(&gpioMutexes[i]);
-
-                     gpioContext[i].value = currentVal;
+                     //                     gpioContext[i].value = currentVal;
                      //                  /* We can read and write value*/
                      //                  gpioStatus[i] |= DEV_STAT_READBLE | DEV_STAT_WRITEBLE;
 
-                     osReleaseMutex(&gpioMutexes[i]);
+                     //                     osReleaseMutex(&gpioMutexes[i]);
 
                      if (gpioContext[i].direction != PlatoValue && currentVal == 0 )
                      {
@@ -845,33 +1019,36 @@ static void inputTask(void * pvParameters)
                         osAcquireMutex(&gpioMutexes[i]);
 
                         gpioContext[i].bt_result = gpioContext[i].value;
-                        gpioContext[i].value = dimmer_min_value;
+                        //                        gpioContext[i].value = dimmer_min_value;
                         //                     /* We can read and write value*/
                         //                     gpioStatus[i] |= DEV_STAT_READBLE | DEV_STAT_WRITEBLE;
 
                         osReleaseMutex(&gpioMutexes[i]);
+                        setVal(i, dimmer_min_value);
                      }
                      else if(tempVal == 0 && (gpioContext[i].bt_result > 0))
                      {
                         //Если есть сохраненное значение, то восстанавливаем
-                        osAcquireMutex(&gpioMutexes[i]);
+                        setVal(i, gpioContext[i].bt_result);
+                        //                        osAcquireMutex(&gpioMutexes[i]);
 
-                        gpioContext[i].value = gpioContext[i].bt_result;
+                        //                        gpioContext[i].value = gpioContext[i].bt_result;
                         //                     /* We can read and write value*/
                         //                     gpioStatus[i] |= DEV_STAT_READBLE | DEV_STAT_WRITEBLE;
 
-                        osReleaseMutex(&gpioMutexes[i]);
+                        //                        osReleaseMutex(&gpioMutexes[i]);
                      }
                      else
                      {
                         // Иначе включаем на всю
-                        osAcquireMutex(&gpioMutexes[i]);
-                        gpioContext[i].value = dimmer_max_value;
+                        setVal(i, dimmer_max_value);
+                        //                        osAcquireMutex(&gpioMutexes[i]);
+                        //                        gpioContext[i].value = dimmer_max_value;
 
                         //                     /* We can read and write value*/
                         //                     gpioStatus[i] |= DEV_STAT_READBLE | DEV_STAT_WRITEBLE;
 
-                        osReleaseMutex(&gpioMutexes[i]);
+                        //                        osReleaseMutex(&gpioMutexes[i]);
                      }
                      gpioContext[i].bt_cnt = 0;
                      gpioContext[i].bt_time = 0;
@@ -925,13 +1102,14 @@ static void inputTask(void * pvParameters)
                   tempClickValue = check_bit_map(gpioContext[i].bt_result, gpioContext[i].bt_cnt);
                   if (tempClickValue)
                   {
-                     osAcquireMutex(&gpioMutexes[i]);
+                     setVal(i, tempClickValue);
+                     //                     osAcquireMutex(&gpioMutexes[i]);
 
-                     gpioContext[i].value = tempClickValue;
+                     //                     gpioContext[i].value = tempClickValue;
                      //                  /* We can read and write value*/
                      //                  gpioStatus[i] |= DEV_STAT_READBLE | DEV_STAT_WRITEBLE;
 
-                     osReleaseMutex(&gpioMutexes[i]);
+                     //                     osReleaseMutex(&gpioMutexes[i]);
                   }
                   gpioContext[i].bt_time=0;
                   gpioContext[i].bt_cnt=0;
@@ -951,12 +1129,13 @@ static void inputTask(void * pvParameters)
             {
                tempADCValue = GetADCValue(adcChannel[i], 5);
 
-               osAcquireMutex(&gpioMutexes[i]);
-               gpioContext[i].value = tempADCValue;
+               setVal(i, tempADCValue);
+               //               osAcquireMutex(&gpioMutexes[i]);
+               //               gpioContext[i].value = tempADCValue;
                /* We can only read value*/
-               gpioStatus[i] |= DEV_STAT_READBLE;
+               //               gpioStatus[i] |= DEV_STAT_READBLE;
 
-               osReleaseMutex(&gpioMutexes[i]);
+               //               osReleaseMutex(&gpioMutexes[i]);
             }
 
             if (gpioContext[i].prevValue!=gpioContext[i].value)
@@ -983,7 +1162,7 @@ static error_t initInputs (void)
    error_t error = NO_ERROR;
    if (pInputTask == NULL)
    {
-      pInputTask = osCreateTask("inputs", inputTask, NULL, configMINIMAL_STACK_SIZE, 3);
+      pInputTask = osCreateTask("inputs", inputTask, NULL, configMINIMAL_STACK_SIZE*4, 3);
    }
    if (pInputTask == NULL)
    {

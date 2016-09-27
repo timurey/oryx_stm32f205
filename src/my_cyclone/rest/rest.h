@@ -10,7 +10,7 @@
 
 #include "httpd.h"
 #include "jsmn_extras.h"
-#define SIZE_OF_REST_BUFFER 4096
+#define SIZE_OF_REST_BUFFER 8192
 
 //#define REST_JSON_TYPE JSON
 //#define REST_JSON_TYPE JSON_API
@@ -31,7 +31,7 @@ typedef error_t (*tGetRestHandler)(HttpConnection *connection, RestApi_t * rest)
 typedef error_t (*tPostRestHandler)(HttpConnection *connection, RestApi_t * rest);
 typedef error_t (*tPutRestHandler)(HttpConnection *connection, RestApi_t * rest);
 typedef error_t (*tDeleteRestHandler)(HttpConnection *connection, RestApi_t * rest);
-
+#if 0
 #define PRIlevel0 "\r\n"
 #define PRIlevel1 "\r\n\t"
 #define PRIlevel2 "\r\n\t\t"
@@ -39,7 +39,23 @@ typedef error_t (*tDeleteRestHandler)(HttpConnection *connection, RestApi_t * re
 #define PRIlevel4 "\r\n\t\t\t\t"
 #define PRIlevel5 "\r\n\t\t\t\t\t"
 #define PRIlevel6 "\r\n\t\t\t\t\t\t"
-
+#elif 0
+#define PRIlevel0 "\r\n"
+#define PRIlevel1 "\r\n"
+#define PRIlevel2 "\r\n"
+#define PRIlevel3 "\r\n"
+#define PRIlevel4 "\r\n"
+#define PRIlevel5 "\r\n"
+#define PRIlevel6 "\r\n"
+#else
+#define PRIlevel0 ""
+#define PRIlevel1 ""
+#define PRIlevel2 ""
+#define PRIlevel3 ""
+#define PRIlevel4 ""
+#define PRIlevel5 ""
+#define PRIlevel6 ""
+#endif
 #define rest_200_ok(a, b) rest_answer(a, b, 200)
 #define rest_201_created(a, b) rest_answer(a, b, 201)
 #define rest_300_multiple_choices(a, b) rest_answer(a, b, 300)
@@ -85,7 +101,7 @@ static const HttpMethodCodeDesc methodCodeList[] =
 };
 typedef struct
 {
-   const char *restClassName;
+   const char *restClass;
    const char *restClassPath;
    const tInitRestHandler restInitClassHadler;
    const tDeinitRestHandler restDenitClassHadler;
@@ -116,7 +132,7 @@ error_t findRestHandler(RestApi_t* RestApi);
 #define register_rest_function(name, path, init_f, deinit_f, get_f, post_f, put_f, delete_f) \
    const restFunctions handler_rest_##name __attribute__ ((section ("rest_functions"))) = \
 { \
-  .restClassName = str(name), \
+  .restClass = str(name), \
   .restClassPath = path, \
   .restInitClassHadler = init_f, \
   .restDenitClassHadler = deinit_f, \

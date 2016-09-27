@@ -191,9 +191,10 @@ static int snprintfSensor(char * bufer, size_t maxLen, sensor_t * sensor, int re
    else if (restVersion == 2)
    {
       p += snprintf(bufer + p, maxLen - p, ""PRIlevel2"{");
-      p += snprintf(bufer + p, maxLen - p, ""PRIlevel3"\"type\":\"%s\",", sensorList[sensor->type].string);
+      p += snprintf(bufer + p, maxLen - p, ""PRIlevel3"\"type\":\"sensor\",");
       p += snprintf(bufer + p, maxLen - p, ""PRIlevel3"\"id\":\"%s\",", sensor->device + 1);
       p += snprintf(bufer + p, maxLen - p, ""PRIlevel3"\"attributes\":{");
+      p += snprintf(bufer + p, maxLen - p, ""PRIlevel4"\"type\":\"%s\",", sensorList[sensor->type].string);
       p += snprintf(bufer + p, maxLen - p, ""PRIlevel4"\"name\":\"%s\",", sensor->name);
       p += snprintf(bufer + p, maxLen - p, ""PRIlevel4"\"place\":\"%s\",", sensor->place);
       p += snprintf(bufer + p, maxLen - p, ""PRIlevel4"\"value\":");
@@ -231,21 +232,51 @@ static int snprintfSensor(char * bufer, size_t maxLen, sensor_t * sensor, int re
       p += snprintf(bufer + p, maxLen - p, ""PRIlevel3"\"online\":");
       p += driver_getproperty(&sensor->fd, "active", bufer + p, maxLen - p);
       p += snprintf(bufer + p, maxLen - p, ",");
+      saved_p = p;
+
+      p += snprintf(bufer + p, maxLen - p, ""PRIlevel3"\"min\":");
+      changed_p = driver_getproperty(&sensor->fd, "min", bufer + p, maxLen - p);
+      if (changed_p > 0)
+      {
+         p += changed_p;
+         p += snprintf(bufer + p, maxLen - p, ",");
+      }
+      else
+      {
+         p = saved_p;
+      }
+      saved_p = p;
+
+      p += snprintf(bufer + p, maxLen - p, ""PRIlevel3"\"max\":");
+      changed_p = driver_getproperty(&sensor->fd, "max", bufer + p, maxLen - p);
+      if (changed_p > 0)
+      {
+         p += changed_p;
+         p += snprintf(bufer + p, maxLen - p, ",");
+      }
+      else
+      {
+         p = saved_p;
+      }
+
       p += snprintf(bufer + p, maxLen - p, ""PRIlevel3"\"parameters\":[");
       for (propNum = 0; propNum < sensor->fd.driver->propertyList->numOfProperies; propNum++)
       {
          property = (char*) sensor->fd.driver->propertyList->properties[propNum].property;
-         saved_p = p;
-         p += snprintf(bufer + p, maxLen - p, ""PRIlevel4"{"PRIlevel5"\"%s\":\"", property);
-         changed_p = driver_getproperty(&sensor->fd, property, bufer + p, maxLen - p);
-         if (changed_p > 0)
+         if (! ((strcmp(property, "min") == 0) || strcmp(property, "max")==0) )
          {
-            p += changed_p;
-            p += snprintf(bufer + p, maxLen - p, "\""PRIlevel4"},");
-         }
-         else
-         {
-            p = saved_p;
+            saved_p = p;
+            p += snprintf(bufer + p, maxLen - p, ""PRIlevel4"{"PRIlevel5"\"name\":\"%s\",\"value\":", property);
+            changed_p = driver_getproperty(&sensor->fd, property, bufer + p, maxLen - p);
+            if (changed_p > 0)
+            {
+               p += changed_p;
+               p += snprintf(bufer + p, maxLen - p, ""PRIlevel4"},");
+            }
+            else
+            {
+               p = saved_p;
+            }
          }
       }
       p--;
@@ -256,23 +287,54 @@ static int snprintfSensor(char * bufer, size_t maxLen, sensor_t * sensor, int re
    {
       p += snprintf(bufer + p, maxLen - p, ""PRIlevel4"\"online\":");
       p += driver_getproperty(&sensor->fd, "active", bufer + p, maxLen - p);
-
       p += snprintf(bufer + p, maxLen - p, ",");
+
+      saved_p = p;
+
+      p += snprintf(bufer + p, maxLen - p, ""PRIlevel4"\"min\":");
+      changed_p = driver_getproperty(&sensor->fd, "min", bufer + p, maxLen - p);
+      if (changed_p > 0)
+      {
+         p += changed_p;
+         p += snprintf(bufer + p, maxLen - p, ",");
+      }
+      else
+      {
+         p = saved_p;
+      }
+      saved_p = p;
+
+      p += snprintf(bufer + p, maxLen - p, ""PRIlevel4"\"max\":");
+      changed_p = driver_getproperty(&sensor->fd, "max", bufer + p, maxLen - p);
+      if (changed_p > 0)
+      {
+         p += changed_p;
+         p += snprintf(bufer + p, maxLen - p, ",");
+      }
+      else
+      {
+         p = saved_p;
+      }
+
       p += snprintf(bufer + p, maxLen - p, ""PRIlevel4"\"parameters\":[");
+
       for (propNum = 0; propNum < sensor->fd.driver->propertyList->numOfProperies; propNum++)
       {
          property = (char*) sensor->fd.driver->propertyList->properties[propNum].property;
-         saved_p = p;
-         p += snprintf(bufer + p, maxLen - p, ""PRIlevel5"{"PRIlevel6"\"%s\":\"", property);
-         changed_p = driver_getproperty(&sensor->fd, property, bufer + p, maxLen - p);
-         if (changed_p > 0)
+         if (! ((strcmp(property, "min") == 0) || strcmp(property, "max")==0) )
          {
-            p += changed_p;
-            p += snprintf(bufer + p, maxLen - p, "\""PRIlevel5"},");
-         }
-         else
-         {
-            p = saved_p;
+            saved_p = p;
+            p += snprintf(bufer + p, maxLen - p, ""PRIlevel5"{"PRIlevel6"\"name\":\"%s\",\"value\":", property);
+            changed_p = driver_getproperty(&sensor->fd, property, bufer + p, maxLen - p);
+            if (changed_p > 0)
+            {
+               p += changed_p;
+               p += snprintf(bufer + p, maxLen - p, ""PRIlevel5"},");
+            }
+            else
+            {
+               p = saved_p;
+            }
          }
       }
       p--;
@@ -354,10 +416,12 @@ static error_t sensCommonGetHandler(HttpConnection *connection, RestApi_t* RestA
       return rest_200_ok(connection, &restBuffer[0]);
       break;
    case ERROR_UNSUPPORTED_REQUEST:
+      connection->response.contentType = mimeGetType(".txt");
       return rest_400_bad_request(connection, "400 Bad Request.\r\n");
       break;
    case ERROR_NOT_FOUND:
    default:
+      connection->response.contentType = mimeGetType(".txt");
       return rest_404_not_found(connection, "404 Not Found.\r\n");
       break;
    }
@@ -365,11 +429,153 @@ static error_t sensCommonGetHandler(HttpConnection *connection, RestApi_t* RestA
    return error;
 }
 
+static mysensor_sensor_t findSensorType(char * name, size_t len)
+{
+   mysensor_sensor_t i;
+   for ( i = 0; i < MYSENSOR_ENUM_LEN; i++) // Contain length of enum
+   {
+      if (*sensorList[i].string != '\0')
+      {
+         if (strlen(sensorList[i].string) == len)
+         {
+            if (strncmp(sensorList[i].string, name, strlen(sensorList[i].string)) == 0) // Exclude '/' in className
+            {
+               break;
+            }
+         }
+      }
+   }
+   return i;
+}
+
+static int sprintf_header(char * buffer, int maxLen, mysensor_sensor_t sensorType, int restVersion)
+{
+   int length = 0;
+   if (restVersion == 1)
+   {
+      length = snprintf(buffer, maxLen, "{"PRIlevel1"\"%s\":[", sensorList[sensorType].string);
+   }
+
+   else if (restVersion == 2)
+   {
+      length = snprintf(buffer, maxLen, "{"PRIlevel1"\"data\":[");
+   }
+   return length;
+}
+
+static int sprintf_footer(char * buffer, int maxLen, mysensor_sensor_t sensorType __attribute__((unused)), int restVersion __attribute__((unused)))
+{
+   int length ;
+   length = snprintf(buffer, maxLen, ""PRIlevel1"]"PRIlevel0"}\r\n");
+   return length;
+}
+
 error_t restGetSensors(HttpConnection *connection, RestApi_t* RestApi)
 {
 
    error_t error = ERROR_FILE_NOT_FOUND;
+   error_t dError = ERROR_FILE_NOT_FOUND;
+   mysensor_sensor_t sensType = S_INPUT;
+   int p = 0;
+   size_t maxLen = arraysize(restBuffer);
 
+   // print sensor with id RestApi->objectId
+   if (RestApi->classNameLen > 1)
+   {
+      sensType = findSensorType(RestApi->className+1, RestApi->classNameLen-1);
+   }
+   p += sprintf_header(&restBuffer[0], arraysize(restBuffer) - p, sensType, RestApi->restVersion);
+
+   if (RestApi->objectIdLen > 0)
+   {
+      if (sensType < MYSENSOR_ENUM_LEN)
+      {
+         if (RestApi->objectId != NULL)
+         {
+            for (sensor_t * curr_sensor = &sensors[0]; curr_sensor < &sensors[arraysize(sensors)]; curr_sensor++)
+            {
+               if (curr_sensor->device != NULL)
+               {
+                  if ((curr_sensor->type == sensType) && (strncmp(curr_sensor->device, RestApi->objectId, RestApi->objectIdLen) == 0))
+                  {
+                     dError = driver_open(&curr_sensor->fd, RestApi->objectId, POPEN_READ);
+
+                     if (dError == NO_ERROR)
+                     {
+                        error = NO_ERROR;
+                        p += snprintfSensor(&restBuffer[p], maxLen - p, curr_sensor, RestApi->restVersion);
+                        driver_close(&curr_sensor->fd);
+                        break;
+                     }
+                  }
+               }
+            }
+         }
+      }
+   }
+   else if (RestApi->classNameLen > 0)
+   {
+      //print all sensors with type RestApi->className
+      if (RestApi->className != NULL)
+      {
+         for (sensor_t * curr_sensor = &sensors[0]; curr_sensor < &sensors[arraysize(sensors)]; curr_sensor++)
+         {
+            if (curr_sensor->device != NULL)
+            {
+               if (curr_sensor->type == sensType)
+               {
+                  dError = driver_open(&curr_sensor->fd, curr_sensor->device, POPEN_READ);
+
+                  if (dError == NO_ERROR)
+                  {
+                     error = NO_ERROR;
+
+                     p += snprintfSensor(&restBuffer[p], maxLen - p, curr_sensor, RestApi->restVersion);
+                     driver_close(&curr_sensor->fd);
+
+                  }
+               }
+            }
+         }
+      }
+   }
+   else
+   {
+      //print all sensors
+      //not supported for restapi v1
+      if (RestApi->restVersion == 1)
+      {
+         error = ERROR_UNSUPPORTED_REQUEST;
+      }
+      else
+      {
+         for (sensor_t * curr_sensor = &sensors[0]; curr_sensor < &sensors[arraysize(sensors)]; curr_sensor++)
+         {
+            if (curr_sensor->device != NULL)
+            {
+               dError = driver_open(&curr_sensor->fd, curr_sensor->device, POPEN_READ);
+
+               if (dError == NO_ERROR)
+               {
+                  error = NO_ERROR;
+
+                  p += snprintfSensor(&restBuffer[p], maxLen - p, curr_sensor, RestApi->restVersion);
+                  driver_close(&curr_sensor->fd);
+               }
+            }
+         }
+      }
+   }
+
+   if (error == NO_ERROR)
+   {
+      p--;
+   }
+
+   p+=sprintf_footer(&restBuffer[p], arraysize(restBuffer) - p, sensType, RestApi->restVersion);
+
+
+#if 0
    /* Check, what sensor type is defined in request */
    if (RestApi->classNameLen > 0)
    {
@@ -387,16 +593,26 @@ error_t restGetSensors(HttpConnection *connection, RestApi_t* RestApi)
    }
    else
    {
+
       /* Print all avalible sensors*/
       error = sprintfListSensors(connection, RestApi);
+
+
    }
+#endif
    switch (error)
    {
+   case NO_ERROR:
+      connection->response.contentType = mimeGetType(".apijson");
+      error = rest_200_ok(connection, &restBuffer[0]);
+      break;
    case ERROR_UNSUPPORTED_REQUEST:
+      connection->response.contentType = mimeGetType(".txt");
       error = rest_400_bad_request(connection, "400 Bad Request.\r\n");
       break;
    case ERROR_NOT_FOUND:
    default:
+      connection->response.contentType = mimeGetType(".txt");
       error = rest_404_not_found(connection, "404 Not Found.\r\n");
       break;
    }
@@ -467,10 +683,12 @@ error_t restPostSensors(HttpConnection *connection, RestApi_t* RestApi)
       return rest_409_conflict(connection, "409 Conflict.\r\n");
       break;
    case ERROR_UNSUPPORTED_REQUEST:
+      connection->response.contentType = mimeGetType(".txt");
       return rest_400_bad_request(connection, "400 Bad Request.\r\n");
       break;
    case ERROR_NOT_FOUND:
    default:
+      connection->response.contentType = mimeGetType(".txt");
       return rest_404_not_found(connection, "404 Not Found.\r\n");
       break;
    }
@@ -530,10 +748,12 @@ error_t restPutSensors(HttpConnection *connection, RestApi_t* RestApi) {
       return rest_200_ok(connection, &restBuffer[0]);
       break;
    case ERROR_UNSUPPORTED_REQUEST:
+      connection->response.contentType = mimeGetType(".txt");
       return rest_400_bad_request(connection, "400 Bad Request.\r\n");
       break;
    case ERROR_NOT_FOUND:
    default:
+      connection->response.contentType = mimeGetType(".txt");
       return rest_404_not_found(connection, "404 Not Found.\r\n");
       break;
    }
@@ -779,14 +999,13 @@ static error_t parseJSONSensors(jsmnParserStruct * jsonParser, configMode mode)
    char deviceId[64];
 
    char parameter[64];
-
-   char * pcParameter;
+   char value[64];
 
    char * name = &parameter[0]; /* Use bufer for copying name. */
    char * place = &parameter[0]; /* And place too. */
    char * type = &parameter[0]; /* And type %-) */
 
-   char value[64];
+
    error_t error = ERROR_INVALID_RECIPIENT;
    int parameters;
 
@@ -872,6 +1091,7 @@ static error_t parseJSONSensors(jsmnParserStruct * jsonParser, configMode mode)
                /*Setting up parameters*/
                while (parameters)
                {
+#if 0
                   /* Damn!!! We can't find name of the odject by XJOSNPATH
                    * try to get it manually.
                    * It's not clean, but it should work */
@@ -881,10 +1101,17 @@ static error_t parseJSONSensors(jsmnParserStruct * jsonParser, configMode mode)
                   case RESTv2Path: snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.data[%"PRIu32"].attributes.parameters[%"PRIu32"]", sensorNum, parameterNum); break;
                   default: jsonPATH[0]='\0';
                   }
-
+#endif
+                  switch (path_type)
+                  {
+                  case CONFIGURE_Path: snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.sensors[%"PRIu32"].parameters[%"PRIu32"].name", sensorNum, parameterNum); break;
+                  case RESTv2Path: snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.data[%"PRIu32"].attributes.parameters[%"PRIu32"].name", sensorNum, parameterNum); break;
+                  default: jsonPATH[0]='\0';
+                  }
                   parameters = jsmn_get_string(jsonParser, &jsonPATH[0], &parameter[0], arraysize(parameter));
                   if (parameters)
                   {
+#if 0
                      pcParameter = strchr(parameter, '\"'); /*Find opening quote */
 
                      if (pcParameter)
@@ -898,11 +1125,17 @@ static error_t parseJSONSensors(jsmnParserStruct * jsonParser, configMode mode)
                      case RESTv2Path: snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.data[%"PRIu32"].attributes.parameters[%"PRIu32"].%s", sensorNum, parameterNum, pcParameter); break;
                      default: jsonPATH[0]='\0';
                      }
-
+#endif
+                     switch (path_type)
+                     {
+                     case CONFIGURE_Path: snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.sensors[%"PRIu32"].parameters[%"PRIu32"].value", sensorNum, parameterNum);break;
+                     case RESTv2Path: snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.data[%"PRIu32"].attributes.parameters[%"PRIu32"].value", sensorNum, parameterNum); break;
+                     default: jsonPATH[0]='\0';
+                     }
                      parameters = jsmn_get_string(jsonParser, &jsonPATH[0], &value[0], arraysize(value));
                      if (parameters)
                      {
-                        driver_setproperty(&(currentSensor->fd), pcParameter, &value[0]);
+                        driver_setproperty(&(currentSensor->fd), &parameter[0], &value[0]);
                      }
                      parameterNum++;
                   }

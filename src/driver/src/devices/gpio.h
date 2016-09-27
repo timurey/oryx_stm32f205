@@ -100,8 +100,8 @@ typedef enum {
 #define GPIO_PIN_ISTATE(PORT,PIN)  &(*(__I uint32_t *)(PERIPH_BB_BASE + ((((uint32_t)&((PORT)->IDR)) - PERIPH_BASE) << 5) + ((PIN) << 2)))
 #define GPIO_PIN_ISET(PORT,PIN)  (*(__I uint32_t *)(PERIPH_BB_BASE + ((((uint32_t)&((PORT)->ODR)) - PERIPH_BASE) << 5) + ((PIN) << 2)))
 
-#define IPNUT_PIN_STATE(a)   GPIO_PIN_ISTATE(inputPorts[a], inputPin[a])
-#define IPNUT_PIN_SET(a)   GPIO_PIN_ISET(inputPorts[a], inputPin[a])
+#define IPNUT_PIN_STATE(a)   GPIO_PIN_ISTATE(inputPort[a], inputPin[a])
+#define IPNUT_PIN_SET(a)   GPIO_PIN_ISET(inputPort[a], inputPin[a])
 
 #endif /* MY_CYCLONE_REST_SENSORS_INPUT_H_ */
 

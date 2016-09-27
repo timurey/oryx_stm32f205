@@ -31,7 +31,7 @@ static int printfRestClassMethods (char * bufer, int maxLen, restFunctions * cur
    if (restVersion == 1)
    {
 
-      p+=snprintf(bufer+p, maxLen-p, "{\r\n\"path\": \"%s/v1%s\",\r\n\"name\":\"%s\",\r\n\"method\" : [", &restPrefix[0],cur_rest->restClassPath,cur_rest->restClassName);
+      p+=snprintf(bufer+p, maxLen-p, "{\r\n\"path\": \"%s/v1%s\",\r\n\"name\":\"%s\",\r\n\"method\" : [", &restPrefix[0],cur_rest->restClassPath,cur_rest->restClass);
       if (cur_rest->restGetClassHadler != NULL)
       {
          p+=snprintf(bufer+p, maxLen-p, "\"GET\",");
@@ -60,7 +60,7 @@ static int printfRestClassMethods (char * bufer, int maxLen, restFunctions * cur
    }
    else if (restVersion == 2)
    {
-      p+=snprintf(bufer+p, maxLen-p, "\"%s\": {\"links\": {\"related\": \"%s/v2%s\"}}",cur_rest->restClassName, &restPrefix[0], cur_rest->restClassPath);
+      p+=snprintf(bufer+p, maxLen-p, "\"%s\": {\"links\": {\"related\": \"%s/v2%s\"}}",cur_rest->restClass, &restPrefix[0], cur_rest->restClassPath);
    }
    return p;
 }

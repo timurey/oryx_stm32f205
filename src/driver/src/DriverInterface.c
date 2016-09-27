@@ -311,7 +311,7 @@ size_t driver_getproperty( peripheral_t * pxPeripheral, char * pcRequest, char *
    else
    {
       /*If request is common*/
-
+      if (strcmp(pcRequest, "active") == 0)
       /*Common comands*/
       if (*(peripheral->status) == DEV_STAT_ACTIVE)
       {
