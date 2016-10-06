@@ -99,7 +99,7 @@ register_variables_functions (sensors, &sensorsGetValue);
 static mysensor_sensor_t findTypeByName (const char * type);
 static error_t parseJSONSensors (jsmnParserStruct * jsonParser, configMode mode);
 static sensor_t *findSensor (char* pxdeviceName);
-
+#if 0
 static int sprintfSensor (char * bufer, int maxLen, mysensor_sensor_t curr_list_el, int restVersion)
 {
    int p = 0;
@@ -158,7 +158,7 @@ static error_t sprintfListSensors (HttpConnection *connection, RestApi_t* RestAp
 
    return error;
 }
-
+#endif
 error_t restInitSensors(void) {
    error_t error = NO_ERROR;
    return error;
@@ -345,7 +345,7 @@ static int snprintfSensor(char * bufer, size_t maxLen, sensor_t * sensor, int re
 
    return p;
 }
-
+#if 0
 static error_t sensCommonGetHandler(HttpConnection *connection, RestApi_t* RestApi, mysensor_sensor_t sens_type)
 {
    int p = 0;
@@ -428,6 +428,7 @@ static error_t sensCommonGetHandler(HttpConnection *connection, RestApi_t* RestA
 
    return error;
 }
+#endif
 
 static mysensor_sensor_t findSensorType(char * name, size_t len)
 {
@@ -438,7 +439,7 @@ static mysensor_sensor_t findSensorType(char * name, size_t len)
       {
          if (strlen(sensorList[i].string) == len)
          {
-            if (strncmp(sensorList[i].string, name, strlen(sensorList[i].string)) == 0) // Exclude '/' in className
+            if (strncmp(sensorList[i].string, name, len) == 0) // Exclude '/' in className
             {
                break;
             }
@@ -447,7 +448,20 @@ static mysensor_sensor_t findSensorType(char * name, size_t len)
    }
    return i;
 }
+static int sprintf_single_header(char * buffer, int maxLen, mysensor_sensor_t sensorType, int restVersion)
+{
+   int length = 0;
+   if (restVersion == 1)
+   {
+      length = snprintf(buffer, maxLen, "{"PRIlevel1"\"%s\":{", sensorList[sensorType].string);
+   }
 
+   else if (restVersion == 2)
+   {
+      length = snprintf(buffer, maxLen, "{"PRIlevel1"\"data\":");
+   }
+   return length;
+}
 static int sprintf_header(char * buffer, int maxLen, mysensor_sensor_t sensorType, int restVersion)
 {
    int length = 0;
@@ -463,6 +477,12 @@ static int sprintf_header(char * buffer, int maxLen, mysensor_sensor_t sensorTyp
    return length;
 }
 
+static int sprintf_single_footer(char * buffer, int maxLen, mysensor_sensor_t sensorType __attribute__((unused)), int restVersion __attribute__((unused)))
+{
+   int length ;
+   length = snprintf(buffer, maxLen, PRIlevel1"}\r\n");
+   return length;
+}
 static int sprintf_footer(char * buffer, int maxLen, mysensor_sensor_t sensorType __attribute__((unused)), int restVersion __attribute__((unused)))
 {
    int length ;
@@ -470,136 +490,176 @@ static int sprintf_footer(char * buffer, int maxLen, mysensor_sensor_t sensorTyp
    return length;
 }
 
-error_t restGetSensors(HttpConnection *connection, RestApi_t* RestApi)
+static error_t sensor_open (sensor_t **sensor, const char * sensorPath, const size_t sensorPathLength, const periphOpenType mode)
 {
+   error_t sError = ERROR_FILE_NOT_FOUND;
 
-   error_t error = ERROR_FILE_NOT_FOUND;
-   error_t dError = ERROR_FILE_NOT_FOUND;
-   mysensor_sensor_t sensType = S_INPUT;
-   int p = 0;
-   size_t maxLen = arraysize(restBuffer);
-
-   // print sensor with id RestApi->objectId
-   if (RestApi->classNameLen > 1)
+   for (sensor_t * curr_sensor = &sensors[0]; curr_sensor < &sensors[arraysize(sensors)]; curr_sensor++)
    {
-      sensType = findSensorType(RestApi->className+1, RestApi->classNameLen-1);
-   }
-   p += sprintf_header(&restBuffer[0], arraysize(restBuffer) - p, sensType, RestApi->restVersion);
-
-   if (RestApi->objectIdLen > 0)
-   {
-      if (sensType < MYSENSOR_ENUM_LEN)
+      if (curr_sensor->device != NULL)
       {
-         if (RestApi->objectId != NULL)
+         if (strncmp(curr_sensor->device, sensorPath, sensorPathLength) == 0)
          {
-            for (sensor_t * curr_sensor = &sensors[0]; curr_sensor < &sensors[arraysize(sensors)]; curr_sensor++)
+            sError = driver_open(&curr_sensor->fd, sensorPath, mode);
+            if (sError == NO_ERROR)
             {
-               if (curr_sensor->device != NULL)
-               {
-                  if ((curr_sensor->type == sensType) && (strncmp(curr_sensor->device, RestApi->objectId, RestApi->objectIdLen) == 0))
-                  {
-                     dError = driver_open(&curr_sensor->fd, RestApi->objectId, POPEN_READ);
 
-                     if (dError == NO_ERROR)
-                     {
-                        error = NO_ERROR;
-                        p += snprintfSensor(&restBuffer[p], maxLen - p, curr_sensor, RestApi->restVersion);
-                        driver_close(&curr_sensor->fd);
-                        break;
-                     }
-                  }
-               }
+               *sensor = curr_sensor;
+               break;
             }
          }
       }
+      //
    }
-   else if (RestApi->classNameLen > 0)
+   return sError;
+}
+
+error_t restGetSensors(HttpConnection *connection, RestApi_t* RestApi)
+{
+   enum filteringType {
+      None,
+      Full,
+      Path,
+      Type,
+      Empty
+   } request;
+   error_t error = ERROR_FILE_NOT_FOUND;
+   error_t dError = ERROR_FILE_NOT_FOUND;
+   mysensor_sensor_t sensType = S_INPUT;
+   char * sensorType = NULL;
+   size_t sensorTypeLength = 0;
+
+   char * sensorPath = NULL;
+   size_t sensorPathLength = 0;
+
+   sensor_t *currSensor = NULL;
+
+   int p = 0, tp = 0;
+   size_t maxLen = arraysize(restBuffer);
+
+   request = None;
+
+   /*
+    * Try to recognize, what RestApi contains
+    * where is sensor type and sensor path
+    * /rest/v2/sensors/temperature/test_7  - full request
+    * /rest/v2/sensors/test_7 - request contain path only
+    * /rest/v2/sensors/temperature - request cotain type only
+    * /rest/v2/sensors - request is empty
+    *
+    *
+    */
+   if (RestApi->objectIdLen > 1)
    {
-      //print all sensors with type RestApi->className
-      if (RestApi->className != NULL)
+      sensorType = RestApi->className + 1;
+      sensorTypeLength = RestApi->classNameLen - 1;
+      sensType = findSensorType(sensorType, sensorTypeLength);
+
+      sensorPath = RestApi->objectId;
+      sensorPathLength = RestApi->objectIdLen;
+      request = Full;
+   }
+   else if (RestApi->classNameLen > 1)
+   {
+      //try to recognize sensor type
+      sensorType = RestApi->className + 1;
+      sensorTypeLength = RestApi->classNameLen - 1;
+      sensType = findSensorType(sensorType, sensorTypeLength);
+
+      if (sensType < MYSENSOR_ENUM_LEN)
       {
-         for (sensor_t * curr_sensor = &sensors[0]; curr_sensor < &sensors[arraysize(sensors)]; curr_sensor++)
-         {
-            if (curr_sensor->device != NULL)
-            {
-               if (curr_sensor->type == sensType)
-               {
-                  dError = driver_open(&curr_sensor->fd, curr_sensor->device, POPEN_READ);
-
-                  if (dError == NO_ERROR)
-                  {
-                     error = NO_ERROR;
-
-                     p += snprintfSensor(&restBuffer[p], maxLen - p, curr_sensor, RestApi->restVersion);
-                     driver_close(&curr_sensor->fd);
-
-                  }
-               }
-            }
-         }
+         sensorPath = RestApi->objectId;
+         sensorPathLength = RestApi->objectIdLen;
+         request = Type;
+      }
+      else
+      {
+         sensorPath = RestApi->className;
+         sensorPathLength = RestApi->classNameLen;
+         request = Path;
       }
    }
    else
    {
-      //print all sensors
-      //not supported for restapi v1
-      if (RestApi->restVersion == 1)
+      request = Empty;
+   }
+   //Try to open sensor by path
+
+   if (request == Full || request == Path)
+   {
+      dError = sensor_open(&currSensor, sensorPath, sensorPathLength, POPEN_READ);
+      if (dError == NO_ERROR)
       {
-         error = ERROR_UNSUPPORTED_REQUEST;
+         if ((request == Path) || (request == Full && sensType == currSensor->type))
+         {
+            error = NO_ERROR;
+            p += sprintf_single_header(&restBuffer[0], arraysize(restBuffer) - p, sensType, RestApi->restVersion);
+            p += snprintfSensor(&restBuffer[p], maxLen - p, currSensor, RestApi->restVersion);
+            p --; //Remove last ',' symbol
+            p+=sprintf_single_footer(&restBuffer[p], arraysize(restBuffer) - p, sensType, RestApi->restVersion);
+         }
+
+         driver_close(&currSensor->fd);
       }
       else
       {
-         for (sensor_t * curr_sensor = &sensors[0]; curr_sensor < &sensors[arraysize(sensors)]; curr_sensor++)
+         error = dError;
+      }
+   }
+   else if (request == Type)
+   {
+      p += sprintf_header(&restBuffer[0], arraysize(restBuffer) - p, sensType, RestApi->restVersion);
+      tp = p;
+      for (sensor_t * curr_sensor = &sensors[0]; curr_sensor < &sensors[arraysize(sensors)]; curr_sensor++)
+      {
+         if (curr_sensor->device != NULL)
          {
-            if (curr_sensor->device != NULL)
+            if (curr_sensor->type == sensType)
             {
                dError = driver_open(&curr_sensor->fd, curr_sensor->device, POPEN_READ);
-
                if (dError == NO_ERROR)
                {
                   error = NO_ERROR;
-
                   p += snprintfSensor(&restBuffer[p], maxLen - p, curr_sensor, RestApi->restVersion);
                   driver_close(&curr_sensor->fd);
                }
             }
          }
       }
-   }
-
-   if (error == NO_ERROR)
-   {
-      p--;
-   }
-
-   p+=sprintf_footer(&restBuffer[p], arraysize(restBuffer) - p, sensType, RestApi->restVersion);
-
-
-#if 0
-   /* Check, what sensor type is defined in request */
-   if (RestApi->classNameLen > 0)
-   {
-      /* Проверяем, соответствует ли тип датчиака в RestApi->className*/
-      for (mysensor_sensor_t i = 0; i < MYSENSOR_ENUM_LEN; i++) // Contain length of enum
+      if (tp != p) //If any sensor has been printed
       {
-         if (*sensorList[i].string != '\0')
+         p--;
+      }
+      p+=sprintf_footer(&restBuffer[p], arraysize(restBuffer) - p, sensType, RestApi->restVersion);
+   }
+   else if (request == Empty)
+   {
+      //Not supported by rest v1
+      if (RestApi->restVersion != 1)
+      {
+         p += sprintf_header(&restBuffer[0], arraysize(restBuffer) - p, sensType, RestApi->restVersion);
+         tp = p;
+         for (sensor_t * curr_sensor = &sensors[0]; curr_sensor < &sensors[arraysize(sensors)]; curr_sensor++)
          {
-            if (strncmp(sensorList[i].string, (RestApi->className) + 1, strlen(sensorList[i].string)) == 0) // Exclude '/' in className
+            if (curr_sensor->device != NULL)
             {
-               error = sensCommonGetHandler(connection, RestApi, i);
+
+               dError = driver_open(&curr_sensor->fd, curr_sensor->device, POPEN_READ);
+               if (dError == NO_ERROR)
+               {
+                  error = NO_ERROR;
+                  p += snprintfSensor(&restBuffer[p], maxLen - p, curr_sensor, RestApi->restVersion);
+                  driver_close(&curr_sensor->fd);
+               }
             }
          }
+         if (tp != p) //If any sensor has been printed
+         {
+            p--;
+         }
+         p+=sprintf_footer(&restBuffer[p], arraysize(restBuffer) - p, sensType, RestApi->restVersion);
       }
    }
-   else
-   {
-
-      /* Print all avalible sensors*/
-      error = sprintfListSensors(connection, RestApi);
-
-
-   }
-#endif
    switch (error)
    {
    case NO_ERROR:

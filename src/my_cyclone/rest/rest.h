@@ -31,7 +31,7 @@ typedef error_t (*tGetRestHandler)(HttpConnection *connection, RestApi_t * rest)
 typedef error_t (*tPostRestHandler)(HttpConnection *connection, RestApi_t * rest);
 typedef error_t (*tPutRestHandler)(HttpConnection *connection, RestApi_t * rest);
 typedef error_t (*tDeleteRestHandler)(HttpConnection *connection, RestApi_t * rest);
-#if 0
+#if 1
 #define PRIlevel0 "\r\n"
 #define PRIlevel1 "\r\n\t"
 #define PRIlevel2 "\r\n\t\t"
