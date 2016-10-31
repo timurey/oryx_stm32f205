@@ -69,10 +69,11 @@ const mysensorSensorList_t sensorList[] =
       { S_LOCK, "" }, // Lock device, V_LOCK_STATUS
       { S_IR, "" }, // Ir device, V_IR_SEND, V_IR_RECEIVE
       { S_WATER, "" }, // Water meter, V_FLOW, V_VOLUME
-      { S_WATER_LEVEL, "water level" }, // Water meter, V_FLOW, V_VOLUME
+      { S_WATER_LEVEL, "waterlevel" }, // Water meter, V_FLOW, V_VOLUME
       { S_AIR_QUALITY, "" }, // Air quality sensor, V_LEVEL
       { S_CUSTOM, "" }, // Custom sensor
-      { S_MORZE, "sequential" }, { S_DUST, "" }, // Dust sensor, V_LEVEL
+      { S_MORZE, "sequential" },
+      { S_DUST, "" }, // Dust sensor, V_LEVEL
       { S_SCENE_CONTROLLER, "scene" }, // Scene controller device, V_SCENE_ON, V_SCENE_OFF.
       { S_RGB_LIGHT, "" }, // RGB light. Send color component data using V_RGB. Also supports V_WATT
       { S_RGBW_LIGHT, "" }, // RGB light with an additional White component. Send data using V_RGBW. Also supports V_WATT
@@ -93,13 +94,13 @@ const mysensorSensorList_t sensorList[] =
 
 sensor_t sensors[MAX_NUM_SENSORS];
 
-register_rest_function (sensors, "/sensors", &restInitSensors, &restDenitSensors, &restGetSensors, &restPostSensors, &restPutSensors, NULL); // &restPostSensors, &restPutSensors, &restDeleteSensors);
+register_rest_function (sensor, "/sensor", &restInitSensors, &restDenitSensors, &restGetSensors, &restPostSensors, &restPutSensors, NULL); // &restPostSensors, &restPutSensors, &restDeleteSensors);
 register_variables_functions (sensors, &sensorsGetValue);
 
 static mysensor_sensor_t findTypeByName (const char * type);
 static error_t parseJSONSensors (jsmnParserStruct * jsonParser, configMode mode);
 static sensor_t *findSensor (char* pxdeviceName);
-#if 0
+
 static int sprintfSensor (char * bufer, int maxLen, mysensor_sensor_t curr_list_el, int restVersion)
 {
    int p = 0;
@@ -158,7 +159,7 @@ static error_t sprintfListSensors (HttpConnection *connection, RestApi_t* RestAp
 
    return error;
 }
-#endif
+
 error_t restInitSensors(void) {
    error_t error = NO_ERROR;
    return error;
@@ -658,12 +659,45 @@ error_t restGetSensors(HttpConnection *connection, RestApi_t* RestApi)
             p--;
          }
          p+=sprintf_footer(&restBuffer[p], arraysize(restBuffer) - p, sensType, RestApi->restVersion);
+         //         if (RestApi->restVersion == 1)
+         //         {
+         //            p += snprintf(&restBuffer[p], maxLen - p, "{"PRIlevel1"\"sensors\":[");
+         //         }
+         //         else if (RestApi->restVersion == 2)
+         //         {
+         //            p +=snprintf(&restBuffer[p], maxLen - p, "{"PRIlevel1"\"data\":{"PRIlevel2"\"type\":\"sensors\","PRIlevel2"\"id\":0,"PRIlevel2"\"relationships\":{");
+         //         }
+         //
+         //         for (mysensor_sensor_t cur_list_elem = 0; cur_list_elem < MYSENSOR_ENUM_LEN; cur_list_elem++)
+         //         {
+         //            if (*sensorList[cur_list_elem].string != '\0')
+         //            {
+         //               p += sprintfSensor(restBuffer + p, maxLen - p, cur_list_elem, RestApi->restVersion);
+         //               error = NO_ERROR;
+         //            }
+         //         }
+         //         p--;
+         //         if (RestApi->restVersion == 1)
+         //         {
+         //            p += snprintf(&restBuffer[p], maxLen - p, ""PRIlevel1"]"PRIlevel0"}\r\n");
+         //         }
+         //         else if (RestApi->restVersion == 2)
+         //         {
+         //            p += snprintf(&restBuffer[p], maxLen - p, ""PRIlevel2"}"PRIlevel1"}"PRIlevel0"}\r\n");
+         //         }
       }
    }
    switch (error)
    {
    case NO_ERROR:
-      connection->response.contentType = mimeGetType(".apijson");
+      if (RestApi->restVersion == 1)
+      {
+         connection->response.contentType = mimeGetType(".json");
+      }
+      else if (RestApi->restVersion == 2)
+      {
+         connection->response.contentType = mimeGetType(".apijson");
+      }
       error = rest_200_ok(connection, &restBuffer[0]);
       break;
    case ERROR_UNSUPPORTED_REQUEST:
@@ -766,7 +800,7 @@ error_t restPutSensors(HttpConnection *connection, RestApi_t* RestApi) {
    jsmn_parser parser;
    jsmnParserStruct jsonParser;
 
-   if (RestApi->objectId != NULL)
+   if (RestApi->className != NULL)
    {
 
       error = httpReadStream(connection, connection->buffer, connection->request.contentLength, &received, HTTP_FLAG_BREAK_CRLF);
@@ -931,6 +965,7 @@ char* sensorsAddName(const char * name, size_t length)
       if (names[i])
       {
          memcpy(names[i], name, length);
+         *(names[i]+length) = '\0';
          return names[i];
       }
    }
@@ -1041,7 +1076,7 @@ static char * storePlace(char * place)
    ptr = sensorsFindPlace(place, strlen(place));
    if (ptr == NULL)
    {
-      ptr = sensorsAddDevice(place, strlen(place));
+      ptr = sensorsAddPlace(place, strlen(place));
    }
    return ptr;
 }
@@ -1095,11 +1130,17 @@ static error_t parseJSONSensors(jsmnParserStruct * jsonParser, configMode mode)
 
       }
 
-      if (sensorsToken > 0 && sensorsToken < jsonParser->resultCode)
+      if ((jsonParser->jSMNtokens+sensorsToken)->type == JSMN_ARRAY)
       {
-         countOfSensors = (jsonParser->jSMNtokens+sensorsToken)->size;
+         if (sensorsToken > 0 && sensorsToken < jsonParser->resultCode)
+         {
+            countOfSensors = (jsonParser->jSMNtokens+sensorsToken)->size;
+         }
       }
-
+      else if ((jsonParser->jSMNtokens+sensorsToken)->type == JSMN_OBJECT)
+      {
+         countOfSensors = 1;
+      }
 
       for (sensorNum = 0; sensorNum< (uint32_t) countOfSensors; sensorNum++)
       {
@@ -1114,7 +1155,12 @@ static error_t parseJSONSensors(jsmnParserStruct * jsonParser, configMode mode)
             break;
 
          case RESTv2Path:
+#if 0
             snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.data[%"PRIu32"].id", sensorNum);
+            deviceId[0] = '/';
+            result = jsmn_get_string(jsonParser, &jsonPATH[0], &deviceId[1], arraysize(deviceId)-1);
+#endif
+            snprintf(&jsonPATH[0], arraysize(jsonPATH), "%s", "$.data.id");
             deviceId[0] = '/';
             result = jsmn_get_string(jsonParser, &jsonPATH[0], &deviceId[1], arraysize(deviceId)-1);
             break;
@@ -1165,7 +1211,7 @@ static error_t parseJSONSensors(jsmnParserStruct * jsonParser, configMode mode)
                   switch (path_type)
                   {
                   case CONFIGURE_Path: snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.sensors[%"PRIu32"].parameters[%"PRIu32"].name", sensorNum, parameterNum); break;
-                  case RESTv2Path: snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.data[%"PRIu32"].attributes.parameters[%"PRIu32"].name", sensorNum, parameterNum); break;
+                  case RESTv2Path: snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.data.attributes.parameters[%"PRIu32"].name", parameterNum); break;
                   default: jsonPATH[0]='\0';
                   }
                   parameters = jsmn_get_string(jsonParser, &jsonPATH[0], &parameter[0], arraysize(parameter));
@@ -1182,14 +1228,14 @@ static error_t parseJSONSensors(jsmnParserStruct * jsonParser, configMode mode)
                      switch (path_type)
                      {
                      case CONFIGURE_Path: snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.sensors[%"PRIu32"].parameters[%"PRIu32"].%s", sensorNum, parameterNum, pcParameter);break;
-                     case RESTv2Path: snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.data[%"PRIu32"].attributes.parameters[%"PRIu32"].%s", sensorNum, parameterNum, pcParameter); break;
+                     case RESTv2Path: snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.data.attributes.parameters[%"PRIu32"].%s", sensorNum, parameterNum, pcParameter); break;
                      default: jsonPATH[0]='\0';
                      }
 #endif
                      switch (path_type)
                      {
                      case CONFIGURE_Path: snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.sensors[%"PRIu32"].parameters[%"PRIu32"].value", sensorNum, parameterNum);break;
-                     case RESTv2Path: snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.data[%"PRIu32"].attributes.parameters[%"PRIu32"].value", sensorNum, parameterNum); break;
+                     case RESTv2Path: snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.data.attributes.parameters[%"PRIu32"].value", parameterNum); break;
                      default: jsonPATH[0]='\0';
                      }
                      parameters = jsmn_get_string(jsonParser, &jsonPATH[0], &value[0], arraysize(value));
@@ -1210,7 +1256,7 @@ static error_t parseJSONSensors(jsmnParserStruct * jsonParser, configMode mode)
                   switch (path_type)
                   {
                   case CONFIGURE_Path: snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.sensors[%"PRIu32"].name", sensorNum); break;
-                  case RESTv2Path: snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.data[%"PRIu32"].attributes.name", sensorNum); break;
+                  case RESTv2Path: snprintf(&jsonPATH[0], arraysize(jsonPATH), "%s", "$.data.attributes.name"); break;
                   default: jsonPATH[0]='\0';
                   }
 
@@ -1228,7 +1274,7 @@ static error_t parseJSONSensors(jsmnParserStruct * jsonParser, configMode mode)
                   switch (path_type)
                   {
                   case CONFIGURE_Path: snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.sensors[%"PRIu32"].place", sensorNum); break;
-                  case RESTv2Path: snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.data[%"PRIu32"].attributes.place", sensorNum); break;
+                  case RESTv2Path: snprintf(&jsonPATH[0], arraysize(jsonPATH),"%s", "$.data.attributes.place"); break;
                   default: jsonPATH[0]='\0';
                   }
 
@@ -1246,7 +1292,7 @@ static error_t parseJSONSensors(jsmnParserStruct * jsonParser, configMode mode)
                   switch (path_type)
                   {
                   case CONFIGURE_Path: snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.sensors[%"PRIu32"].type", sensorNum); break;
-                  case RESTv2Path: snprintf(&jsonPATH[0], arraysize(jsonPATH), "$.data[%"PRIu32"].attributes.type", sensorNum); break;
+                  case RESTv2Path: snprintf(&jsonPATH[0], arraysize(jsonPATH),"%s", "$.data.attributes.type"); break;
                   default: jsonPATH[0]='\0';
                   }
 

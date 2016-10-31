@@ -133,11 +133,13 @@ error_t driver_open(peripheral_t * const pxPeripheral, const char * path, const 
 
          else if (flags == POPEN_CONFIGURE)
          {
+#if 0
             if (*(peripheral->status) & (DEV_STAT_ACTIVE))
             {
                error=  ERROR_INVALID_RECIPIENT;
                break;
             }
+#endif
          }
          else if (flags == POPEN_INFO)
          {
@@ -312,16 +314,18 @@ size_t driver_getproperty( peripheral_t * pxPeripheral, char * pcRequest, char *
    {
       /*If request is common*/
       if (strcmp(pcRequest, "active") == 0)
-      /*Common comands*/
-      if (*(peripheral->status) == DEV_STAT_ACTIVE)
       {
-         strncpy(pcValue, "true", xBytes);
-         result = strlen(pcValue);
-      }
-      else
-      {
-         strncpy(pcValue, "false", xBytes);
-         result = strlen(pcValue);
+         /*Common comands*/
+         if (*(peripheral->status) == DEV_STAT_ACTIVE)
+         {
+            strncpy(pcValue, "true", xBytes);
+            result = strlen(pcValue);
+         }
+         else
+         {
+            strncpy(pcValue, "false", xBytes);
+            result = strlen(pcValue);
+         }
       }
 
    }

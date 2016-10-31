@@ -31,36 +31,36 @@ static int printfRestClassMethods (char * bufer, int maxLen, restFunctions * cur
    if (restVersion == 1)
    {
 
-      p+=snprintf(bufer+p, maxLen-p, "{\r\n\"path\": \"%s/v1%s\",\r\n\"name\":\"%s\",\r\n\"method\" : [", &restPrefix[0],cur_rest->restClassPath,cur_rest->restClass);
+      p+=snprintf(bufer+p, maxLen-p, ""PRIlevel2"{"PRIlevel3"\"path\": \"%s/v1%s\","PRIlevel3"\"name\":\"%s\","PRIlevel3"\"method\" : [", &restPrefix[0],cur_rest->restClassPath,cur_rest->restClass);
       if (cur_rest->restGetClassHadler != NULL)
       {
-         p+=snprintf(bufer+p, maxLen-p, "\"GET\",");
+         p+=snprintf(bufer+p, maxLen-p, ""PRIlevel4"\"GET\",");
          flag++;
       }
       if (cur_rest->restPostClassHadler != NULL)
       {
-         p+=snprintf(bufer+p, maxLen-p, "\"POST\",");
+         p+=snprintf(bufer+p, maxLen-p, ""PRIlevel4"\"POST\",");
          flag++;
       }
       if (cur_rest->restPutClassHadler != NULL)
       {
-         p+=snprintf(bufer+p, maxLen-p, "\"PUT\",");
+         p+=snprintf(bufer+p, maxLen-p, ""PRIlevel4"\"PUT\",");
          flag++;
       }
       if (cur_rest->restDeleteClassHadler != NULL)
       {
-         p+=snprintf(bufer+p, maxLen-p, "\"DELETE\",");
+         p+=snprintf(bufer+p, maxLen-p, ""PRIlevel4"\"DELETE\",");
          flag++;
       }
       if (flag>0)
       {
          p--;
       }
-      p+=snprintf(bufer+p, maxLen-p, "]\r\n}");
+      p+=snprintf(bufer+p, maxLen-p, ""PRIlevel3"]"PRIlevel2"},");
    }
    else if (restVersion == 2)
    {
-      p+=snprintf(bufer+p, maxLen-p, "\"%s\": {\"links\": {\"related\": \"%s/v2%s\"}}",cur_rest->restClass, &restPrefix[0], cur_rest->restClassPath);
+      p+=snprintf(bufer+p, maxLen-p, ""PRIlevel3"\"%s\": {"PRIlevel4"\"links\": {"PRIlevel5"\"related\": \"%s/v2%s\""PRIlevel4"}"PRIlevel3"},",cur_rest->restClass, &restPrefix[0], cur_rest->restClassPath);
    }
    return p;
 }
@@ -70,30 +70,30 @@ static int printfRestClasses (char * bufer, int maxLen, int restVersion)
    int p=0;
    if (restVersion == 1)
    {
-      p+=snprintf(bufer+p, maxLen-p, "{\"classes\":[\r\n");
+      p+=snprintf(bufer+p, maxLen-p, "{"PRIlevel1"\"classes\":[");
 
       for (restFunctions *cur_rest = &__start_rest_functions; cur_rest < &__stop_rest_functions; cur_rest++)
       {
          p+=printfRestClassMethods(bufer+p, maxLen - p, cur_rest, restVersion);
-         if ( cur_rest != &__stop_rest_functions-1)
+         if ( cur_rest >= &__stop_rest_functions-1)
          {
-            p+=snprintf(bufer+p, maxLen-p, ",\r\n");
+            p--;
          }
       }
-      p+=snprintf(bufer+p, maxLen-p, "\r\n]\r\n}\r\n");
+      p+=snprintf(bufer+p, maxLen-p, ""PRIlevel1"]"PRIlevel0"}"PRIlevel0"");
    }
    else if (restVersion == 2)
    {
-      p+=snprintf(bufer+p, maxLen-p, "{\"data\": {\"type\": \"restapi\",\"id\": 0,\"relationships\": {");
+      p+=snprintf(bufer+p, maxLen-p, "{"PRIlevel1"\"data\": {"PRIlevel2"\"type\": \"restapi\","PRIlevel2"\"id\": 0,"PRIlevel2"\"relationships\": {");
       for (restFunctions *cur_rest = &__start_rest_functions; cur_rest < &__stop_rest_functions; cur_rest++)
       {
          p+=printfRestClassMethods(bufer+p, maxLen - p, cur_rest, restVersion);
-         if ( cur_rest != &__stop_rest_functions-1)
+         if ( cur_rest >= &__stop_rest_functions-1)
          {
-            p+=snprintf(bufer+p, maxLen-p, ",\r\n");
+            p--;
          }
       }
-      p+=snprintf(bufer+p, maxLen-p, "\r\n}\r\n}\r\n");
+      p+=snprintf(bufer+p, maxLen-p, ""PRIlevel2"}"PRIlevel1"}"PRIlevel0"}"PRIlevel0"");
    }
 
    return p;
@@ -116,10 +116,10 @@ static error_t restGetRestApi(HttpConnection *connection, RestApi_t* RestApi)
       cur_rest--;
       if ((cur_rest >= &__start_rest_functions) && (cur_rest < &__stop_rest_functions))
       {
-         p+=snprintf(restBuffer+p, max_len-p, "{\"data\": {\"type\": \"restapi\",\"id\": 0,\"relationships\": {");
+         p+=snprintf(restBuffer+p, max_len-p, "{"PRIlevel1"\"data\":{"PRIlevel2"\"type\":\"restapi\","PRIlevel2"\"id\":0,"PRIlevel2"\"relationships\":{");
 
          p+=printfRestClassMethods(restBuffer+p, max_len - p, cur_rest, RestApi->restVersion);
-         p+=snprintf(restBuffer+p, max_len-p, "}\r\n}\r\n");
+         p+=snprintf(restBuffer+p, max_len-p, ""PRIlevel2"}"PRIlevel1"}"PRIlevel0"}");
       }
    }
    //   p+=snprintf(restBuffer+p, max_len-p, "\r\n");
