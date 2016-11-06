@@ -139,19 +139,19 @@ static int user_var_cb( void *user_data, const char *name, double *value ){
    char * pcVal __attribute__((unused)); //Not used yet
 
    error_t error = ERROR_OBJECT_NOT_FOUND;
-   peripheral_t fd; //file descriptor
+   Tperipheral_t * fd; //file descriptor
    memset(&fd, 0, sizeof(fd));
 
    (void) user_data;
    snprintf(&device[0], 32, "/%s", name);
-   error = driver_open(&fd, &device[0], POPEN_READ);
-   if (error)
+   fd = driver_open(&device[0], POPEN_READ);
+   if (fd != NULL)
    {
       return PARSER_FALSE;
    }
    else
    {
-      switch (fd.driver->dataType)
+      switch (fd->driver->dataType)
       {
       case FLOAT:
          driver_read(&fd, &dVal, sizeof(double));

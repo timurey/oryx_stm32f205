@@ -17,7 +17,8 @@
 #define MAX_OF_PERIPHERALS 32
 /* Peripheral handles are void * for data hiding purposes. */
 //typedef void * Peripheral_Descriptor_t;
-typedef struct Tperipheral_t peripheral_t;
+typedef void * peripheral_t;
+//typedef struct Tperipheral_t peripheral_t;
 typedef struct Tmask_t mask_t ;
 
 /**
@@ -34,12 +35,17 @@ typedef enum
 
 } devStatusAttributes;
 
+typedef struct{
+   devStatusAttributes statusAttribute;
+   bool_t initialized;
+   OsMutex mutex;
+} devState;
 /**
  * @brief Device opening type
  **/
 typedef enum
 {
-   UNDEFINED,
+   POPEN_UNDEFINED,
    POPEN_READ = 0x01,
    POPEN_WRITE = 0x02,
    POPEN_CONFIGURE = 0x04,
@@ -59,11 +65,11 @@ typedef enum
 
 /* Types that define valid read(), write() and ioctl() functions. */
 
-typedef size_t ( *Peripheral_open_Function_t )( peripheral_t * const pxPeripheral);
-typedef size_t ( *Peripheral_read_Function_t )( peripheral_t * const pxPeripheral, void * const pvBuffer, const size_t xBytes );
-typedef size_t ( *Peripheral_write_Function_t )( peripheral_t * const pxPeripheral, const void *pvBuffer, const size_t xBytes );
-typedef size_t ( *setPropertyFunction_t )( peripheral_t * const pxPeripheral, char *pcValue );
-typedef size_t ( *getPropertyFunction_t )( peripheral_t * const pxPeripheral, char *pcValue, const size_t xBytes );
+typedef size_t ( *Peripheral_open_Function_t )( peripheral_t const pxPeripheral);
+typedef size_t ( *Peripheral_read_Function_t )( peripheral_t pxPeripheral, void * const pvBuffer, const size_t xBytes );
+typedef size_t ( *Peripheral_write_Function_t )( peripheral_t const pxPeripheral, const void *pvBuffer, const size_t xBytes );
+typedef size_t ( *setPropertyFunction_t )( peripheral_t const pxPeripheral, char *pcValue );
+typedef size_t ( *getPropertyFunction_t )( peripheral_t const pxPeripheral, char *pcValue, const size_t xBytes );
 
 
 typedef struct {
@@ -88,7 +94,7 @@ typedef struct {
    const char * name; /*Internal name of the driver*/
    const char * path; /*Text name of the peripheral. For example /ONEWIRE/ or /GPIO/ or /somthing_else/ */
    const driver_functions_t *functions;
-   devStatusAttributes * status; /* Array of status register */
+   devState * status; /* Array of status register */
    const uint32_t countOfPerepherals;       /*Count of perepherals, that uses this driver*/
    const properties_t * propertyList;
    const periphDataType dataType;
@@ -100,13 +106,13 @@ typedef struct Tmask_t{
    unsigned mask: MAX_OF_PERIPHERALS;
 }mask_t;
 
-typedef struct Tperipheral_t {
+typedef struct  {
    driver_t * driver;
-   devStatusAttributes * status;
+   devState * status;
    uint8_t peripheralNum; /*Number of peripheral*/
-   OsMutex mutex; /*Mutex for exclusive access*/
+   OsMutex * mutex; /*Mutex for exclusive access*/
    periphOpenType mode;
-}peripheral_t;
+} Tperipheral_t;
 
 
 
@@ -114,12 +120,12 @@ typedef struct Tperipheral_t {
 /*
  * Function prototypes.
  */
-error_t driver_open(peripheral_t * const pxPeripheral, const char * path, const periphOpenType flags);
-size_t driver_read(peripheral_t * const pxPeripheral, const void * pvBuffer, const size_t xBytes );
-size_t driver_write(peripheral_t * const pxPeripheral, const void *pvBuffer, const size_t xBytes );
-size_t driver_setproperty( peripheral_t * const pxPeripheral, char * pcRequest, char *pcValue );
-size_t driver_getproperty( peripheral_t * const pxPeripheral, char * pcRequest, char *pcValue, const size_t xBytes );
-void driver_close(peripheral_t  * pxPeripheral);
+Tperipheral_t * driver_open(const char * path, const periphOpenType flags);
+size_t driver_read(Tperipheral_t * pxPeripheral, void * const pvBuffer, const size_t xBytes );
+size_t driver_write(Tperipheral_t * pxPeripheral, const void * pvBuffer, const size_t xBytes );
+size_t driver_setproperty( Tperipheral_t * pxPeripheral, char * pcRequest, char *pcValue );
+size_t driver_getproperty( Tperipheral_t * pxPeripheral, char * pcRequest, char *pcValue, const size_t xBytes );
+void driver_close(Tperipheral_t *  pxPeripheral);
 
 #define str(s) #s
 

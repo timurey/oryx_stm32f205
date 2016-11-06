@@ -43,23 +43,22 @@ devStatusAttributes gpioStatus[arraysize(inputPin)];
 OsMutex gpioMutexes[arraysize(inputPin)];
 
 
-static error_t startPeripheral(peripheral_t * peripheral);
 
 static size_t gpio_open(peripheral_t * const pxPeripheral);
 static size_t gpio_write(peripheral_t * const pxPeripheral, const void * pvBuffer, const size_t xBytes);
 static size_t gpio_read(peripheral_t * const pxPeripheral, void * const pvBuffer, const size_t xBytes);
-static size_t set_active(peripheral_t * const pxPeripheral, char *pcValue);
-static size_t get_active(peripheral_t * const pxPeripheral, char *pcValue, const size_t xBytes);
-static size_t set_mode(peripheral_t * const pxPeripheral, char *pcValue);
-static size_t get_mode(peripheral_t * const pxPeripheral, char *pcValue, const size_t xBytes);
-static size_t set_activeLevel(peripheral_t * const pxPeripheral, char *pcValue);
-static size_t get_activeLevel(peripheral_t * const pxPeripheral, char *pcValue, const size_t xBytes);
-static size_t set_pull(peripheral_t * const pxPeripheral, char *pcValue);
-static size_t get_pull(peripheral_t * const pxPeripheral, char *pcValue, const size_t xBytes);
-static size_t set_formula(peripheral_t * const pxPeripheral, char *pcValue);
-static size_t get_formula(peripheral_t * const pxPeripheral, char *pcValue, const size_t xBytes);
-static size_t getMinValue(peripheral_t * const pxPeripheral, char *pcValue, const size_t xBytes);
-static size_t getMaxValue(peripheral_t * const pxPeripheral, char *pcValue, const size_t xBytes);
+static size_t set_active( peripheral_t const pxPeripheral, char *pcValue );
+static size_t get_active(peripheral_t const pxPeripheral, char *pcValue, const size_t xBytes);
+static size_t set_mode(peripheral_t  const pxPeripheral, char *pcValue);
+static size_t get_mode(peripheral_t  const pxPeripheral, char *pcValue, const size_t xBytes);
+static size_t set_activeLevel(peripheral_t  const pxPeripheral, char *pcValue);
+static size_t get_activeLevel(peripheral_t  const pxPeripheral, char *pcValue, const size_t xBytes);
+static size_t set_pull(peripheral_t  const pxPeripheral, char *pcValue);
+static size_t get_pull(peripheral_t  const pxPeripheral, char *pcValue, const size_t xBytes);
+static size_t set_formula(peripheral_t  const pxPeripheral, char *pcValue);
+static size_t get_formula(peripheral_t  const pxPeripheral, char *pcValue, const size_t xBytes);
+static size_t getMinValue(peripheral_t  const pxPeripheral, char *pcValue, const size_t xBytes);
+static size_t getMaxValue(peripheral_t  const pxPeripheral, char *pcValue, const size_t xBytes);
 static void MX_ADC1_Init(void);
 
 static const property_t gpioPropList[] =
@@ -75,14 +74,14 @@ static const property_t gpioPropList[] =
 
 static const driver_functions_t gpioFunctions = {gpio_open, gpio_write, gpio_read};
 
-register_driver(gpio, "/gpio", gpioFunctions, gpioStatus, arraysize(inputPin), gpioPropList, UINT16);
+register_driver(gpio, "/gpioew", gpioFunctions, gpioStatus, arraysize(inputPin), gpioPropList, UINT16);
 
 
 static ADC_HandleTypeDef hadc1;
 static void inputTask(void * pvParameters);
 static error_t initInputs (void);
-static error_t startPeripheral (peripheral_t * peripheral);
-static error_t stopPeripheral (peripheral_t * peripheral);
+static error_t startPeripheral (Tperipheral_t * peripheral);
+static error_t stopPeripheral (Tperipheral_t * peripheral);
 
 #define release_timeout   40 //Таймаут обработки кнопки после отпускания. Максимум 255 при использовании типа s08 для bt_release_time
 #define max_value 255
@@ -167,19 +166,23 @@ static size_t gpioSetValue(uint8_t gpioNum, uint16_t value)
    return result;
 }
 
-static size_t set_mode(peripheral_t * const pxPeripheral, char *pcValue)
+static size_t set_mode(peripheral_t const pxPeripheral, char *pcValue)
 {
-   peripheral_t * peripheral = (peripheral_t *) pxPeripheral;
+   Tperipheral_t * peripheral = (Tperipheral_t *) pxPeripheral;
+
    size_t result =0 ;
+
    uint8_t gpioNum = peripheral->peripheralNum;
+
    error_t error = NO_ERROR;
+
    /*First, check on overflow*/
    if (gpioNum >= arraysize(inputPin))
    {
       error = ERROR_INVALID_ADDRESS;
    }
    /*Second, check peripheral, if it's running*/
-   else if (*(peripheral->status) & DEV_STAT_ACTIVE)
+   else if (peripheral->status->statusAttribute & DEV_STAT_ACTIVE)
    {
       error = ERROR_WRONG_STATE;
    }
@@ -210,10 +213,12 @@ static size_t set_mode(peripheral_t * const pxPeripheral, char *pcValue)
    return result;
 }
 
-static size_t get_mode(peripheral_t * const pxPeripheral, char *pcValue, const size_t xBytes)
+static size_t get_mode(peripheral_t const pxPeripheral, char *pcValue, const size_t xBytes)
 {
-   peripheral_t * peripheral = (peripheral_t *) pxPeripheral;
+   Tperipheral_t * peripheral = (Tperipheral_t *) pxPeripheral;
+
    size_t result =0 ;
+
    uint8_t gpioNum = peripheral->peripheralNum;
 
    /*First, check on overflow*/
@@ -232,11 +237,14 @@ static size_t get_mode(peripheral_t * const pxPeripheral, char *pcValue, const s
    return result;
 }
 
-static size_t set_activeLevel(peripheral_t * const pxPeripheral, char *pcValue)
+static size_t set_activeLevel(peripheral_t const pxPeripheral, char *pcValue)
 {
-   peripheral_t * peripheral = (peripheral_t *) pxPeripheral;
+   Tperipheral_t * peripheral = (Tperipheral_t *) pxPeripheral;
+
    size_t result =0 ;
+
    uint8_t gpioNum = peripheral->peripheralNum;
+
    error_t error = NO_ERROR;
 
    /*First, check on overflow*/
@@ -245,7 +253,7 @@ static size_t set_activeLevel(peripheral_t * const pxPeripheral, char *pcValue)
       error = ERROR_INVALID_ADDRESS;
    }
    /*Second, check peripheral, if it's running*/
-   else if (*(peripheral->status) & DEV_STAT_ACTIVE)
+   else if (peripheral->status->statusAttribute & DEV_STAT_ACTIVE)
    {
       error = ERROR_WRONG_STATE;
    }
@@ -267,10 +275,12 @@ static size_t set_activeLevel(peripheral_t * const pxPeripheral, char *pcValue)
    }
    return result;
 }
-static size_t get_activeLevel(peripheral_t * const pxPeripheral, char *pcValue, const size_t xBytes)
+static size_t get_activeLevel(peripheral_t const pxPeripheral, char *pcValue, const size_t xBytes)
 {
-   peripheral_t * peripheral = (peripheral_t *) pxPeripheral;
+   Tperipheral_t * peripheral = (Tperipheral_t *) pxPeripheral;
+
    size_t result =0 ;
+
    uint8_t gpioNum = peripheral->peripheralNum;
 
    /*First, check on overflow*/
@@ -291,11 +301,14 @@ static size_t get_activeLevel(peripheral_t * const pxPeripheral, char *pcValue, 
    return result;
 }
 
-static size_t set_pull(peripheral_t * const pxPeripheral, char *pcValue)
+static size_t set_pull(peripheral_t const pxPeripheral, char *pcValue)
 {
-   peripheral_t * peripheral = (peripheral_t *) pxPeripheral;
+   Tperipheral_t * peripheral = (Tperipheral_t *) pxPeripheral;
+
    size_t result =0 ;
+
    uint8_t gpioNum = peripheral->peripheralNum;
+
    error_t error = NO_ERROR;
 
    /*First, check on overflow*/
@@ -304,7 +317,7 @@ static size_t set_pull(peripheral_t * const pxPeripheral, char *pcValue)
       error = ERROR_INVALID_ADDRESS;
    }
    /*Second, check peripheral, if it's running*/
-   else if (*(peripheral->status) & DEV_STAT_ACTIVE)
+   else if (peripheral->status->statusAttribute & DEV_STAT_ACTIVE)
    {
       error = ERROR_WRONG_STATE;
    }
@@ -331,10 +344,12 @@ static size_t set_pull(peripheral_t * const pxPeripheral, char *pcValue)
    return result;
 }
 
-static size_t get_pull(peripheral_t * const pxPeripheral, char *pcValue, const size_t xBytes)
+static size_t get_pull(peripheral_t const pxPeripheral, char *pcValue, const size_t xBytes)
 {
-   peripheral_t * peripheral = (peripheral_t *) pxPeripheral;
+   Tperipheral_t * peripheral = (Tperipheral_t *) pxPeripheral;
+
    size_t result =0 ;
+
    uint8_t gpioNum = peripheral->peripheralNum;
    //   error_t error = NO_ERROR;
 
@@ -381,9 +396,12 @@ static size_t gpio_open(peripheral_t * const pxPeripheral)
 static size_t gpio_write(peripheral_t * const pxPeripheral, const void * pvBuffer, const size_t xBytes)
 {
    size_t result =0 ;
-   peripheral_t * peripheral = (peripheral_t *) pxPeripheral;
+   Tperipheral_t * peripheral = (Tperipheral_t *) pxPeripheral;
+
    uint8_t gpioNum = peripheral->peripheralNum;
+
    uint16_t * value;
+
    if (xBytes<= sizeof(uint16_t)) //gpio_t.value
    {
       value = (uint16_t *) pvBuffer;
@@ -412,9 +430,12 @@ static int gpioVarCallBack( void *user_data, const char *name, double *value ){
 
 static size_t gpio_read(peripheral_t * const pxPeripheral, void * const pvBuffer, const size_t xBytes)
 {
-   peripheral_t * peripheral = (peripheral_t *) pxPeripheral;
+   Tperipheral_t * peripheral = (Tperipheral_t *) pxPeripheral;
+
    size_t result =0 ;
+
    uint8_t gpioNum = peripheral->peripheralNum;
+
    uint16_t * value = (uint16_t *)pvBuffer;
 
    /*First, check on overflow*/
@@ -440,11 +461,14 @@ static size_t gpio_read(peripheral_t * const pxPeripheral, void * const pvBuffer
 /*
  * Test supported yet
  */
-static size_t set_formula(peripheral_t * const pxPeripheral, char *pcValue)
+static size_t set_formula(peripheral_t const pxPeripheral, char *pcValue)
 {
-   peripheral_t * peripheral = (peripheral_t *) pxPeripheral;
+   Tperipheral_t * peripheral = (Tperipheral_t *) pxPeripheral;
+
    uint8_t gpioNum = peripheral->peripheralNum;
+
    size_t result =0;
+
    size_t len = strlen(pcValue);
    char* formula = osAllocMem(len+1);
 
@@ -464,12 +488,16 @@ static size_t set_formula(peripheral_t * const pxPeripheral, char *pcValue)
    }
    return result;
 }
-static size_t getMinValue(peripheral_t * const pxPeripheral, char *pcValue, const size_t xBytes)
+static size_t getMinValue(peripheral_t const pxPeripheral, char *pcValue, const size_t xBytes)
 {
-   peripheral_t * peripheral = (peripheral_t *) pxPeripheral;
+   Tperipheral_t * peripheral = (Tperipheral_t *) pxPeripheral;
+
    uint8_t gpioNum = peripheral->peripheralNum;
+
    size_t result =0;
+
    double dValue;
+
    uint16_t dMinValue;
    if (gpioNum < arraysize(inputPin))
    {
@@ -511,13 +539,18 @@ static size_t getMinValue(peripheral_t * const pxPeripheral, char *pcValue, cons
    }
    return result;
 }
-static size_t getMaxValue(peripheral_t * const pxPeripheral, char *pcValue, const size_t xBytes)
+static size_t getMaxValue(peripheral_t const pxPeripheral, char *pcValue, const size_t xBytes)
 {
-   peripheral_t * peripheral = (peripheral_t *) pxPeripheral;
+   Tperipheral_t * peripheral = (Tperipheral_t *) pxPeripheral;
+
    uint8_t gpioNum = peripheral->peripheralNum;
+
    size_t result =0;
+
    double dValue;
+
    uint16_t dMaxValue;
+
    if (gpioNum < arraysize(inputPin))
    {
       switch (gpioContext[gpioNum].inputMode)
@@ -561,10 +594,12 @@ static size_t getMaxValue(peripheral_t * const pxPeripheral, char *pcValue, cons
 /*
  * Test support yet
  */
-static size_t get_formula(peripheral_t * const pxPeripheral, char *pcValue, const size_t xBytes)
+static size_t get_formula(peripheral_t const pxPeripheral, char *pcValue, const size_t xBytes)
 {
-   peripheral_t * peripheral = (peripheral_t *) pxPeripheral;
+   Tperipheral_t * peripheral = (Tperipheral_t *) pxPeripheral;
+
    uint8_t gpioNum = peripheral->peripheralNum;
+
    size_t result =0;
 
    if (gpioContext[gpioNum].formula != NULL)
@@ -575,11 +610,14 @@ static size_t get_formula(peripheral_t * const pxPeripheral, char *pcValue, cons
    return result;
 }
 
-static size_t set_active( peripheral_t * const pxPeripheral, char *pcValue )
+static size_t set_active( peripheral_t const pxPeripheral, char *pcValue )
 {
-   peripheral_t * peripheral = (peripheral_t *) pxPeripheral;
+   Tperipheral_t * peripheral = (Tperipheral_t *) pxPeripheral;
+
    uint8_t gpioNum = peripheral->peripheralNum;
+
    size_t result =0 ;
+
    error_t error = NO_ERROR;
 
    if (strcmp(pcValue, "true") == 0)
@@ -595,27 +633,27 @@ static size_t set_active( peripheral_t * const pxPeripheral, char *pcValue )
       if (error == NO_ERROR)
       {
          /*Если вывод не задйствован, задействуем его*/
-         if (!(*(peripheral->status) & DEV_STAT_ACTIVE))
+         if (!(peripheral->status->statusAttribute & DEV_STAT_ACTIVE))
          {
             /* Пробуем запустить */
             error = startPeripheral(peripheral);
             if (error == NO_ERROR)
             {
-               *(peripheral->status) |= DEV_STAT_ACTIVE;
+               peripheral->status->statusAttribute |= DEV_STAT_ACTIVE;
             }
          }
          else
          {
             /* restart gpio pin */
             osAcquireMutex(&gpioMutexes[gpioNum]);
-            *(peripheral->status) &= ~DEV_STAT_ACTIVE;
+            peripheral->status->statusAttribute &= ~DEV_STAT_ACTIVE;
 
             stopPeripheral(peripheral);
             error = startPeripheral(peripheral);
 
             if (error == NO_ERROR)
             {
-               *(peripheral->status) |= DEV_STAT_ACTIVE;
+               peripheral->status->statusAttribute |= DEV_STAT_ACTIVE;
             }
             osReleaseMutex(&gpioMutexes[gpioNum]);
          }
@@ -623,7 +661,7 @@ static size_t set_active( peripheral_t * const pxPeripheral, char *pcValue )
    }
    else if (strcmp(pcValue, "false") == 0)
    {
-      *(peripheral->status) &= ~DEV_STAT_ACTIVE;
+      peripheral->status->statusAttribute &= ~DEV_STAT_ACTIVE;
       /*
        * todo: debug this place
        */
@@ -641,13 +679,13 @@ static size_t set_active( peripheral_t * const pxPeripheral, char *pcValue )
    return result;
 }
 
-static size_t get_active(peripheral_t * const pxPeripheral, char *pcValue, const size_t xBytes)
+static size_t get_active(peripheral_t const pxPeripheral, char *pcValue, const size_t xBytes)
 {
-   peripheral_t * peripheral = (peripheral_t *) pxPeripheral;
+   Tperipheral_t * peripheral = (Tperipheral_t *) pxPeripheral;
    size_t result =0 ;
 
    /*Если вывод задйствован и драйвер запущен, сообщим об этом*/
-   if ((*(peripheral->status) & DEV_STAT_ACTIVE) &&
+   if ((peripheral->status->statusAttribute & DEV_STAT_ACTIVE) &&
       (pInputTask != NULL))
    {
       result = snprintf(pcValue, xBytes, "true");
@@ -660,7 +698,7 @@ static size_t get_active(peripheral_t * const pxPeripheral, char *pcValue, const
    return result;
 }
 
-static error_t startPeripheral(peripheral_t * peripheral)
+static error_t startPeripheral(Tperipheral_t * peripheral)
 {
    uint32_t gpioNum = peripheral->peripheralNum;
    error_t error = NO_ERROR;
@@ -716,7 +754,7 @@ static error_t startPeripheral(peripheral_t * peripheral)
    }
    if (error == NO_ERROR)
    {
-      gpioStatus[gpioNum] |= DEV_STAT_ONLINE;
+      gpioStatus[gpioNum] |= DEV_STAT_ACTIVE;
    }
    if (adc_used>0)
    {
@@ -726,7 +764,7 @@ static error_t startPeripheral(peripheral_t * peripheral)
    return error;
 }
 
-static error_t stopPeripheral (peripheral_t * peripheral)
+static error_t stopPeripheral (Tperipheral_t * peripheral)
 {
    error_t error = NO_ERROR;
    uint32_t gpioNum = peripheral->peripheralNum;

@@ -94,7 +94,7 @@ error_t read_config(char * path, tConfigParser parser)
    jsonParser.data = data;
    jsonParser.lengthOfData =readed;
 
-   error =  parser(&jsonParser, CONFIGURE_MODE);
+   error =  parser(&jsonParser, CONFIGURE_Path);
 
    jsonParser.data = NULL;
    jsonParser.lengthOfData = 0;

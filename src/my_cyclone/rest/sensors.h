@@ -87,6 +87,21 @@ typedef enum {
    D_HTTP
 } mysensor_driver_t;
 
+typedef struct {
+   char *ptr;
+   char place[];
+} Place;
+
+typedef struct {
+   char *ptr;
+   char name[];
+} Name;
+
+typedef struct {
+   char *ptr;
+   char id[];
+} ID;
+
 //typedef enum
 //{
 //   FLOAT,
@@ -112,7 +127,7 @@ typedef  struct
 typedef struct
 {
    mysensor_sensor_t type;
-   peripheral_t fd; //file descriptor
+   Tperipheral_t * fd; //file descriptor
    char* place;   //Place
    char* name;    //Name
    char* device;  //Path
@@ -142,12 +157,12 @@ void sensorsHealthDecValue(sensor_t * sensor);
 void sensorsHealthSetValue(sensor_t * sensor, int value);
 error_t sensorsGetValue(const char *name, double * value);
 
-char* sensorsAddDevice(const char * device, size_t length);
-char* sensorsFindDevice(const char * device, size_t length);
-char* sensorsFindName(const char * name, size_t length);
+char* sensorsAddDeviceId(const char * device, size_t length);
+char* sensorsFindDeviceId(char * device, size_t length);
+char* sensorsFindName(char * name, size_t length);
 char* sensorsAddName(const char * name, size_t length);
-char* sensorsFindPlace(const char * place, size_t length);
-char* sensorsAddPlace(const char * place, size_t length);
+char * sensorsFindPlace(char * place, size_t length);
+char * sensorsAddPlace(const char * place, size_t length);
 void sensorsConfigure(void);
 
 

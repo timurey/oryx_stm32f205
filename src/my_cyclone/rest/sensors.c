@@ -17,30 +17,29 @@
 #include "debug.h"
 #include "macros.h"
 #include "../../expression_parser/variables_def.h"
-char * places[MAX_PLACES_COUNT];
-char * names[MAX_NAMES_COUNT];
-/*
- * todo : изментить статический массив на связанный список.
- * Должно получиться более "пластично"
- */
-char * devices[MAX_DEVICES_COUNT];
+#include "../../list/list.h"
 
-/**
- * Circular doubly linked list item, for internal kernel usage.
- */
-struct TN_ListItem
-{
-   ///
-   /// pointer to previous item
-   struct TN_ListItem *prev;
-   ///
-   /// pointer to next item
-   struct TN_ListItem *next;
-};
 
-//char *pPlaces = &places[0];
-//char *pNames = &names[0];
-//char *pDevices = &devices[0];
+static int Place_equal(void *a, void *b) {
+   char * PlaceA = a;
+   Place * PlaceB = b;
+   return 0 == strcmp(PlaceA, PlaceB->place);
+}
+static int Name_equal(void *a, void *b) {
+   char * NameA = a;
+   Name * NameB = b;
+   return (0 == strcmp(NameA, NameB->name));
+}
+static int Device_equal(void *a, void *b) {
+   char * DeviceA = a;
+   ID * DeviceB = b;
+   return 0 == strcmp(DeviceA, DeviceB->id);
+}
+
+list_t *places;
+list_t *names;
+list_t *deviceIds;
+
 
 // Type of sensor (used when presenting sensors)
 const mysensorSensorList_t sensorList[] =
@@ -167,6 +166,11 @@ error_t restInitSensors(void) {
 
 error_t restDenitSensors(void) {
    error_t error = NO_ERROR;
+   //Destroy lists
+   list_destroy(places);
+   list_destroy(names);
+   list_destroy(deviceIds);
+
    return error;
 }
 
@@ -201,17 +205,17 @@ static int snprintfSensor(char * bufer, size_t maxLen, sensor_t * sensor, int re
       p += snprintf(bufer + p, maxLen - p, ""PRIlevel4"\"value\":");
    }
 
-   switch (sensor->fd.driver->dataType)
+   switch (sensor->fd->driver->dataType)
    {
    case FLOAT:
-      driver_read(&sensor->fd, &f_val, sizeof(f_val));
+      driver_read(sensor->fd, &f_val, sizeof(f_val));
       d1 = f_val; // Get the integer part (678).
       f2 = f_val - d1; // Get fractional part (678.0123 - 678 = 0.0123).
       d2 = abs(trunc(f2 * 10)); // Turn into integer (123).
       p += snprintf(bufer + p, maxLen - p, "%d.%01d", d1, d2);
       break;
    case UINT16:
-      if (driver_read(&sensor->fd, &u16, sizeof(uint16_t)) == sizeof(uint16_t))
+      if (driver_read(sensor->fd, &u16, sizeof(uint16_t)) == sizeof(uint16_t))
       {
          p += snprintf(bufer + p, maxLen - p, "%"PRIu16"", u16);
       }
@@ -220,7 +224,7 @@ static int snprintfSensor(char * bufer, size_t maxLen, sensor_t * sensor, int re
       break;
    case PCHAR:
       p += snprintf(bufer + p, maxLen - p, "\"");
-      p += driver_read(&sensor->fd, bufer + p, maxLen - p);
+      p += driver_read(sensor->fd, bufer + p, maxLen - p);
       p += snprintf(bufer + p, maxLen - p, "\"");
       break;
    default:
@@ -231,12 +235,12 @@ static int snprintfSensor(char * bufer, size_t maxLen, sensor_t * sensor, int re
    if (restVersion == 1)
    {
       p += snprintf(bufer + p, maxLen - p, ""PRIlevel3"\"online\":");
-      p += driver_getproperty(&sensor->fd, "active", bufer + p, maxLen - p);
+      p += driver_getproperty(sensor->fd, "active", bufer + p, maxLen - p);
       p += snprintf(bufer + p, maxLen - p, ",");
       saved_p = p;
 
       p += snprintf(bufer + p, maxLen - p, ""PRIlevel3"\"min\":");
-      changed_p = driver_getproperty(&sensor->fd, "min", bufer + p, maxLen - p);
+      changed_p = driver_getproperty(sensor->fd, "min", bufer + p, maxLen - p);
       if (changed_p > 0)
       {
          p += changed_p;
@@ -249,7 +253,7 @@ static int snprintfSensor(char * bufer, size_t maxLen, sensor_t * sensor, int re
       saved_p = p;
 
       p += snprintf(bufer + p, maxLen - p, ""PRIlevel3"\"max\":");
-      changed_p = driver_getproperty(&sensor->fd, "max", bufer + p, maxLen - p);
+      changed_p = driver_getproperty(sensor->fd, "max", bufer + p, maxLen - p);
       if (changed_p > 0)
       {
          p += changed_p;
@@ -261,14 +265,14 @@ static int snprintfSensor(char * bufer, size_t maxLen, sensor_t * sensor, int re
       }
 
       p += snprintf(bufer + p, maxLen - p, ""PRIlevel3"\"parameters\":[");
-      for (propNum = 0; propNum < sensor->fd.driver->propertyList->numOfProperies; propNum++)
+      for (propNum = 0; propNum < sensor->fd->driver->propertyList->numOfProperies; propNum++)
       {
-         property = (char*) sensor->fd.driver->propertyList->properties[propNum].property;
+         property = (char*) sensor->fd->driver->propertyList->properties[propNum].property;
          if (! ((strcmp(property, "min") == 0) || strcmp(property, "max")==0) )
          {
             saved_p = p;
             p += snprintf(bufer + p, maxLen - p, ""PRIlevel4"{"PRIlevel5"\"name\":\"%s\",\"value\":", property);
-            changed_p = driver_getproperty(&sensor->fd, property, bufer + p, maxLen - p);
+            changed_p = driver_getproperty(sensor->fd, property, bufer + p, maxLen - p);
             if (changed_p > 0)
             {
                p += changed_p;
@@ -287,13 +291,13 @@ static int snprintfSensor(char * bufer, size_t maxLen, sensor_t * sensor, int re
    else if (restVersion == 2)
    {
       p += snprintf(bufer + p, maxLen - p, ""PRIlevel4"\"online\":");
-      p += driver_getproperty(&sensor->fd, "active", bufer + p, maxLen - p);
+      p += driver_getproperty(sensor->fd, "active", bufer + p, maxLen - p);
       p += snprintf(bufer + p, maxLen - p, ",");
 
       saved_p = p;
 
       p += snprintf(bufer + p, maxLen - p, ""PRIlevel4"\"min\":");
-      changed_p = driver_getproperty(&sensor->fd, "min", bufer + p, maxLen - p);
+      changed_p = driver_getproperty(sensor->fd, "min", bufer + p, maxLen - p);
       if (changed_p > 0)
       {
          p += changed_p;
@@ -306,7 +310,7 @@ static int snprintfSensor(char * bufer, size_t maxLen, sensor_t * sensor, int re
       saved_p = p;
 
       p += snprintf(bufer + p, maxLen - p, ""PRIlevel4"\"max\":");
-      changed_p = driver_getproperty(&sensor->fd, "max", bufer + p, maxLen - p);
+      changed_p = driver_getproperty(sensor->fd, "max", bufer + p, maxLen - p);
       if (changed_p > 0)
       {
          p += changed_p;
@@ -319,14 +323,14 @@ static int snprintfSensor(char * bufer, size_t maxLen, sensor_t * sensor, int re
 
       p += snprintf(bufer + p, maxLen - p, ""PRIlevel4"\"parameters\":[");
 
-      for (propNum = 0; propNum < sensor->fd.driver->propertyList->numOfProperies; propNum++)
+      for (propNum = 0; propNum < sensor->fd->driver->propertyList->numOfProperies; propNum++)
       {
-         property = (char*) sensor->fd.driver->propertyList->properties[propNum].property;
+         property = (char*) sensor->fd->driver->propertyList->properties[propNum].property;
          if (! ((strcmp(property, "min") == 0) || strcmp(property, "max")==0) )
          {
             saved_p = p;
             p += snprintf(bufer + p, maxLen - p, ""PRIlevel5"{"PRIlevel6"\"name\":\"%s\",\"value\":", property);
-            changed_p = driver_getproperty(&sensor->fd, property, bufer + p, maxLen - p);
+            changed_p = driver_getproperty(sensor->fd, property, bufer + p, maxLen - p);
             if (changed_p > 0)
             {
                p += changed_p;
@@ -367,7 +371,7 @@ static error_t sensCommonGetHandler(HttpConnection *connection, RestApi_t* RestA
    {
       for (sensor_t * curr_sensor = &sensors[0]; curr_sensor < &sensors[arraysize(sensors)]; curr_sensor++)
       {
-         if ((curr_sensor->type == sens_type) && (strncmp(curr_sensor->device, RestApi->objectId, RestApi->objectIdLen) == 0))
+         if ((curr_sensor->type == sens_type) && (strncmp(curr_sensor->id, RestApi->objectId, RestApi->objectIdLen) == 0))
          {
             error = driver_open(&curr_sensor->fd, RestApi->objectId, POPEN_READ);
 
@@ -387,7 +391,7 @@ static error_t sensCommonGetHandler(HttpConnection *connection, RestApi_t* RestA
          if (curr_sensor->type == sens_type)
          {
 
-            error = driver_open(&curr_sensor->fd, curr_sensor->device, POPEN_READ);
+            error = driver_open(&curr_sensor->fd, curr_sensor->id, POPEN_READ);
 
             if (error == NO_ERROR)
             {
@@ -491,6 +495,9 @@ static int sprintf_footer(char * buffer, int maxLen, mysensor_sensor_t sensorTyp
    return length;
 }
 
+/*
+ * continue here:
+ */
 static error_t sensor_open (sensor_t **sensor, const char * sensorPath, const size_t sensorPathLength, const periphOpenType mode)
 {
    error_t sError = ERROR_FILE_NOT_FOUND;
@@ -501,8 +508,8 @@ static error_t sensor_open (sensor_t **sensor, const char * sensorPath, const si
       {
          if (strncmp(curr_sensor->device, sensorPath, sensorPathLength) == 0)
          {
-            sError = driver_open(&curr_sensor->fd, sensorPath, mode);
-            if (sError == NO_ERROR)
+            curr_sensor->fd = driver_open(sensorPath, mode);
+            if (curr_sensor->fd != NULL)
             {
 
                *sensor = curr_sensor;
@@ -600,7 +607,7 @@ error_t restGetSensors(HttpConnection *connection, RestApi_t* RestApi)
             p+=sprintf_single_footer(&restBuffer[p], arraysize(restBuffer) - p, sensType, RestApi->restVersion);
          }
 
-         driver_close(&currSensor->fd);
+         driver_close(currSensor->fd);
       }
       else
       {
@@ -617,12 +624,12 @@ error_t restGetSensors(HttpConnection *connection, RestApi_t* RestApi)
          {
             if (curr_sensor->type == sensType)
             {
-               dError = driver_open(&curr_sensor->fd, curr_sensor->device, POPEN_READ);
-               if (dError == NO_ERROR)
+               curr_sensor->fd = driver_open(curr_sensor->device, POPEN_READ);
+               if (curr_sensor->fd != NULL)
                {
                   error = NO_ERROR;
                   p += snprintfSensor(&restBuffer[p], maxLen - p, curr_sensor, RestApi->restVersion);
-                  driver_close(&curr_sensor->fd);
+                  driver_close(curr_sensor->fd);
                }
             }
          }
@@ -645,12 +652,12 @@ error_t restGetSensors(HttpConnection *connection, RestApi_t* RestApi)
             if (curr_sensor->device != NULL)
             {
 
-               dError = driver_open(&curr_sensor->fd, curr_sensor->device, POPEN_READ);
-               if (dError == NO_ERROR)
+               curr_sensor->fd = driver_open(curr_sensor->device, POPEN_READ);
+               if (curr_sensor->fd != NULL)
                {
                   error = NO_ERROR;
                   p += snprintfSensor(&restBuffer[p], maxLen - p, curr_sensor, RestApi->restVersion);
-                  driver_close(&curr_sensor->fd);
+                  driver_close(curr_sensor->fd);
                }
             }
          }
@@ -884,137 +891,116 @@ error_t restPutSensors(HttpConnection *connection, RestApi_t* RestApi) {
 // return error;
 //}
 
-char* sensorsFindDevice(const char * device, size_t length)
+
+char* sensorsAddDeviceId(const char * deviceId, size_t length)
 {
-   (void) length;
-   int i = 0;
-   while (devices[i])
+   ID * deviceIdPtr = osAllocMem(sizeof(ID) + length + 1);
+
+   if (deviceIdPtr)
    {
-      if (i == MAX_DEVICES_COUNT)
+      memcpy(deviceIdPtr->id, deviceId, length);
+      deviceIdPtr->ptr = &(deviceIdPtr->id[0]);
+      *((deviceIdPtr->id) + length) = '\0';
+      list_node_t * ptr = list_rpush(deviceIds, list_node_new(deviceIdPtr));
+      if (ptr)
       {
-         break;
+         return &(deviceIdPtr->id[0]);
       }
-      if (strcmp(device, devices[i]) == 0)
+      else
       {
-         return devices[i];
-      }
-      i++;
-   }
-   return NULL;
-}
-/* todo: if allocator suppotrs, try to allocate static memory.
- * We'll never free this block, try to allocate it without fragmentation*/
-char* sensorsAddDevice(const char * device, size_t length)
-{
-   int i = 0;
-   while (devices[i])
-   {
-      if (i == MAX_DEVICES_COUNT)
-      {
-         break;
-      }
-      i++;
-   }
-   if (i < MAX_DEVICES_COUNT)
-   {
-      devices[i] = osAllocMem(length + 1);
-      if (devices[i])
-      {
-         memcpy(devices[i], device, length);
-         *((devices[i]) + length) = '\0';
-         return devices[i];
+         osFreeMem(deviceIdPtr);
       }
    }
    return NULL;
 }
 
-char* sensorsFindName(const char * name, size_t length)
+char* sensorsFindDeviceId( char * deviceId, size_t length)
 {
    (void) length;
-   int i = 0;
-   while (names[i])
+
+   list_node_t *a = list_find(deviceIds, deviceId);
+   if (a)
    {
-      if (i == MAX_NAMES_COUNT)
-      {
-         break;
-      }
-      if (strcmp(name, names[i]) == 0)
-      {
-         return names[i];
-      }
-      i++;
+      ID * devicePtr = a->val;
+      return &(devicePtr->id[0]);
    }
    return NULL;
 }
+
 /* todo: if allocator suppotrs, try to allocate static memory.
  * We'll never free this block, try to allocate it without fragmentation*/
 char* sensorsAddName(const char * name, size_t length)
 {
-   int i = 0;
-   while (names[i])
+   Name * namePtr = osAllocMem(sizeof(Name) + length + 1);
+
+   if (namePtr)
    {
-      if (i == MAX_NAMES_COUNT)
+      memcpy(namePtr->name, name, length);
+      namePtr->ptr = &(namePtr->name[0]);
+      *((namePtr->name) + length) = '\0';
+      list_node_t * ptr = list_rpush(names, list_node_new(namePtr));
+      if (ptr)
       {
-         break;
+         return &(namePtr->name[0]);
       }
-      i++;
-   }
-   if (i < MAX_NAMES_COUNT)
-   {
-      names[i] = osAllocMem(length + 1);
-      if (names[i])
+      else
       {
-         memcpy(names[i], name, length);
-         *(names[i]+length) = '\0';
-         return names[i];
+         osFreeMem(namePtr);
       }
    }
    return NULL;
 }
 
-char* sensorsFindPlace(const char * place, size_t length)
+char* sensorsFindName(char * name, size_t length)
 {
    (void) length;
-   int i = 0;
 
-   while (places[i])
+   list_node_t *a = list_find(names, name);
+   if (a)
    {
-      if (i == MAX_PLACES_COUNT)
-      {
-         break;
-      }
-      if (strcmp(place, places[i]) == 0)
-      {
-         return places[i];
-      }
-      i++;
+      Name * namePtr = a->val;
+      return &(namePtr->name[0]);
    }
    return NULL;
 }
+
 /* todo: if allocator suppotrs, try to allocate static memory.
  * We'll never free this block, try to allocate it without fragmentation*/
-char* sensorsAddPlace(const char * place, size_t length)
+char * sensorsAddPlace(const char * place, size_t length)
 {
-   int i = 0;
-   while (places[i])
+   Place * placePtr = osAllocMem(sizeof(Place) + length + 1);
+
+   if (placePtr)
    {
-      if (i == MAX_PLACES_COUNT)
+      memcpy(placePtr->place, place, length);
+      placePtr->ptr=&(placePtr->place[0]);
+      *((placePtr->place) + length) = '\0';
+      list_node_t * ptr = list_rpush(places, list_node_new(placePtr));
+      if (ptr)
       {
-         break;
+         return &(placePtr->place[0]);
       }
-      i++;
-   }
-   if (i < MAX_PLACES_COUNT)
-   {
-      places[i] = osAllocMem(length + 1);
-      if (places[i])
+      else
       {
-         memcpy(places[i], place, length);
-         return places[i];
+         osFreeMem(placePtr);
       }
    }
    return NULL;
 }
+
+char * sensorsFindPlace(char * place, size_t length)
+{
+   (void) length;
+
+   list_node_t *a = list_find(places, place);
+   if (a)
+   {
+      Place * placePtr = a->val;
+      return &(placePtr->place[0]);
+   }
+   return NULL;
+}
+
 
 static sensor_t *findSensor(char* pxdeviceName)
 {
@@ -1049,10 +1035,11 @@ static sensor_t *findSensor(char* pxdeviceName)
 static char * storeDevice(char * device)
 {
    char *ptr = NULL;
-   ptr = sensorsFindDevice(device, strlen(device));
+   size_t deviceLen = strlen(device);
+   ptr = sensorsFindDeviceId(device, deviceLen);
    if (ptr == NULL)
    {
-      ptr = sensorsAddDevice(device, strlen(device));
+      ptr = sensorsAddDeviceId(device, deviceLen);
    }
    return ptr;
 
@@ -1061,10 +1048,11 @@ static char * storeDevice(char * device)
 static char * storeName(char * name)
 {
    char *ptr = NULL;
-   ptr = sensorsFindName(name, strlen(name));
+   size_t nameLen = strlen(name);
+   ptr = sensorsFindName(name, nameLen);
    if (ptr == NULL)
    {
-      ptr = sensorsAddName(name, strlen(name));
+      ptr = sensorsAddName(name, nameLen);
    }
    return ptr;
 
@@ -1072,11 +1060,11 @@ static char * storeName(char * name)
 
 static char * storePlace(char * place)
 {
-   char *ptr = NULL;
-   ptr = sensorsFindPlace(place, strlen(place));
+   size_t placeLen = strlen(place);
+   char * ptr = sensorsFindPlace(place, placeLen);
    if (ptr == NULL)
    {
-      ptr = sensorsAddPlace(place, strlen(place));
+      ptr = sensorsAddPlace(place, placeLen);
    }
    return ptr;
 }
@@ -1101,7 +1089,7 @@ static error_t parseJSONSensors(jsmnParserStruct * jsonParser, configMode mode)
    char * type = &parameter[0]; /* And type %-) */
 
 
-   error_t error = ERROR_INVALID_RECIPIENT;
+   error_t error = NO_ERROR;
    int parameters;
 
    uint8_t path_type = (mode) & (JSONPATH);
@@ -1126,26 +1114,37 @@ static error_t parseJSONSensors(jsmnParserStruct * jsonParser, configMode mode)
       case CONFIGURE_Path: sensorsToken = jsmn_get_value_token(jsonParser, "$.sensors"); break;
       case RESTv2Path: sensorsToken = jsmn_get_value_token(jsonParser, "$.data"); break;
       default:
-         sensorsToken = 0;
-
-      }
-
-      if ((jsonParser->jSMNtokens+sensorsToken)->type == JSMN_ARRAY)
       {
-         if (sensorsToken > 0 && sensorsToken < jsonParser->resultCode)
+         sensorsToken = 0;
+         error = ERROR_UNSUPPORTED_CONFIGURATION;
+         break;
+      }
+      }
+      if (error == NO_ERROR)
+      {
+         if ((jsonParser->jSMNtokens+sensorsToken)->type == JSMN_ARRAY)
          {
-            countOfSensors = (jsonParser->jSMNtokens+sensorsToken)->size;
+            if (sensorsToken > 0 && sensorsToken < jsonParser->resultCode)
+            {
+               countOfSensors = (jsonParser->jSMNtokens+sensorsToken)->size;
+            }
+         }
+         else if ((jsonParser->jSMNtokens+sensorsToken)->type == JSMN_OBJECT)
+         {
+            countOfSensors = 1;
          }
       }
-      else if ((jsonParser->jSMNtokens+sensorsToken)->type == JSMN_OBJECT)
+      else
       {
-         countOfSensors = 1;
+         countOfSensors = 0;
+         error = ERROR_UNSUPPORTED_CONFIGURATION;
       }
 
       for (sensorNum = 0; sensorNum< (uint32_t) countOfSensors; sensorNum++)
       {
          parameters = 1;
          parameterNum =0;
+         error = NO_ERROR;
 
          switch (path_type)
          {
@@ -1184,15 +1183,15 @@ static error_t parseJSONSensors(jsmnParserStruct * jsonParser, configMode mode)
                continue;
             }
 
-            error = driver_open(&(currentSensor->fd), &deviceId[0], POPEN_CONFIGURE);
+            currentSensor->fd = driver_open(&deviceId[0], POPEN_CONFIGURE);
 
-            if (error == NO_ERROR)
+            if (currentSensor->fd != NULL)
             {
                /* Если устройство уже запущено */
-               if (*currentSensor->fd.status & DEV_STAT_ACTIVE)
+               if (currentSensor->fd->status->statusAttribute & DEV_STAT_ACTIVE)
                {
                   /* Stop device here for reconfigure */
-                  driver_setproperty(&(currentSensor->fd), "active", "false");
+                  driver_setproperty(currentSensor->fd, "active", "false");
                }
                /*Setting up parameters*/
                while (parameters)
@@ -1241,13 +1240,13 @@ static error_t parseJSONSensors(jsmnParserStruct * jsonParser, configMode mode)
                      parameters = jsmn_get_string(jsonParser, &jsonPATH[0], &value[0], arraysize(value));
                      if (parameters)
                      {
-                        driver_setproperty(&(currentSensor->fd), &parameter[0], &value[0]);
+                        driver_setproperty(currentSensor->fd, &parameter[0], &value[0]);
                      }
                      parameterNum++;
                   }
                }
                /*Store device*/
-               if (driver_setproperty(&(currentSensor->fd), "active", "true") == 1)
+               if (driver_setproperty(currentSensor->fd, "active", "true") == 1)
                {
                   /* Let's store deviceId*/
                   currentSensor->device = storeDevice(&deviceId[0]);
@@ -1261,14 +1260,21 @@ static error_t parseJSONSensors(jsmnParserStruct * jsonParser, configMode mode)
                   }
 
                   len = jsmn_get_string(jsonParser, &jsonPATH[0], name, arraysize(parameter));
-                  if (len > 0)
+
+                  /* default name */
+                  if (len <= 0)
                   {
-                     currentSensor->name = storeName(name);
-                     if (currentSensor->name == NULL)
-                     {
-                        error = ERROR_OUT_OF_MEMORY;
-                     }
+                     snprintf(name, arraysize(parameter), "sensor%"PRIu32"", sensorNum);
                   }
+
+                  currentSensor->name = storeName(name);
+
+                  if (currentSensor->name == NULL)
+                  {
+                     error = ERROR_OUT_OF_MEMORY;
+                  }
+
+
 
                   /* Let's store place*/
                   switch (path_type)
@@ -1302,12 +1308,24 @@ static error_t parseJSONSensors(jsmnParserStruct * jsonParser, configMode mode)
                      currentSensor->type = storeType(type);
                   }
                }
-               driver_close(&(currentSensor->fd));
+               else
+               {
+                  error = ERROR_NO_ACK; //Can't activate device
+               }
+               driver_close(currentSensor->fd);
                if (error == NO_ERROR)
                {
                   configured++;
                }
             }
+            else
+            {
+               error = ERROR_INVALID_FILE;
+            }
+         }
+         else
+         {
+            error = ERROR_UNSUPPORTED_CONFIGURATION;
          }
       }
    }
@@ -1341,7 +1359,13 @@ static error_t parseJSONSensors(jsmnParserStruct * jsonParser, configMode mode)
  */
 void sensorsConfigure(void) {
    volatile error_t error = NO_ERROR;
-
+   //Create lists
+   places = list_new();
+   names = list_new();
+   deviceIds = list_new();
+   places->match = Place_equal;
+   names->match = Name_equal;
+   deviceIds->match = Device_equal;
    memset(&sensors[0], 0, sizeof(sensor_t) * MAX_NUM_SENSORS);
    // for (i=0;i<MAX_NUM_SENSORS; i++)
    // {

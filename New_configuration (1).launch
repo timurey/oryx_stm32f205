@@ -62,7 +62,7 @@
 <listEntry value="org.eclipse.debug.ui.launchGroup.debug"/>
 <listEntry value="org.eclipse.debug.ui.launchGroup.run"/>
 </listAttribute>
-<stringAttribute key="org.eclipse.dsf.launch.MEMORY_BLOCKS" value="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot; standalone=&quot;no&quot;?&gt;&#10;&lt;memoryBlockExpressionList context=&quot;Context string&quot;&gt;&#10;&lt;memoryBlockExpression address=&quot;536989744&quot; label=&quot;mask&quot;/&gt;&#10;&lt;/memoryBlockExpressionList&gt;&#10;"/>
+<stringAttribute key="org.eclipse.dsf.launch.MEMORY_BLOCKS" value="&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot; standalone=&quot;no&quot;?&gt;&#10;&lt;memoryBlockExpressionList context=&quot;Context string&quot;&gt;&#10;&lt;memoryBlockExpression address=&quot;536989744&quot; label=&quot;mask&quot;/&gt;&#10;&lt;memoryBlockExpression address=&quot;3050349264&quot; label=&quot;(b)-&amp;gt;name&quot;/&gt;&#10;&lt;memoryBlockExpression address=&quot;3050349264&quot; label=&quot;0xb5d0a2d0&quot;/&gt;&#10;&lt;memoryBlockExpression address=&quot;536881816&quot; label=&quot;val&quot;/&gt;&#10;&lt;memoryBlockExpression address=&quot;536890864&quot; label=&quot;(node)-&amp;gt;val&quot;/&gt;&#10;&lt;/memoryBlockExpressionList&gt;&#10;"/>
 <stringAttribute key="process_factory_id" value="org.eclipse.cdt.dsf.gdb.GdbProcessFactory"/>
 <stringAttribute key="saved_expressions&lt;seperator&gt;Unknown" value="0x61682d32,0x1FFF7A10"/>
 </launchConfiguration>

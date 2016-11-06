@@ -18,19 +18,21 @@ OsTask * dataManagerTask;
 uint8_t depedencesArr[EXPRESSION_MAX_COUNT][3][16]; //32 - magic number (driver count & periph max count)
 
 /* Build depedency matrix */
-static void storeDependence(uint8_t depExpr, peripheral_t * depPeriph)
+static void storeDependence(uint8_t depExpr, peripheral_t pxPeripheral)
 {
-   uint32_t driverNumber = (depPeriph->driver-&__start_drivers);
-   int peripheralNumber = depPeriph->peripheralNum;
+   Tperipheral_t * peripheral = (Tperipheral_t *) pxPeripheral;
+
+   uint32_t driverNumber = (peripheral->driver-&__start_drivers);
+   int peripheralNumber = peripheral->peripheralNum;
    depedencesArr[depExpr][driverNumber][peripheralNumber] = 1;
 }
 
 static void buildQueue(mask_t * mask)
 {
-   volatile uint8_t exprNum;
+   uint8_t exprNum;
    volatile uint32_t periphNum;
    volatile portBASE_TYPE xStatus;
-   driver_t * driver= mask->driver;
+   driver_t const  * driver= mask->driver;
    uint32_t driverNumber = (driver-&__start_drivers);
 
    for (exprNum = 0; exprNum < EXPRESSION_MAX_COUNT; exprNum++ )
@@ -65,20 +67,18 @@ void dataManager_task(void * pvParameters)
 
 int userVarFake( void *user_data, const char *name, double *value )
 {
-   peripheral_t fd; //file descriptor
-   error_t error;
+   Tperipheral_t * fd; //file descriptor
    uint8_t expressionNumber = *( uint8_t *)(user_data);
    char device[32];
    snprintf(&device[0], 32, "/%s", name);
 
-   memset(&fd, 0, sizeof(fd));
-   error = driver_open(&fd, &device[0], POPEN_INFO);
+   fd = driver_open(&device[0], POPEN_INFO);
 
    //If no error
-   if ( (error == NO_ERROR))
+   if ( (fd != NULL))
    {
-      storeDependence(expressionNumber, &fd);
-      driver_close(&fd);
+      storeDependence(expressionNumber, fd);
+      driver_close(fd);
    }
 
 

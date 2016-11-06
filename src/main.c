@@ -18,7 +18,7 @@
 #include "os_port.h"
 #include "network.h"
 #include "cli_hal.h"
-//void driverTask (void *pvParameters);
+void driverTask (void *pvParameters);
 
 // ----- main() ---------------------------------------------------------------
 
