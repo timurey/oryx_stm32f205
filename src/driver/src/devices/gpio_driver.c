@@ -4,84 +4,30 @@
  *  Created on: 29 авг. 2015 г.
  *      Author: timurtaipov
  */
-#include "gpio.h"
 #include "os_port.h"
 #include "DriverInterface.h"
 #include "../expression_parser/expression_parser.h"
 #include <math.h>
+#include "gpio_driver.h"
 
 static OsTask *pInputTask;
 int adc_used = 0;
 
-static  uint16_t inputPin[]={IPNUT_PIN_0, IPNUT_PIN_1, IPNUT_PIN_2, IPNUT_PIN_3,
-   IPNUT_PIN_4, IPNUT_PIN_5, IPNUT_PIN_6, IPNUT_PIN_7, IPNUT_PIN_8, IPNUT_PIN_9,
-   IPNUT_PIN_10, IPNUT_PIN_11, IPNUT_PIN_12, IPNUT_PIN_13, IPNUT_PIN_14, IPNUT_PIN_15};
-
-static  GPIO_TypeDef* inputPort[]={ IPNUT_PORT_0, IPNUT_PORT_1, IPNUT_PORT_2, IPNUT_PORT_3,
-   IPNUT_PORT_4, IPNUT_PORT_5, IPNUT_PORT_6, IPNUT_PORT_7, IPNUT_PORT_8, IPNUT_PORT_9,
-   IPNUT_PORT_10, IPNUT_PORT_11, IPNUT_PORT_12, IPNUT_PORT_13, IPNUT_PORT_14, IPNUT_PORT_15};
-
-static  uint32_t adcChannel[]={INPUT_ADC_CHANNEL_0, INPUT_ADC_CHANNEL_1, INPUT_ADC_CHANNEL_2, INPUT_ADC_CHANNEL_3,
-   INPUT_ADC_CHANNEL_4, INPUT_ADC_CHANNEL_5, INPUT_ADC_CHANNEL_6, INPUT_ADC_CHANNEL_7, INPUT_ADC_CHANNEL_8};
-
-typedef struct
-{
-   uint8_t bt_time;           // Переменная времени работы автомата
-   uint8_t bt_release_time;   // Переменная времени работы автомата
-   uint8_t bt_result;         // Переменная результат. Бит-карта нажатий.
-   uint8_t bt_cnt;            // Переменная счетчик нажатий
-   mysensor_sensor_t inputMode;
-   activeLevel_t activeLevel;
-   pull_t pull;
-   uint16_t value;
-   uint16_t prevValue;
-   char * formula;
-} gpio_t;
-
-gpio_t gpioContext[arraysize(inputPin)];
-devStatusAttributes gpioStatus[arraysize(inputPin)];
-OsMutex gpioMutexes[arraysize(inputPin)];
-
-
-
-static size_t gpio_open(peripheral_t * const pxPeripheral);
-static size_t gpio_write(peripheral_t * const pxPeripheral, const void * pvBuffer, const size_t xBytes);
-static size_t gpio_read(peripheral_t * const pxPeripheral, void * const pvBuffer, const size_t xBytes);
-static size_t set_active( peripheral_t const pxPeripheral, char *pcValue );
-static size_t get_active(peripheral_t const pxPeripheral, char *pcValue, const size_t xBytes);
-static size_t set_mode(peripheral_t  const pxPeripheral, char *pcValue);
-static size_t get_mode(peripheral_t  const pxPeripheral, char *pcValue, const size_t xBytes);
-static size_t set_activeLevel(peripheral_t  const pxPeripheral, char *pcValue);
-static size_t get_activeLevel(peripheral_t  const pxPeripheral, char *pcValue, const size_t xBytes);
-static size_t set_pull(peripheral_t  const pxPeripheral, char *pcValue);
-static size_t get_pull(peripheral_t  const pxPeripheral, char *pcValue, const size_t xBytes);
-static size_t set_formula(peripheral_t  const pxPeripheral, char *pcValue);
-static size_t get_formula(peripheral_t  const pxPeripheral, char *pcValue, const size_t xBytes);
-static size_t getMinValue(peripheral_t  const pxPeripheral, char *pcValue, const size_t xBytes);
-static size_t getMaxValue(peripheral_t  const pxPeripheral, char *pcValue, const size_t xBytes);
-static void MX_ADC1_Init(void);
-
 static const property_t gpioPropList[] =
    {
-      { "active", PCHAR, set_active, get_active},
-      { "mode", PCHAR, set_mode, get_mode},
-      { "active_level", PCHAR, set_activeLevel, get_activeLevel},
-      { "pull", PCHAR, set_pull, get_pull},
-      { "formula", PCHAR, set_formula, get_formula},
-      { "min", PCHAR, NULL, getMinValue},
-      { "max", PCHAR, NULL, getMaxValue},
-   };
+      { "active", PCHAR, set_active, get_active },
+      { "mode", PCHAR, set_mode, get_mode },
+      { "active_level", PCHAR, set_activeLevel, get_activeLevel },
+      { "pull", PCHAR, set_pull, get_pull },
+      { "formula", PCHAR, set_formula, get_formula },
+      { "min", PCHAR, NULL, getMinValue },
+      { "max", PCHAR, NULL, getMaxValue }, };
 
-static const driver_functions_t gpioFunctions = {gpio_open, gpio_write, gpio_read};
+static const driver_functions_t gpioFunctions =
+   { gpio_open, gpio_write, gpio_read };
 
-register_driver(gpio, "/gpioew", gpioFunctions, gpioStatus, arraysize(inputPin), gpioPropList, UINT16);
+register_driver(gpio, "/gpio", gpioFunctions, gpioStatus, arraysize(inputPin), gpioPropList, UINT16);
 
-
-static ADC_HandleTypeDef hadc1;
-static void inputTask(void * pvParameters);
-static error_t initInputs (void);
-static error_t startPeripheral (Tperipheral_t * peripheral);
-static error_t stopPeripheral (Tperipheral_t * peripheral);
 
 #define release_timeout   40 //Таймаут обработки кнопки после отпускания. Максимум 255 при использовании типа s08 для bt_release_time
 #define max_value 255
@@ -98,37 +44,7 @@ static error_t stopPeripheral (Tperipheral_t * peripheral);
 #define command_max_len   2
 #define scan_interval   10
 
-
-
 #define direction bt_release_time
-
-
-volatile const uint32_t * inputState[]={
-   GPIO_PIN_ISTATE(IPNUT_PORT_0, (IPNUT_PIN_0)>>1), GPIO_PIN_ISTATE(IPNUT_PORT_1, (IPNUT_PIN_1)>>1), GPIO_PIN_ISTATE(IPNUT_PORT_2, (IPNUT_PIN_2)>>1),
-   GPIO_PIN_ISTATE(IPNUT_PORT_3, (IPNUT_PIN_3)>>1), GPIO_PIN_ISTATE(IPNUT_PORT_4, (IPNUT_PIN_4)>>1), GPIO_PIN_ISTATE(IPNUT_PORT_5, (IPNUT_PIN_5)>>1),
-   GPIO_PIN_ISTATE(IPNUT_PORT_6, (IPNUT_PIN_6)>>1), GPIO_PIN_ISTATE(IPNUT_PORT_7, (IPNUT_PIN_7)>>1), GPIO_PIN_ISTATE(IPNUT_PORT_8, (IPNUT_PIN_8)>>1),
-   GPIO_PIN_ISTATE(IPNUT_PORT_9, (IPNUT_PIN_9)>>1), GPIO_PIN_ISTATE(IPNUT_PORT_10, (IPNUT_PIN_10)>>1), GPIO_PIN_ISTATE(IPNUT_PORT_11, (IPNUT_PIN_11)>>1),
-   GPIO_PIN_ISTATE(IPNUT_PORT_12, (IPNUT_PIN_12)>>1), GPIO_PIN_ISTATE(IPNUT_PORT_13, (IPNUT_PIN_13)>>1), GPIO_PIN_ISTATE(IPNUT_PORT_14, (IPNUT_PIN_14)>>1),
-   GPIO_PIN_ISTATE(IPNUT_PORT_15, (IPNUT_PIN_15)>>1)};
-
-typedef enum
-{
-   NONE = 0x00,
-   MinValueClick = NONE,
-   //Sequence
-   SingleShortClick, //0x01 Single short click   (.)
-   DoubleShortClick, //0x02 Double short click   (..)
-   SingleLongClick,  //0x03 Singl long click     (-)
-   ShotAndLongClick, //0x04 Short and long click (.-)
-   DoubleLongClick,  //0x05                      (--)
-   TripleShortClick, //0x06                      (...)
-   ShortShortLongClick, //0x07                   (..-)
-   MaxValueClick,
-   //Dimmer
-   IncreaseValue = 0x11,   //0x11 17
-   DecreaseValue,          //0x12 18
-   PlatoValue,             //0x13 19
-} clicType;
 
 static size_t gpioSetValue(uint8_t gpioNum, uint16_t value)
 {
@@ -142,14 +58,14 @@ static size_t gpioSetValue(uint8_t gpioNum, uint16_t value)
          /* We can't write into S_BINARY*/
          break;
       case S_MORZE:
-         if ((value>=MinValueClick) && (value < MaxValueClick))
+         if ((value >= MinValueClick) && (value < MaxValueClick))
          {
             gpioContext[gpioNum].value = value;
             result = sizeof(value);
          }
          break;
       case S_DIMMER:
-         if ((value>=dimmer_min_value) && (value <= dimmer_max_value))
+         if ((value >= dimmer_min_value) && (value <= dimmer_max_value))
          {
             gpioContext[gpioNum].value = value;
             result = sizeof(value);
@@ -162,7 +78,6 @@ static size_t gpioSetValue(uint8_t gpioNum, uint16_t value)
       }
    }
 
-
    return result;
 }
 
@@ -170,7 +85,7 @@ static size_t set_mode(peripheral_t const pxPeripheral, char *pcValue)
 {
    Tperipheral_t * peripheral = (Tperipheral_t *) pxPeripheral;
 
-   size_t result =0 ;
+   size_t result = 0;
 
    uint8_t gpioNum = peripheral->peripheralNum;
 
@@ -217,7 +132,7 @@ static size_t get_mode(peripheral_t const pxPeripheral, char *pcValue, const siz
 {
    Tperipheral_t * peripheral = (Tperipheral_t *) pxPeripheral;
 
-   size_t result =0 ;
+   size_t result = 0;
 
    uint8_t gpioNum = peripheral->peripheralNum;
 
@@ -227,10 +142,8 @@ static size_t get_mode(peripheral_t const pxPeripheral, char *pcValue, const siz
       //    ERROR_INVALID_ADDRESS;
       result = 0;
    }
-   else if ((gpioContext[gpioNum].inputMode == S_BINARY)
-      || (gpioContext[gpioNum].inputMode == S_DIMMER)
-      || (gpioContext[gpioNum].inputMode == S_MORZE)
-      || (gpioContext[gpioNum].inputMode == S_MULTIMETER))
+   else if ((gpioContext[gpioNum].inputMode == S_BINARY) || (gpioContext[gpioNum].inputMode == S_DIMMER)
+      || (gpioContext[gpioNum].inputMode == S_MORZE) || (gpioContext[gpioNum].inputMode == S_MULTIMETER))
    {
       result = snprintf(pcValue, xBytes, "\"%s\"", sensorList[gpioContext[peripheral->peripheralNum].inputMode].string);
    }
@@ -241,7 +154,7 @@ static size_t set_activeLevel(peripheral_t const pxPeripheral, char *pcValue)
 {
    Tperipheral_t * peripheral = (Tperipheral_t *) pxPeripheral;
 
-   size_t result =0 ;
+   size_t result = 0;
 
    uint8_t gpioNum = peripheral->peripheralNum;
 
@@ -279,7 +192,7 @@ static size_t get_activeLevel(peripheral_t const pxPeripheral, char *pcValue, co
 {
    Tperipheral_t * peripheral = (Tperipheral_t *) pxPeripheral;
 
-   size_t result =0 ;
+   size_t result = 0;
 
    uint8_t gpioNum = peripheral->peripheralNum;
 
@@ -287,7 +200,7 @@ static size_t get_activeLevel(peripheral_t const pxPeripheral, char *pcValue, co
    if (gpioNum >= arraysize(inputPin))
    {
       //      ERROR_INVALID_ADDRESS;
-      result =0 ;
+      result = 0;
    }
    else if (gpioContext[gpioNum].activeLevel == GPIO_ACTIVELOW)
    {
@@ -305,7 +218,7 @@ static size_t set_pull(peripheral_t const pxPeripheral, char *pcValue)
 {
    Tperipheral_t * peripheral = (Tperipheral_t *) pxPeripheral;
 
-   size_t result =0 ;
+   size_t result = 0;
 
    uint8_t gpioNum = peripheral->peripheralNum;
 
@@ -348,7 +261,7 @@ static size_t get_pull(peripheral_t const pxPeripheral, char *pcValue, const siz
 {
    Tperipheral_t * peripheral = (Tperipheral_t *) pxPeripheral;
 
-   size_t result =0 ;
+   size_t result = 0;
 
    uint8_t gpioNum = peripheral->peripheralNum;
    //   error_t error = NO_ERROR;
@@ -374,15 +287,15 @@ static size_t get_pull(peripheral_t const pxPeripheral, char *pcValue, const siz
 /*
  * Not supported yet
  */
-static size_t gpio_open(peripheral_t * const pxPeripheral)
+static size_t gpio_open(peripheral_t const pxPeripheral)
 {
-   (void ) pxPeripheral;
+   (void) pxPeripheral;
    error_t error = NO_ERROR;
-   size_t result =0;
+   size_t result = 0;
    /* Если драйвер не запущен, запустим его */
    if (pInputTask == NULL)
    {
-      memset (&gpioContext, 0x00, sizeof(gpio_t) * arraysize(inputPin));
+      memset(&gpioContext, 0x00, sizeof(gpio_t) * arraysize(inputPin));
       error = initInputs();
    }
 
@@ -393,21 +306,21 @@ static size_t gpio_open(peripheral_t * const pxPeripheral)
    return result;
 }
 
-static size_t gpio_write(peripheral_t * const pxPeripheral, const void * pvBuffer, const size_t xBytes)
+static size_t gpio_write(peripheral_t const pxPeripheral, const void * pvBuffer, const size_t xBytes)
 {
-   size_t result =0 ;
+   size_t result = 0;
    Tperipheral_t * peripheral = (Tperipheral_t *) pxPeripheral;
 
    uint8_t gpioNum = peripheral->peripheralNum;
 
    uint16_t * value;
 
-   if (xBytes<= sizeof(uint16_t)) //gpio_t.value
+   if (xBytes <= sizeof(uint16_t)) //gpio_t.value
    {
       value = (uint16_t *) pvBuffer;
 
       /* Check, if device is writeble */
-      if (gpioStatus[gpioNum] & DEV_STAT_WRITEBLE)
+      if (gpioStatus[gpioNum].statusAttribute & DEV_STAT_WRITEBLE)
       {
          result = gpioSetValue(gpioNum, *value);
       }
@@ -415,48 +328,48 @@ static size_t gpio_write(peripheral_t * const pxPeripheral, const void * pvBuffe
    return result;
 }
 
-static int gpioVarCallBack( void *user_data, const char *name, double *value ){
+static int gpioVarCallBack(void *user_data, const char *name, double *value)
+{
 
-   int result =  PARSER_FALSE;
-   uint16_t rawValue  = * (uint16_t *) user_data;
+   int result = PARSER_FALSE;
+   uint16_t rawValue = *(uint16_t *) user_data;
    //   uint8_t expressionNumber = *( uint8_t *)(user_data);
    if (strcmp(name, "x") == 0)
    {
-      result =  PARSER_TRUE;
+      result = PARSER_TRUE;
       *value = (double) rawValue;
    }
    return result;
 }
 
-static size_t gpio_read(peripheral_t * const pxPeripheral, void * const pvBuffer, const size_t xBytes)
+static size_t gpio_read(peripheral_t const pxPeripheral, void * const pvBuffer, const size_t xBytes)
 {
    Tperipheral_t * peripheral = (Tperipheral_t *) pxPeripheral;
 
-   size_t result =0 ;
+   size_t result = 0;
 
    uint8_t gpioNum = peripheral->peripheralNum;
 
-   uint16_t * value = (uint16_t *)pvBuffer;
+   uint16_t * value = (uint16_t *) pvBuffer;
 
    /*First, check on overflow*/
    if (gpioNum >= arraysize(inputPin))
    {
       //      ERROR_INVALID_ADDRESS;
-      result =0 ;
+      result = 0;
    }
    else if (peripheral->driver->dataType == UINT16 && xBytes >= sizeof(uint16_t))
    {
-      osAcquireMutex(&gpioMutexes[gpioNum]);
+      osAcquireMutex(&gpioStatus[gpioNum].mutex);
 
-      * value = gpioContext[gpioNum].value;
+      *value = gpioContext[gpioNum].value;
 
-      osReleaseMutex(&gpioMutexes[gpioNum]);
+      osReleaseMutex(&gpioStatus[gpioNum].mutex);
 
       result = sizeof(uint16_t);
    }
    return result;
 }
-
 
 /*
  * Test supported yet
@@ -467,10 +380,10 @@ static size_t set_formula(peripheral_t const pxPeripheral, char *pcValue)
 
    uint8_t gpioNum = peripheral->peripheralNum;
 
-   size_t result =0;
+   size_t result = 0;
 
    size_t len = strlen(pcValue);
-   char* formula = osAllocMem(len+1);
+   char* formula = osAllocMem(len + 1);
 
    if (formula != NULL)
    {
@@ -494,7 +407,7 @@ static size_t getMinValue(peripheral_t const pxPeripheral, char *pcValue, const 
 
    uint8_t gpioNum = peripheral->peripheralNum;
 
-   size_t result =0;
+   size_t result = 0;
 
    double dValue;
 
@@ -510,10 +423,10 @@ static size_t getMinValue(peripheral_t const pxPeripheral, char *pcValue, const 
          result = snprintf(pcValue, xBytes, "%"PRIu16"", MinValueClick);
          break;
       case S_DIMMER:
-         dMinValue =  dimmer_min_value;
-         if (gpioContext[gpioNum].formula!=NULL)
+         dMinValue = dimmer_min_value;
+         if (gpioContext[gpioNum].formula != NULL)
          {
-            dValue = parse_expression_with_callbacks(gpioContext[gpioNum].formula , &gpioVarCallBack, NULL, &dMinValue);
+            dValue = parse_expression_with_callbacks(gpioContext[gpioNum].formula, &gpioVarCallBack, NULL, &dMinValue);
          }
          else
          {
@@ -522,10 +435,10 @@ static size_t getMinValue(peripheral_t const pxPeripheral, char *pcValue, const 
          result = snprintf(pcValue, xBytes, "%"PRIu16"", (uint16_t) dValue);
          break;
       case S_MULTIMETER:
-         dMinValue =  0;
-         if (gpioContext[gpioNum].formula!=NULL)
+         dMinValue = 0;
+         if (gpioContext[gpioNum].formula != NULL)
          {
-            dValue = parse_expression_with_callbacks(gpioContext[gpioNum].formula , &gpioVarCallBack, NULL, &dMinValue);
+            dValue = parse_expression_with_callbacks(gpioContext[gpioNum].formula, &gpioVarCallBack, NULL, &dMinValue);
          }
          else
          {
@@ -545,7 +458,7 @@ static size_t getMaxValue(peripheral_t const pxPeripheral, char *pcValue, const 
 
    uint8_t gpioNum = peripheral->peripheralNum;
 
-   size_t result =0;
+   size_t result = 0;
 
    double dValue;
 
@@ -562,10 +475,10 @@ static size_t getMaxValue(peripheral_t const pxPeripheral, char *pcValue, const 
          result = snprintf(pcValue, xBytes, "%"PRIu16"", ShortShortLongClick);
          break;
       case S_DIMMER:
-         dMaxValue =  dimmer_max_value;
-         if (gpioContext[gpioNum].formula!=NULL)
+         dMaxValue = dimmer_max_value;
+         if (gpioContext[gpioNum].formula != NULL)
          {
-            dValue = parse_expression_with_callbacks(gpioContext[gpioNum].formula , &gpioVarCallBack, NULL, &dMaxValue);
+            dValue = parse_expression_with_callbacks(gpioContext[gpioNum].formula, &gpioVarCallBack, NULL, &dMaxValue);
          }
          else
          {
@@ -575,9 +488,9 @@ static size_t getMaxValue(peripheral_t const pxPeripheral, char *pcValue, const 
          break;
       case S_MULTIMETER:
          dMaxValue = 4096;
-         if (gpioContext[gpioNum].formula!=NULL)
+         if (gpioContext[gpioNum].formula != NULL)
          {
-            dValue = parse_expression_with_callbacks(gpioContext[gpioNum].formula , &gpioVarCallBack, NULL, &dMaxValue);
+            dValue = parse_expression_with_callbacks(gpioContext[gpioNum].formula, &gpioVarCallBack, NULL, &dMaxValue);
          }
          else
          {
@@ -600,7 +513,7 @@ static size_t get_formula(peripheral_t const pxPeripheral, char *pcValue, const 
 
    uint8_t gpioNum = peripheral->peripheralNum;
 
-   size_t result =0;
+   size_t result = 0;
 
    if (gpioContext[gpioNum].formula != NULL)
    {
@@ -610,22 +523,22 @@ static size_t get_formula(peripheral_t const pxPeripheral, char *pcValue, const 
    return result;
 }
 
-static size_t set_active( peripheral_t const pxPeripheral, char *pcValue )
+static size_t set_active(peripheral_t const pxPeripheral, char *pcValue)
 {
    Tperipheral_t * peripheral = (Tperipheral_t *) pxPeripheral;
 
    uint8_t gpioNum = peripheral->peripheralNum;
 
-   size_t result =0 ;
+   size_t result = 0;
 
    error_t error = NO_ERROR;
 
    if (strcmp(pcValue, "true") == 0)
    {
       /* Create mutex, if it not exist*/
-      if (gpioMutexes[gpioNum].handle == NULL)
+      if (gpioStatus[gpioNum].mutex.handle == NULL)
       {
-         if (osCreateMutex(&gpioMutexes[gpioNum]) == FALSE)
+         if (osCreateMutex(&gpioStatus[gpioNum].mutex) == FALSE)
          {
             error = ERROR_OUT_OF_MEMORY;
          }
@@ -645,7 +558,7 @@ static size_t set_active( peripheral_t const pxPeripheral, char *pcValue )
          else
          {
             /* restart gpio pin */
-            osAcquireMutex(&gpioMutexes[gpioNum]);
+            osAcquireMutex(&gpioStatus[gpioNum].mutex);
             peripheral->status->statusAttribute &= ~DEV_STAT_ACTIVE;
 
             stopPeripheral(peripheral);
@@ -655,7 +568,7 @@ static size_t set_active( peripheral_t const pxPeripheral, char *pcValue )
             {
                peripheral->status->statusAttribute |= DEV_STAT_ACTIVE;
             }
-            osReleaseMutex(&gpioMutexes[gpioNum]);
+            osReleaseMutex(&gpioStatus[gpioNum].mutex);
          }
       }
    }
@@ -665,9 +578,9 @@ static size_t set_active( peripheral_t const pxPeripheral, char *pcValue )
       /*
        * todo: debug this place
        */
-      if (gpioMutexes[gpioNum].handle != NULL)
+      if (gpioStatus[gpioNum].mutex.handle != NULL)
       {
-         osDeleteMutex(&gpioMutexes[gpioNum]);
+         osDeleteMutex(&gpioStatus[gpioNum].mutex);
       }
       error = NO_ERROR;
    }
@@ -682,11 +595,10 @@ static size_t set_active( peripheral_t const pxPeripheral, char *pcValue )
 static size_t get_active(peripheral_t const pxPeripheral, char *pcValue, const size_t xBytes)
 {
    Tperipheral_t * peripheral = (Tperipheral_t *) pxPeripheral;
-   size_t result =0 ;
+   size_t result = 0;
 
    /*Если вывод задйствован и драйвер запущен, сообщим об этом*/
-   if ((peripheral->status->statusAttribute & DEV_STAT_ACTIVE) &&
-      (pInputTask != NULL))
+   if ((peripheral->status->statusAttribute & DEV_STAT_ACTIVE) && (pInputTask != NULL))
    {
       result = snprintf(pcValue, xBytes, "true");
    }
@@ -715,8 +627,7 @@ static error_t startPeripheral(Tperipheral_t * peripheral)
    case S_BINARY:
    case S_MORZE:
    case S_DIMMER:
-      if (gpioContext[gpioNum].pull == GPIO_Z
-         || gpioContext[gpioNum].pull == GPIO_PULLHIGH
+      if (gpioContext[gpioNum].pull == GPIO_Z || gpioContext[gpioNum].pull == GPIO_PULLHIGH
          || gpioContext[gpioNum].pull == GPIO_PULLLOW)
       {
          GPIO_InitStruct.Pin = inputPin[gpioNum];
@@ -724,7 +635,7 @@ static error_t startPeripheral(Tperipheral_t * peripheral)
          GPIO_InitStruct.Pull = gpioContext[gpioNum].pull;
          GPIO_InitStruct.Speed = GPIO_SPEED_LOW;
          HAL_GPIO_Init(inputPort[gpioNum], &GPIO_InitStruct);
-         gpioStatus[gpioNum] |= DEV_STAT_MANAGED;
+         gpioStatus[gpioNum].statusAttribute |= DEV_STAT_MANAGED;
       }
       else
       {
@@ -732,15 +643,14 @@ static error_t startPeripheral(Tperipheral_t * peripheral)
       }
       break;
    case S_MULTIMETER:
-      if (gpioContext[gpioNum].pull == GPIO_Z
-         || gpioContext[gpioNum].pull == GPIO_PULLHIGH
+      if (gpioContext[gpioNum].pull == GPIO_Z || gpioContext[gpioNum].pull == GPIO_PULLHIGH
          || gpioContext[gpioNum].pull == GPIO_PULLLOW)
       {
          GPIO_InitStruct.Pin = inputPin[gpioNum];
          GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
          GPIO_InitStruct.Pull = gpioContext[gpioNum].pull;
          HAL_GPIO_Init(inputPort[gpioNum], &GPIO_InitStruct);
-         gpioStatus[gpioNum] |= DEV_STAT_MANAGED;
+         gpioStatus[gpioNum].statusAttribute |= DEV_STAT_MANAGED;
          adc_used++;
       }
       else
@@ -754,9 +664,9 @@ static error_t startPeripheral(Tperipheral_t * peripheral)
    }
    if (error == NO_ERROR)
    {
-      gpioStatus[gpioNum] |= DEV_STAT_ACTIVE;
+      gpioStatus[gpioNum].statusAttribute |= DEV_STAT_ACTIVE;
    }
-   if (adc_used>0)
+   if (adc_used > 0)
    {
       MX_ADC1_Init();
       __ADC1_CLK_ENABLE();
@@ -764,7 +674,7 @@ static error_t startPeripheral(Tperipheral_t * peripheral)
    return error;
 }
 
-static error_t stopPeripheral (Tperipheral_t * peripheral)
+static error_t stopPeripheral(Tperipheral_t * peripheral)
 {
    error_t error = NO_ERROR;
    uint32_t gpioNum = peripheral->peripheralNum;
@@ -798,29 +708,29 @@ static clicType check_bit_map(uint8_t bt_result, uint8_t bt_cnt)
 
    if (bt_result == 0b00 && bt_cnt == 1)
    {
-      result= SingleShortClick;
+      result = SingleShortClick;
    }
-   else if (bt_result == 0b00 && bt_cnt ==2)
+   else if (bt_result == 0b00 && bt_cnt == 2)
    {
       result = DoubleShortClick;
    }
-   else if (bt_result == 0b01 && bt_cnt ==1)
+   else if (bt_result == 0b01 && bt_cnt == 1)
    {
       result = SingleLongClick;
    }
-   else if (bt_result == 0b10 && bt_cnt ==2)
+   else if (bt_result == 0b10 && bt_cnt == 2)
    {
       result = ShotAndLongClick;
    }
-   else if (bt_result == 0b11 && bt_cnt ==2)
+   else if (bt_result == 0b11 && bt_cnt == 2)
    {
       result = DoubleLongClick;
    }
-   else if(bt_result == 0b000 && bt_cnt == 3)
+   else if (bt_result == 0b000 && bt_cnt == 3)
    {
       result = TripleShortClick;
    }
-   else if(bt_result == 0b100 && bt_cnt == 3)
+   else if (bt_result == 0b100 && bt_cnt == 3)
    {
       result = ShortShortLongClick;
    }
@@ -845,7 +755,7 @@ static clicType check_dimmervalue(uint8_t presentValue, uint8_t bt_direction, ui
          result = IncreaseValue;
       }
    }
-   else if (presentValue > dimmer_min_value && presentValue < dimmer_max_value  && bt_direction == IncreaseValue)
+   else if (presentValue > dimmer_min_value && presentValue < dimmer_max_value && bt_direction == IncreaseValue)
    {
       result = IncreaseValue;
    }
@@ -860,11 +770,11 @@ static clicType check_dimmervalue(uint8_t presentValue, uint8_t bt_direction, ui
          result = DecreaseValue;
       }
    }
-   else if (presentValue > dimmer_min_value && presentValue < dimmer_max_value  && bt_direction ==DecreaseValue)
+   else if (presentValue > dimmer_min_value && presentValue < dimmer_max_value && bt_direction == DecreaseValue)
    {
       result = DecreaseValue;
    }
-   else if (presentValue == dimmer_min_value && bt_direction ==DecreaseValue)
+   else if (presentValue == dimmer_min_value && bt_direction == DecreaseValue)
    {
       result = PlatoValue;
    }
@@ -878,13 +788,13 @@ static clicType check_dimmervalue(uint8_t presentValue, uint8_t bt_direction, ui
 static uint16_t GetADCValue(uint32_t Channel, int Count)
 {
    uint32_t val = 0;
-   ADC_ChannelConfTypeDef   sConfig;
-   sConfig.Channel=Channel;
-   sConfig.Rank=1;
-   sConfig.SamplingTime=ADC_SMPR1_SMP10_0;
+   ADC_ChannelConfTypeDef sConfig;
+   sConfig.Channel = Channel;
+   sConfig.Rank = 1;
+   sConfig.SamplingTime = ADC_SMPR1_SMP10_0;
    HAL_ADC_ConfigChannel(&hadc1, &sConfig);
 
-   for(int i = 0; i < Count; i++)
+   for (int i = 0; i < Count; i++)
    {
       HAL_ADC_Start(&hadc1);
       HAL_ADC_PollForConversion(&hadc1, 1);
@@ -896,11 +806,11 @@ static uint16_t GetADCValue(uint32_t Channel, int Count)
 static void setVal(uint32_t inputNum, uint16_t value)
 {
    double dValue;
-   osAcquireMutex(&gpioMutexes[inputNum]);
+   osAcquireMutex(&gpioStatus[inputNum].mutex);
 
    if (gpioContext[inputNum].formula != NULL)
    {
-      dValue = parse_expression_with_callbacks(gpioContext[inputNum].formula , &gpioVarCallBack, NULL, &value);
+      dValue = parse_expression_with_callbacks(gpioContext[inputNum].formula, &gpioVarCallBack, NULL, &value);
       if (!isnan(dValue))
       {
          gpioContext[inputNum].value = (uint16_t) dValue;
@@ -911,9 +821,9 @@ static void setVal(uint32_t inputNum, uint16_t value)
    {
       gpioContext[inputNum].value = value;
    }
-   gpioStatus[inputNum] |= DEV_STAT_READBLE;
+   gpioStatus[inputNum].statusAttribute |= DEV_STAT_READBLE;
 
-   osReleaseMutex(&gpioMutexes[inputNum]);
+   osReleaseMutex(&gpioStatus[inputNum].mutex);
 }
 
 static void inputTask(void * pvParameters)
@@ -927,89 +837,75 @@ static void inputTask(void * pvParameters)
    uint16_t currentVal;
 
    mask_t * mask = (mask_t *) driver_gpio.mask;
-   //   mask->driver = &driver_gpio;
+
    while (1)
    {
-      for (i=0; i<arraysize(inputPin); i++)
+      for (i = 0; i < arraysize(inputPin); i++)
       {
-         if (gpioStatus[i] &  DEV_STAT_MANAGED)
+         if (gpioStatus[i].statusAttribute & DEV_STAT_MANAGED)
          {
-            if ((gpioStatus[i] & (DEV_STAT_ACTIVE )) && (gpioContext[i].inputMode == S_BINARY))
+            if ((gpioStatus[i].statusAttribute & (DEV_STAT_ACTIVE)) && (gpioContext[i].inputMode == S_BINARY))
             {
                // Кнопень придавлена. Тупо считаем время придавки.
                if (*inputState[i])
                {
-                  if (gpioContext[i].bt_time<max_value-1)
+                  if (gpioContext[i].bt_time < max_value - 1)
                   {
                      gpioContext[i].bt_time++;
                   }
-                  if (gpioContext[i].bt_time>debounce)
+                  if (gpioContext[i].bt_time > debounce)
                   {
 
                      setVal(i, 0x01);
-                     //                     osAcquireMutex(&gpioMutexes[i]);
-                     //
-                     //                     gpioContext[i].value = 0x01;
-                     //                     /* We can only read value */
-                     //                     gpioStatus[i] |= DEV_STAT_READBLE;
-                     //
-                     //                     osReleaseMutex(&gpioMutexes[i]);
-                     gpioContext[i].bt_release_time=0;
+                     gpioContext[i].bt_release_time = 0;
                   }
                }
                else
                {
-                  if (gpioContext[i].bt_release_time<min_value-1 )
+                  if (gpioContext[i].bt_release_time < min_value - 1)
                   {
                      gpioContext[i].bt_release_time++; //  отсчета таймаута ожидания завершения комманды после последней нажатой кнопки.
                   }
-                  if (gpioContext[i].bt_release_time>debounce)
+                  if (gpioContext[i].bt_release_time > debounce)
                   {
                      setVal(i, 0x00);
-                     //                     osAcquireMutex(&gpioMutexes[i]);
-                     //
-                     //                     gpioContext[i].value = 0x00;
-                     //                     /* We can only read value*/
-                     //                     gpioStatus[i] |= DEV_STAT_READBLE;
-                     //
-                     //                     osReleaseMutex(&gpioMutexes[i]);
-                     gpioContext[i].bt_time=0;
+                     gpioContext[i].bt_time = 0;
                   }
                }
 
             }
-            else if ((gpioStatus[i] & (DEV_STAT_ACTIVE )) && (gpioContext[i].inputMode == S_DIMMER))
+            else if ((gpioStatus[i].statusAttribute & (DEV_STAT_ACTIVE)) && (gpioContext[i].inputMode == S_DIMMER))
             {
                /* We can read and write value*/
-               gpioStatus[i] |= DEV_STAT_READBLE | DEV_STAT_WRITEBLE;
+               gpioStatus[i].statusAttribute |= DEV_STAT_READBLE | DEV_STAT_WRITEBLE;
 
                // Кнопень придавлена. Тупо считаем время придавки.
                if (*inputState[i])
                {
-                  if (gpioContext[i].bt_time<max_value-1) //Давно не нажимали кнопку
+                  if (gpioContext[i].bt_time < max_value - 1) //Давно не нажимали кнопку
                   {
                      gpioContext[i].bt_time++;
                   }
 
-                  if (gpioContext[i].bt_time>long_press)
+                  if (gpioContext[i].bt_time > long_press)
                   {
-                     osAcquireMutex(&gpioMutexes[i]);
+                     osAcquireMutex(&gpioStatus[i].mutex);
                      currentVal = gpioContext[i].value;
-                     osReleaseMutex(&gpioMutexes[i]);
+                     osReleaseMutex(&gpioStatus[i].mutex);
 
                      tempClickValue = check_dimmervalue(currentVal, gpioContext[i].direction, gpioContext[i].bt_cnt);
-                     gpioContext[i].bt_time=long_press - dimmer_long_press;
+                     gpioContext[i].bt_time = long_press - dimmer_long_press;
 
                      if (tempClickValue == IncreaseValue)
 
                      {
-                        gpioContext[i].bt_cnt=1;
+                        gpioContext[i].bt_cnt = 1;
                         currentVal++;
                         gpioContext[i].direction = tempClickValue;
                      }
                      else if (tempClickValue == DecreaseValue)
                      {
-                        gpioContext[i].bt_cnt=1;
+                        gpioContext[i].bt_cnt = 1;
                         currentVal--;
                         gpioContext[i].direction = tempClickValue;
                      }
@@ -1018,25 +914,17 @@ static void inputTask(void * pvParameters)
                         gpioContext[i].bt_cnt++;
                         gpioContext[i].direction = tempClickValue;
                      }
-                     setVal(i,currentVal );
-                     //                     osAcquireMutex(&gpioMutexes[i]);
+                     setVal(i, currentVal);
 
-                     //                     gpioContext[i].value = currentVal;
-                     //                  /* We can read and write value*/
-                     //                  gpioStatus[i] |= DEV_STAT_READBLE | DEV_STAT_WRITEBLE;
-
-                     //                     osReleaseMutex(&gpioMutexes[i]);
-
-                     if (gpioContext[i].direction != PlatoValue && currentVal == 0 )
+                     if (gpioContext[i].direction != PlatoValue && currentVal == 0)
                      {
-                        gpioContext[i].direction =PlatoValue;
+                        gpioContext[i].direction = PlatoValue;
                      }
-
 
                   }
                }
                //  Момент отпускания кнопки.
-               else if (gpioContext[i].bt_time>debounce) //Если кнопка была нажата больше времени дребезга
+               else if (gpioContext[i].bt_time > debounce) //Если кнопка была нажата больше времени дребезга
                {
                   if (gpioContext[i].bt_cnt > 0)
                   {
@@ -1045,49 +933,32 @@ static void inputTask(void * pvParameters)
                      gpioContext[i].bt_cnt = 0;
 
                   }
-                  else if (gpioContext[i].bt_time>=short_press)
+                  else if (gpioContext[i].bt_time >= short_press)
                   {
-                     osAcquireMutex(&gpioMutexes[i]);
+                     osAcquireMutex(&gpioStatus[i].mutex);
                      tempVal = gpioContext[i].value;
-                     osReleaseMutex(&gpioMutexes[i]);
                      // Отпустили после короткого нажатия
-                     if (tempVal>0)
+                     if (tempVal > 0)
                      {
                         //Сохраняем значение и выключаем
-                        osAcquireMutex(&gpioMutexes[i]);
 
                         gpioContext[i].bt_result = gpioContext[i].value;
                         //                        gpioContext[i].value = dimmer_min_value;
-                        //                     /* We can read and write value*/
-                        //                     gpioStatus[i] |= DEV_STAT_READBLE | DEV_STAT_WRITEBLE;
 
-                        osReleaseMutex(&gpioMutexes[i]);
                         setVal(i, dimmer_min_value);
                      }
-                     else if(tempVal == 0 && (gpioContext[i].bt_result > 0))
+                     else if (tempVal == 0 && (gpioContext[i].bt_result > 0))
                      {
                         //Если есть сохраненное значение, то восстанавливаем
                         setVal(i, gpioContext[i].bt_result);
-                        //                        osAcquireMutex(&gpioMutexes[i]);
-
-                        //                        gpioContext[i].value = gpioContext[i].bt_result;
-                        //                     /* We can read and write value*/
-                        //                     gpioStatus[i] |= DEV_STAT_READBLE | DEV_STAT_WRITEBLE;
-
-                        //                        osReleaseMutex(&gpioMutexes[i]);
                      }
                      else
                      {
                         // Иначе включаем на всю
                         setVal(i, dimmer_max_value);
-                        //                        osAcquireMutex(&gpioMutexes[i]);
-                        //                        gpioContext[i].value = dimmer_max_value;
-
-                        //                     /* We can read and write value*/
-                        //                     gpioStatus[i] |= DEV_STAT_READBLE | DEV_STAT_WRITEBLE;
-
-                        //                        osReleaseMutex(&gpioMutexes[i]);
                      }
+                     osReleaseMutex(&gpioStatus[i].mutex);
+
                      gpioContext[i].bt_cnt = 0;
                      gpioContext[i].bt_time = 0;
 
@@ -1095,94 +966,80 @@ static void inputTask(void * pvParameters)
                }
 
             }
-            else if ((gpioStatus[i] & (DEV_STAT_ACTIVE )) && (gpioContext[i].inputMode == S_MORZE))
+            else if ((gpioStatus[i].statusAttribute & (DEV_STAT_ACTIVE)) && (gpioContext[i].inputMode == S_MORZE))
             {
                /* We can read and write value*/
-               gpioStatus[i] |= DEV_STAT_READBLE | DEV_STAT_WRITEBLE;
+               gpioStatus[i].statusAttribute |= DEV_STAT_READBLE | DEV_STAT_WRITEBLE;
                // Кнопень придавлена. Тупо считаем время придавки.
                if ((*inputState[i]))
                {
-                  if (gpioContext[i].bt_time<max_value-1)
+                  if (gpioContext[i].bt_time < max_value - 1)
                   {
                      gpioContext[i].bt_time++;
                   }
                }
                //  Момент отпускания кнопки.
-               else if (gpioContext[i].bt_time>debounce) //Если кнопка была нажата больше времени дребезга
+               else if (gpioContext[i].bt_time > debounce) //Если кнопка была нажата больше времени дребезга
                {
                   // Длинное нажатие. Ставим единичку в битовое поле результата.
-                  if (gpioContext[i].bt_time>=long_press)
+                  if (gpioContext[i].bt_time >= long_press)
                   {
-                     gpioContext[i].bt_result|=(1<<gpioContext[i].bt_cnt);
+                     gpioContext[i].bt_result |= (1 << gpioContext[i].bt_cnt);
                      gpioContext[i].bt_cnt++; // Длинное нажатие. Пропускаем установку бита.
-                     gpioContext[i].bt_time=0; // время придавки кнопки нам больше не нужно, сбрасываем.
-                     gpioContext[i].bt_release_time=0;
+                     gpioContext[i].bt_time = 0; // время придавки кнопки нам больше не нужно, сбрасываем.
+                     gpioContext[i].bt_release_time = 0;
                   }
-                  else if (gpioContext[i].bt_time>=short_press)
+                  else if (gpioContext[i].bt_time >= short_press)
                   {
-                     gpioContext[i].bt_release_time=0;
+                     gpioContext[i].bt_release_time = 0;
                      gpioContext[i].bt_cnt++; // Короткое нажатие. Пропускаем установку бита.
-                     gpioContext[i].bt_time=0; // время придавки кнопки нам больше не нужно, сбрасываем.
+                     gpioContext[i].bt_time = 0; // время придавки кнопки нам больше не нужно, сбрасываем.
                   }
 
                }
                // Прошел ли таймаут отпускания кнопки
-               else if (gpioContext[i].bt_cnt>0 && gpioContext[i].bt_release_time<release_timeout)
+               else if (gpioContext[i].bt_cnt > 0 && gpioContext[i].bt_release_time < release_timeout)
                {
                   // Отпущено, счетчик таймаута комманды(последовательности). Здесь мы еще ждем ввода нажатий для последовательности.
-                  if (gpioContext[i].bt_release_time<min_value-1 )
+                  if (gpioContext[i].bt_release_time < min_value - 1)
                   {
                      gpioContext[i].bt_release_time++; //  отсчета таймаута ожидания завершения комманды после последней нажатой кнопки.
                   }
                }
-               else if (gpioContext[i].bt_cnt>0 && gpioContext[i].bt_release_time>=release_timeout)
+               else if (gpioContext[i].bt_cnt > 0 && gpioContext[i].bt_release_time >= release_timeout)
                { // Таймаут комманды, сброс состояний
                   tempClickValue = check_bit_map(gpioContext[i].bt_result, gpioContext[i].bt_cnt);
                   if (tempClickValue)
                   {
                      setVal(i, tempClickValue);
-                     //                     osAcquireMutex(&gpioMutexes[i]);
-
-                     //                     gpioContext[i].value = tempClickValue;
-                     //                  /* We can read and write value*/
-                     //                  gpioStatus[i] |= DEV_STAT_READBLE | DEV_STAT_WRITEBLE;
-
-                     //                     osReleaseMutex(&gpioMutexes[i]);
                   }
-                  gpioContext[i].bt_time=0;
-                  gpioContext[i].bt_cnt=0;
-                  gpioContext[i].bt_result=0;
-                  gpioContext[i].bt_release_time=0;
+                  gpioContext[i].bt_time = 0;
+                  gpioContext[i].bt_cnt = 0;
+                  gpioContext[i].bt_result = 0;
+                  gpioContext[i].bt_release_time = 0;
                }
                else
                {
-                  //               gpioStatus[i]|=DEV_STAT_READBLE;
-                  gpioContext[i].bt_cnt=0; // Было ложное нажатие
-                  gpioContext[i].bt_time=0;
-                  gpioContext[i].bt_result=0;
-                  gpioContext[i].bt_release_time=0;
+                  gpioContext[i].bt_cnt = 0; // Было ложное нажатие
+                  gpioContext[i].bt_time = 0;
+                  gpioContext[i].bt_result = 0;
+                  gpioContext[i].bt_release_time = 0;
                }
             }
-            else if ((gpioStatus[i] & (DEV_STAT_ACTIVE )) && (gpioContext[i].inputMode == S_MULTIMETER))
+            else if ((gpioStatus[i].statusAttribute & (DEV_STAT_ACTIVE)) && (gpioContext[i].inputMode == S_MULTIMETER))
             {
                tempADCValue = GetADCValue(adcChannel[i], 5);
 
                setVal(i, tempADCValue);
-               //               osAcquireMutex(&gpioMutexes[i]);
-               //               gpioContext[i].value = tempADCValue;
-               /* We can only read value*/
-               //               gpioStatus[i] |= DEV_STAT_READBLE;
-
-               //               osReleaseMutex(&gpioMutexes[i]);
             }
 
-            if (gpioContext[i].prevValue!=gpioContext[i].value)
+            if (gpioContext[i].prevValue != gpioContext[i].value)
             {
-               (mask->mask) |= (1<<i);
+               (mask->mask) |= (1 << i);
             }
             else
             {
-               (mask->mask) &= ~(1<<i);
+               (mask->mask) &= ~(1 << i);
             }
             gpioContext[i].prevValue = gpioContext[i].value;
          }
@@ -1195,12 +1052,12 @@ static void inputTask(void * pvParameters)
    }
 }
 
-static error_t initInputs (void)
+static error_t initInputs(void)
 {
    error_t error = NO_ERROR;
    if (pInputTask == NULL)
    {
-      pInputTask = osCreateTask("inputs", inputTask, NULL, configMINIMAL_STACK_SIZE*4, 3);
+      pInputTask = osCreateTask("inputs", inputTask, NULL, configMINIMAL_STACK_SIZE * 4, 3);
    }
    if (pInputTask == NULL)
    {

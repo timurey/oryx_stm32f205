@@ -86,10 +86,10 @@ void vBlinker (void *pvParameters)
    {
 
       HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5, GPIO_PIN_RESET);
-      vTaskDelay(980);
+      vTaskDelay(990);
 
       HAL_GPIO_WritePin(GPIOB, GPIO_PIN_5, GPIO_PIN_SET);
-      vTaskDelay(20);
+      vTaskDelay(10);
    }
 }
 

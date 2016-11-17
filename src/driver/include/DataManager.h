@@ -14,13 +14,13 @@ extern OsTask * dataManagerTask;
 extern QueueHandle_t exprQueue;
 extern QueueHandle_t dataQueue;
 
-void setExpressionNumber(uint32_t setExpressionNumber );
+void setExpressionNumber(uint32_t setExpressionNumber);
 void dataManager_task(void * pvParameters);
-int userVarFake( void *user_data, const char *name, double *value );
+int userVarFake(void *user_data, const char *name, double *value);
 
 typedef struct
 {
    uint32_t test;
-}depedency_t;
+} depedency_t;
 
 #endif /* DRIVER_INCLUDE_DATAMANAGER_H_ */

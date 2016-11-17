@@ -157,6 +157,29 @@ list_find(list_t *self, void *val) {
   return NULL;
 }
 
+list_node_t *
+list_find_next(list_t *self, list_node_t *from, void *val) {
+  list_iterator_t *it = list_iterator_new_from_node(from, LIST_HEAD);
+  list_node_t *node = list_iterator_next(it);
+
+  while ((node = list_iterator_next(it))) {
+    if (self->match) {
+      if (self->match(val, node->val)) {
+        list_iterator_destroy(it);
+        return node;
+      }
+    } else {
+      if (val == node->val) {
+        list_iterator_destroy(it);
+        return node;
+      }
+    }
+  }
+
+  list_iterator_destroy(it);
+  return NULL;
+}
+
 /*
  * Return the node at the given index or NULL.
  */

@@ -42,7 +42,6 @@
 #include "sdio.h"
 
 #include "rtc.h"
-#include "gpio.h"
 
 
 #include "xprintf.h"

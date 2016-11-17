@@ -21,6 +21,8 @@
 #include "variables_def.h"
 #include "DataManager.h"
 
+int user_fnc_cb( void *user_data, const char *name, const int num_args, const double *args, double *value );
+
 char expressions[EXPRESSIONS_LENGHT];
 char * pExpression[EXPRESSION_MAX_COUNT];
 
@@ -29,7 +31,7 @@ char * pRules[EXPRESSION_MAX_COUNT];
 
 OsTask *logicTask;
 
-static error_t parseRules (jsmnParserStruct * jsonParser, configMode mode)
+static error_t parseRules (jsmnParserStruct * jsonParser, configMode mode __attribute__((unused)))
 {
    int i;
    char path[64];
@@ -106,7 +108,7 @@ static double _user_func_3( double x, double y, double z ){
  @param[out] value the return argument, which should contain the functions evaluated value on return if the evaluation was successful.
  @return true if the function was evaluated successfully, false otherwise
  */
-int user_fnc_cb( void *user_data, const char *name, const int num_args, const double *args, double *value ){
+int user_fnc_cb( void *user_data __attribute__((unused)), const char *name, const int num_args, const double *args, double *value ){
    if( strcmp( name, "user_func_0" ) == 0 && num_args == 0 ){
       *value = user_func_0();
       return PARSER_TRUE;
@@ -138,39 +140,37 @@ static int user_var_cb( void *user_data, const char *name, double *value ){
    char cVal __attribute__((unused)); //Not used yet
    char * pcVal __attribute__((unused)); //Not used yet
 
-   error_t error = ERROR_OBJECT_NOT_FOUND;
    Tperipheral_t * fd; //file descriptor
    memset(&fd, 0, sizeof(fd));
 
    (void) user_data;
    snprintf(&device[0], 32, "/%s", name);
    fd = driver_open(&device[0], POPEN_READ);
-   if (fd != NULL)
+   if (fd == NULL)
    {
       return PARSER_FALSE;
    }
-   else
+
+   switch (fd->driver->dataType)
    {
-      switch (fd->driver->dataType)
-      {
-      case FLOAT:
-         driver_read(&fd, &dVal, sizeof(double));
-         *value = dVal;
-         break;
-      case UINT16:
-         driver_read(&fd, &u16Val, sizeof(double));
-         *value = (double) u16Val;
-         break;
-      case CHAR:
-      case PCHAR:
-      default:
-         break;
-      }
-
-      driver_close(&fd);
-
-      return PARSER_TRUE;
+   case FLOAT:
+      driver_read(fd, &dVal, sizeof(double));
+      *value = dVal;
+      break;
+   case UINT16:
+      driver_read(fd, &u16Val, sizeof(double));
+      *value = (double) u16Val;
+      break;
+   case CHAR:
+   case PCHAR:
+   default:
+      break;
    }
+
+   driver_close(fd);
+
+   return PARSER_TRUE;
+
 }
 
 

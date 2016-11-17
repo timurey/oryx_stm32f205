@@ -16,13 +16,8 @@
 #include "compiler_port.h"
 #include "../../driver/include/DriverInterface.h"
 
-#define MAX_NAMES_COUNT 32
-#define MAX_PLACES_COUNT 32
-#define MAX_DEVICES_COUNT 128
-#define MAX_LEN_SERIAL ONEWIRE_SERIAL_LENGTH
 
 #define MAX_ONEWIRE_COUNT 16
-#define MAX_NUM_SENSORS 128
 
 #define SENSORS_HEALTH_MAX_VALUE 100
 #define SENSORS_HEALTH_MIN_VALUE 0
@@ -87,29 +82,6 @@ typedef enum {
    D_HTTP
 } mysensor_driver_t;
 
-typedef struct {
-   char *ptr;
-   char place[];
-} Place;
-
-typedef struct {
-   char *ptr;
-   char name[];
-} Name;
-
-typedef struct {
-   char *ptr;
-   char id[];
-} ID;
-
-//typedef enum
-//{
-//   FLOAT,
-//   UINT16,
-//   CHAR,
-//   PCHAR
-//} sensValueType_t;
-
 typedef union
 {
    float fVal;
@@ -124,15 +96,61 @@ typedef  struct
    uint8_t counter;
 } __attribute__((__packed__)) health_t;
 
+
+
+
+typedef struct {
+   char *ptr;
+   int counter;
+   char place[];
+} PlaceListT;
+
+typedef struct {
+   char *ptr;
+   int counter;
+   char name[];
+} NameListT;
+
+typedef struct {
+   char *ptr;
+   char id[];
+} IDListT;
+
 typedef struct
 {
-   mysensor_sensor_t type;
-   Tperipheral_t * fd; //file descriptor
-   char* place;   //Place
-   char* name;    //Name
-   char* device;  //Path
+   mysensor_sensor_t type; //Not unique
+   char* place;   //Place Not unique
+   char* name;    //Name Not unique
+   char* id;  //Path Unique
    health_t health;
 }sensor_t;
+
+typedef struct {
+   sensor_t *ptr;
+   sensor_t sensor;
+} SensorListT;
+
+typedef enum {
+   SEARCH_BY_TYPE,
+   SEARCH_BY_PLACE,
+   SEARCH_BY_NAME,
+   SEARCH_BY_ID,
+   SEARCH_BY_HEALTH
+} byT;
+typedef struct {
+   byT by;
+   void * value;
+} searchSensorBy_t;
+//typedef enum
+//{
+//   FLOAT,
+//   UINT16,
+//   CHAR,
+//   PCHAR
+//} sensValueType_t;
+
+
+
 
 
 
@@ -157,12 +175,12 @@ void sensorsHealthDecValue(sensor_t * sensor);
 void sensorsHealthSetValue(sensor_t * sensor, int value);
 error_t sensorsGetValue(const char *name, double * value);
 
-char* sensorsAddDeviceId(const char * device, size_t length);
-char* sensorsFindDeviceId(char * device, size_t length);
-char* sensorsFindName(char * name, size_t length);
-char* sensorsAddName(const char * name, size_t length);
-char * sensorsFindPlace(char * place, size_t length);
-char * sensorsAddPlace(const char * place, size_t length);
+char* addDeviceId(const char * device);
+char* sensorsFindDeviceId(char * device);
+NameListT *sensorsFindName(char * name);
+NameListT *sensorsAddName(const char * name);
+PlaceListT *  sensorsFindPlace(char * place);
+PlaceListT *  sensorsAddPlace(const char * place);
 void sensorsConfigure(void);
 
 

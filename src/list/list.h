@@ -13,7 +13,7 @@ extern "C" {
 #endif
 
 #include <stdlib.h>
-
+#include "os_port.h"
 // Library version
 
 #define LIST_VERSION "0.0.5"
@@ -21,11 +21,11 @@ extern "C" {
 // Memory management macros
 
 #ifndef LIST_MALLOC
-#define LIST_MALLOC malloc
+#define LIST_MALLOC osAllocMem
 #endif
 
 #ifndef LIST_FREE
-#define LIST_FREE free
+#define LIST_FREE osFreeMem
 #endif
 
 /*
@@ -86,6 +86,9 @@ list_lpush(list_t *self, list_node_t *node);
 
 list_node_t *
 list_find(list_t *self, void *val);
+
+list_node_t *
+list_find_next(list_t *self, list_node_t *from, void *val);
 
 list_node_t *
 list_at(list_t *self, int index);

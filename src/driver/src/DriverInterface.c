@@ -14,34 +14,35 @@
  * todo: too many return in code;
  * add error_t error and osDeleteMutex in the end of routine
  */
-Tperipheral_t * driver_open(const char * path, const periphOpenType flags){
+Tperipheral_t * driver_open(const char * path, const periphOpenType flags)
+{
 
    (void) flags; //Unused variables.
    driver_t *curr_driver;
-   size_t len;// Lenght of registerd path
+   size_t len; // Lenght of registerd path
    uint32_t numOfPeripherals;
    error_t error = NO_ERROR;
    Tperipheral_t * pxPeripheralControl = NULL;
 
    pxPeripheralControl = osAllocMem(sizeof(Tperipheral_t));
 
-
    /* Check path*/
    if (path == NULL || *path == '\0')
    {
-      error =  ERROR_INVALID_PATH;
+      error = ERROR_INVALID_PATH;
    }
 
-   if (error==NO_ERROR)
+   if (error == NO_ERROR)
    {
 
-      memset(pxPeripheralControl, 0 , sizeof( Tperipheral_t ));
+      memset(pxPeripheralControl, 0, sizeof(Tperipheral_t));
       /*Second, create mutex for peripheral access*/
 
       do
       {
          /*Third, search driver by device name*/
-         for (curr_driver = (driver_t *) &__start_drivers; ( (curr_driver < (driver_t *) &__stop_drivers) && (error==NO_ERROR) ); curr_driver++)
+         for (curr_driver = (driver_t *) &__start_drivers;
+            ((curr_driver < (driver_t *) &__stop_drivers) && (error == NO_ERROR)); curr_driver++)
          {
             len = strlen(curr_driver->path);
 
@@ -49,15 +50,15 @@ Tperipheral_t * driver_open(const char * path, const periphOpenType flags){
             {
 
                /*Third, find number of peripheral*/
-               if ((*(path+len) == '_') && (*(path+len+1) >= '0') && (*(path+len+1) <= '9'))
+               if ((*(path + len) == '_') && (*(path + len + 1) >= '0') && (*(path + len + 1) <= '9'))
                {
                   /*Next charcter in requered path is a numeric,
                    *  convert it from srting to int */
 
                   /*It can't be a nigative, and must be less,
                    * than count of peripherals, defined by driver */
-                  numOfPeripherals = (uint32_t) atoi (path+len+1);
-                  if (numOfPeripherals>=curr_driver->countOfPerepherals)
+                  numOfPeripherals = (uint32_t) atoi(path + len + 1);
+                  if (numOfPeripherals >= curr_driver->countOfPerepherals)
                   {
                      error = ERROR_FILE_NOT_FOUND;
                      break;
@@ -65,7 +66,8 @@ Tperipheral_t * driver_open(const char * path, const periphOpenType flags){
                   pxPeripheralControl->peripheralNum = numOfPeripherals;
                   pxPeripheralControl->driver = curr_driver;
                   pxPeripheralControl->status = (curr_driver->status + (pxPeripheralControl->peripheralNum));
-                  pxPeripheralControl->mutex = &pxPeripheralControl->driver->status[pxPeripheralControl->peripheralNum].mutex;
+                  pxPeripheralControl->mutex =
+                     &pxPeripheralControl->driver->status[pxPeripheralControl->peripheralNum].mutex;
                   /*Create mutex for device*/
                   if (pxPeripheralControl->mutex->handle == NULL)
                   {
@@ -80,12 +82,13 @@ Tperipheral_t * driver_open(const char * path, const periphOpenType flags){
 
                /*If number of perepheral is not defined in requred path,
                 * use default value 0 */
-               else if (*(path+len) == '/' || *(path+len) == '\0' )
+               else if (*(path + len) == '/' || *(path + len) == '\0')
                {
                   pxPeripheralControl->peripheralNum = 0;
                   pxPeripheralControl->driver = curr_driver;
                   pxPeripheralControl->status = (curr_driver->status + (pxPeripheralControl->peripheralNum));
-                  pxPeripheralControl->mutex = &pxPeripheralControl->driver->status[pxPeripheralControl->peripheralNum].mutex;
+                  pxPeripheralControl->mutex =
+                     &pxPeripheralControl->driver->status[pxPeripheralControl->peripheralNum].mutex;
                   /*Create mutex for device*/
                   if (pxPeripheralControl->mutex->handle == NULL)
                   {
@@ -109,7 +112,7 @@ Tperipheral_t * driver_open(const char * path, const periphOpenType flags){
             error = ERROR_FILE_NOT_FOUND;
             break;
          }
-         if (error!=NO_ERROR)
+         if (error != NO_ERROR)
          {
             break;
          }
@@ -138,10 +141,10 @@ Tperipheral_t * driver_open(const char * path, const periphOpenType flags){
 
       } while (0);
 
-      if (error!=NO_ERROR)
+      if (error != NO_ERROR)
       {
          pxPeripheralControl->driver = NULL;
-         if ( pxPeripheralControl->mutex != NULL)
+         if (pxPeripheralControl->mutex != NULL)
          {
             osDeleteMutex(pxPeripheralControl->mutex);
          }
@@ -153,16 +156,13 @@ Tperipheral_t * driver_open(const char * path, const periphOpenType flags){
    return pxPeripheralControl;
 }
 
-size_t driver_read(Tperipheral_t * pxPeripheral, void * const pvBuffer, const size_t xBytes )
+size_t driver_read(Tperipheral_t * pxPeripheral, void * const pvBuffer, const size_t xBytes)
 {
    Tperipheral_t * pxPeripheralControl = pxPeripheral;
    size_t result = 0;
    /*Check, that all pointers is valid, file open mode is read*/
-   if (
-      (pxPeripheral != NULL) &&
-      (pxPeripheralControl->driver != NULL) &&
-      (pxPeripheralControl->driver->functions->read != NULL)
-   )
+   if ((pxPeripheral != NULL) && (pxPeripheralControl->driver != NULL)
+      && (pxPeripheralControl->driver->functions->read != NULL))
    {
       osAcquireMutex(pxPeripheralControl->mutex);
 
@@ -177,20 +177,17 @@ size_t driver_read(Tperipheral_t * pxPeripheral, void * const pvBuffer, const si
    return result;
 }
 
-size_t driver_write(Tperipheral_t * pxPeripheral, const void * pvBuffer, const size_t xBytes )
+size_t driver_write(Tperipheral_t * pxPeripheral, const void * pvBuffer, const size_t xBytes)
 {
    Tperipheral_t * pxPeripheralControl = pxPeripheral;
    size_t result = 0;
    /*Check, that all pointers is valid*/
-   if (
-      (pxPeripheralControl != NULL) &&
-      (pxPeripheralControl->driver != NULL) &&
-      (pxPeripheralControl->driver->functions->write != NULL)
-   )
+   if ((pxPeripheralControl != NULL) && (pxPeripheralControl->driver != NULL)
+      && (pxPeripheralControl->driver->functions->write != NULL))
    {
       osAcquireMutex(pxPeripheralControl->mutex);
 
-      result =  pxPeripheralControl->driver->functions->write((peripheral_t) pxPeripheralControl, pvBuffer, xBytes);
+      result = pxPeripheralControl->driver->functions->write((peripheral_t) pxPeripheralControl, pvBuffer, xBytes);
 
       osReleaseMutex(pxPeripheralControl->mutex);
    }
@@ -205,30 +202,27 @@ static property_t * findProperty(driver_t * driver, char * pcRequest)
 {
    size_t i;
    char const * propertyName;
-   for (i=0; i< driver->propertyList->numOfProperies; i++)
+   for (i = 0; i < driver->propertyList->numOfProperies; i++)
    {
-      propertyName = (driver->propertyList->properties+i)->property;
+      propertyName = (driver->propertyList->properties + i)->property;
       if (strcmp(propertyName, pcRequest) == 0)
       {
-         return (property_t *)(driver->propertyList->properties + i);
+         return (property_t *) (driver->propertyList->properties + i);
       }
    }
    return NULL;
 }
 
-size_t driver_setproperty( Tperipheral_t * pxPeripheral, char * pcRequest, char *pcValue )
+size_t driver_setproperty(Tperipheral_t * pxPeripheral, char * pcRequest, char *pcValue)
 {
    Tperipheral_t * peripheral = (Tperipheral_t *) pxPeripheral;
-   size_t result =0 ;
+   size_t result = 0;
 
    if (!peripheral->driver)
    {
       return 0;
    }
-   //      if (peripheral->mode != POPEN_CONFIGURE)
-   //      {
-   //         return 0;
-   //      }
+
    property_t * property = findProperty(peripheral->driver, pcRequest);
    if (property != NULL)
    {
@@ -237,7 +231,7 @@ size_t driver_setproperty( Tperipheral_t * pxPeripheral, char * pcRequest, char 
          result = property->setFunction(pxPeripheral, pcValue);
       }
    }
-   /* Если нет специального обработчика */
+   /* Если нет собственного обработчика */
    else
    {
       /*If request is common*/
@@ -260,10 +254,10 @@ size_t driver_setproperty( Tperipheral_t * pxPeripheral, char * pcRequest, char 
    return result;
 }
 
-size_t driver_getproperty( Tperipheral_t * pxPeripheral, char * pcRequest, char *pcValue, const size_t xBytes )
+size_t driver_getproperty(Tperipheral_t * pxPeripheral, char * pcRequest, char *pcValue, const size_t xBytes)
 {
    Tperipheral_t * peripheral = (Tperipheral_t *) pxPeripheral;
-   size_t result =0 ;
+   size_t result = 0;
 
    if (!peripheral->driver)
    {
@@ -304,13 +298,13 @@ size_t driver_getproperty( Tperipheral_t * pxPeripheral, char * pcRequest, char 
 void driver_close(Tperipheral_t * pxPeripheral)
 {
    Tperipheral_t * pxPeripheralControl = pxPeripheral;
-   if(pxPeripheralControl!=NULL)
+   if (pxPeripheralControl != NULL)
    {
       pxPeripheralControl->driver = NULL;
       pxPeripheralControl->status = NULL;
       pxPeripheralControl->peripheralNum = 0;
       pxPeripheralControl->mode = POPEN_UNDEFINED;
-
-      pxPeripheral = NULL;
+      osFreeMem(pxPeripheralControl);
+      //      pxPeripheral = NULL;
    }
 }

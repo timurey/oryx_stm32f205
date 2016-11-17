@@ -174,6 +174,7 @@ error_t restTry (HttpConnection *connection, const char_t *uri)
 
    //Enter critical section
    osAcquireMutex(&restMutex);
+   restBuffer[0] = '\0';
    switch (RestApi.method)
    {
    case METHOD_GET:
